@@ -187,6 +187,31 @@ than scaffolding everything up front.
   [roadmap project](https://github.com/users/BenSeymourODB/projects/2).
 - Keep PRs small and focused on one milestone item at a time.
 
+## Tamper resistance is deliberately bounded
+
+The client-side hardening described in
+[`docs/client-install.md`](docs/client-install.md) ("Tamper resistance
+posture") is the **ceiling**, not the starting point. Do not propose
+or implement:
+
+- Anti-tamper hooks, kernel modules, eBPF probes, or other low-level
+  enforcement techniques.
+- Obfuscation of agent binaries or configuration.
+- Lockdown of `/etc`, `/usr`, or boot media against root access.
+- Any feature whose purpose is "make it harder for the supervised
+  user to circumvent the system."
+
+The design assumes a household context: parent admin, child user.
+If the supervised user has reached the level of skill required to
+defeat the documented protections, they have **outgrown the product**
+and the right response is a parent-child conversation, not an arms
+race in software. A bug report that boils down to "my advanced
+teenager found a workaround" is not a defect to chase; it's a
+signal that the product is no longer the right fit for that user.
+
+If a task seems to call for hardening beyond what's already
+documented, push back on the request rather than implementing it.
+
 ## When in doubt
 
 - Re-read [`docs/proposed-tech-stack.md`](docs/proposed-tech-stack.md) and

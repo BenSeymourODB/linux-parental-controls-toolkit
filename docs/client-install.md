@@ -133,3 +133,31 @@ context", not "hostile actor with root". Specifically:
 
 A determined user with root, or with physical access to a live USB, can
 defeat any of this. The product does not claim otherwise.
+
+### We are deliberately not investing further here
+
+The hardening described above (no sudo for the supervised user,
+periodic Ansible reversion, AppArmor on browsers, NOPASSWD-scoped
+`pct-agent`) is the **ceiling** of what this project will build, not
+a starting point. We are not going to add:
+
+- Anti-tamper hooks that detect or punish modification attempts.
+- Kernel modules, eBPF probes, or other low-level enforcement
+  techniques.
+- Obfuscation of the agent binaries or its config.
+- Lockdown of `/etc`, `/usr`, or boot media against root access.
+
+The design assumes a household context where the supervised user is
+a child or teenager and the admin is a parent. If the supervised
+user has reached the level of skill required to defeat the
+protections listed above — discovering `sudo` escalation paths,
+modifying iptables rules without `pct-agent` reverting them,
+deploying a live USB to bypass the entire OS — then they have
+**outgrown the product**. The right response at that point is a
+conversation between parent and child about expectations, not an
+arms race in software. Anything we build to keep up with such a
+user makes the tool worse for the 99% of households who do not need
+it.
+
+Bug reports along the lines of "my technically-advanced teenager
+found a way around X" should be triaged with this framing in mind.
