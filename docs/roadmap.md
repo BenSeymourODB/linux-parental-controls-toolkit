@@ -1,0 +1,133 @@
+# Roadmap
+
+Phased delivery plan for the toolkit. Each phase below maps to a milestone
+on the [roadmap project](https://github.com/users/BenSeymourODB/projects/2);
+the bullets are the kind of issues that should be filed against that
+milestone. This file is a living document — update it as scope changes.
+
+## Phase 0 — Foundations (this PR)
+
+Goal: design captured in the repo so future work can proceed against a
+shared understanding.
+
+- [x] Capture proposed tech stack (`docs/proposed-tech-stack.md`)
+- [x] Capture licensing analysis (`docs/licensing-analysis.md`)
+- [x] Write `README.md`
+- [x] Write `CLAUDE.md`
+- [x] Write `docs/architecture.md`
+- [x] Write `docs/server-deployment.md`
+- [x] Write `docs/client-install.md`
+- [x] Write this roadmap
+
+## Phase 1 — Project scaffolding
+
+Goal: a runnable, empty-but-correct dashboard skeleton and a CI baseline.
+
+- Create `server/` Python package layout (`pyproject.toml`, `src/dashboard`,
+  `tests/`, `Dockerfile`, `.dockerignore`).
+- Pick and pin the dashboard's open-source license file (`LICENSE`) — the
+  decision in [`licensing-analysis.md`](licensing-analysis.md) is between
+  Option B (MIT/Apache-2.0) and Option C (proprietary). Default
+  assumption pending decision: **Apache-2.0**.
+- Add `pre-commit` config: `black`, `ruff`, `mypy --strict`.
+- Add a minimal FastAPI app that serves a "hello, no policy yet" page.
+- Add a GitHub Actions workflow that lints, type-checks, runs tests, and
+  builds the Docker image.
+- Add a basic `docker-compose.yml` example for local development.
+
+## Phase 2 — Policy store and admin UI shell
+
+Goal: an admin can log in, define users, define clients (as records), and
+define a policy — but nothing is enforced yet.
+
+- Implement the SQLite schema for `User`, `Client`, `UserOnClient`,
+  `Activity`, `ActivityGroup`, `Budget`, `Schedule`, `Exception`.
+- Alembic migrations.
+- Single-admin local password auth (Argon2).
+- HTMX-driven UI: users, clients, activities, budgets, schedules.
+- No transport integration yet; all "push" actions are stubbed to log.
+
+## Phase 3 — Client install script (Linux Mint)
+
+Goal: enrolling a fresh Mint client is one command.
+
+- Implement `client/install-client.sh` per `docs/client-install.md`.
+- Enrolment-token endpoint on the dashboard.
+- `pct-agent` user provisioning + scoped sudoers.
+- ActivityWatch + Timekpr-nExT + e2guardian install and baseline config.
+- Self-test that runs at the end of the script.
+
+## Phase 4 — SSH + `timekpra` transport
+
+Goal: dashboard pushes overall session limits to clients.
+
+- AsyncSSH-based transport facade.
+- `timekpra` invocations for: set daily/weekly/monthly limits, set
+  allowed hours, set PlayTime configuration.
+- Offline-queue: changes for offline clients persisted and replayed on
+  next reachable probe.
+- Audit log of every command issued.
+
+## Phase 5 — ActivityWatch telemetry pull
+
+Goal: dashboard shows actual usage per user per activity.
+
+- APScheduler job that opens SSH port-forwards and pulls AW events.
+- Normalisation into `UsageSample` rows; aggregation views.
+- Per-user "burndown" chart for overall and per-activity budgets.
+
+## Phase 6 — Ansible config push
+
+Goal: e2guardian rules, iptables rules, AppArmor profiles and AW
+deployment are all server-managed.
+
+- Ansible runner inside the dashboard (subprocess).
+- Playbooks for e2guardian filter groups, iptables OUTPUT redirect,
+  ActivityWatch systemd-user units, AppArmor profile drops.
+- Periodic re-apply (tamper reversion) as a systemd timer on the server
+  triggering a playbook.
+
+## Phase 7 — DNS filtering (optional)
+
+Goal: AdGuard Home runs as a managed sidecar and the dashboard
+manipulates its per-client blocklists.
+
+- First-run fetch of AdGuard Home from upstream releases.
+- Supervisor for AdGuard Home as a child process of the dashboard
+  container (or sibling container via compose — to be decided in
+  implementation).
+- AdGuard REST client in the dashboard.
+- UI: per-client domain blocklists with schedule support.
+
+## Phase 8 — Per-activity time enforcement
+
+Goal: when the dashboard sees a per-activity quota exhausted, the activity
+is stopped on the client.
+
+- Decision logic in the dashboard based on `UsageSample` rollups.
+- Ad-hoc Ansible commands (or a small client-side helper invoked via SSH)
+  that kill or AppArmor-deny the relevant process.
+- Cool-down + notify-the-user behaviour to avoid thrash.
+
+## Phase 9 — Hardening and polish
+
+- Reverse-proxy + TLS instructions for non-LAN deployments.
+- Multi-admin / OIDC option.
+- Backup/restore utility script.
+- Documentation pass: per-feature how-tos.
+- Optional: tamper-resistance review and AppArmor hardening pass.
+
+## Out of scope (for now)
+
+- Non-Linux clients (macOS, Windows, Chromebook).
+- Mobile clients (Android, iOS).
+- Cloud-hosted SaaS multi-tenant model. The deployment target is the
+  household / single-admin scenario.
+
+## How to file issues against this roadmap
+
+- One issue per discrete deliverable (a single PR's worth of work).
+- Label each with the phase milestone above.
+- Link the issue to the roadmap project so it shows up in the board.
+- Cross-link to the relevant section of `docs/architecture.md` or another
+  design doc.
