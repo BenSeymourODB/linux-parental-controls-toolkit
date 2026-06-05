@@ -62,6 +62,42 @@ so we don't paint ourselves into a corner:
   enforces the grant. See `docs/architecture.md` ("External
   integrations") and `docs/roadmap.md` Phase 10.
 
+## What this product is — and isn't
+
+This toolkit is built for **a parent supervising a child or teenager on
+the household's Linux desktops**. It is *not* hardened against a
+technically motivated adult, and it is deliberately not going to be.
+
+We invest in:
+
+- Sensible defaults so a household admin can stand it up in an
+  afternoon.
+- The user-facing experience: clear warnings before time runs out, a
+  grace period to save work, the ability for the calendar app to
+  grant rewards.
+- A clean license posture and a small, auditable codebase.
+
+We **don't** invest in:
+
+- Anti-tamper hooks, kernel modules, eBPF probes, or obfuscation of
+  the client agent.
+- Locking down `/etc`, `/usr`, or boot media against root access.
+- Any feature whose purpose is "make it harder for the supervised
+  user to defeat the system."
+
+The reasoning is simple: by the time a supervised user has the skills
+required to defeat the documented protections (escalate to sudo,
+re-route iptables faster than Ansible reverts them, boot a live USB),
+they have **outgrown the product**. The right response then is a
+conversation between parent and child about expectations — not an
+arms race in software. Anything we built to keep up with such a user
+would make the tool worse for the many households that don't need it.
+
+If that framing doesn't fit your situation, this is probably not the
+right tool. See [`docs/client-install.md`](docs/client-install.md)
+("Tamper resistance posture") for the specifics of what is and isn't
+protected against.
+
 ## High-level architecture
 
 ```mermaid
