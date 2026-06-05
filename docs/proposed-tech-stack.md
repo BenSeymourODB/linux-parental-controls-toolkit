@@ -146,19 +146,31 @@ These are the system-level mechanisms that the agent layer configures and that a
 
 ## Deployment topology
 
-```
-Admin machine (or headless server)
-├── Custom dashboard (Python/SQLite, serves web UI on localhost or LAN)
-├── AdGuard Home (DNS filtering, optional, per-client blocklists)
-├── Ansible control node (SSH key access to all clients)
-└── FreeIPA server (optional, for multi-machine identity management)
+```mermaid
+flowchart TB
+    subgraph AdminBox["Admin machine (or headless server)"]
+        direction TB
+        Dash["<b>Custom dashboard</b><br/>Python / SQLite<br/>serves web UI on localhost or LAN"]
+        AGH["<b>AdGuard Home</b><br/>optional, per-client DNS blocklists"]
+        AnsibleCN["<b>Ansible control node</b><br/>SSH key access to all clients"]
+        IPA["<b>FreeIPA server</b><br/>optional, multi-machine identity"]
+    end
 
-Each client machine (Linux Mint / Cinnamon, or other Debian-family)
-├── Timekpr-nExT daemon (session time enforcement, PlayTime)
-├── ActivityWatch (aw-server + aw-watcher-window + aw-watcher-afk)
-├── Browser extension (ActivityWatch Web Watcher, Chrome or Firefox)
-├── e2guardian (web content filter, per-user filter groups)
-└── iptables rules (route supervised-user traffic through e2guardian)
+    subgraph ClientBox["Client machine — Linux Mint / Cinnamon (or other Debian-family)"]
+        direction TB
+        TK["<b>Timekpr-nExT daemon</b><br/>session time enforcement, PlayTime"]
+        AW["<b>ActivityWatch</b><br/>aw-server + aw-watcher-window + aw-watcher-afk"]
+        BrowserExt["<b>Browser extension</b><br/>ActivityWatch Web Watcher<br/>(Chrome or Firefox)"]
+        E2G["<b>e2guardian</b><br/>web content filter<br/>per-user filter groups"]
+        IPT["<b>iptables rules</b><br/>route supervised-user traffic<br/>through e2guardian"]
+    end
+
+    Dash -->|SSH + timekpra CLI| TK
+    AnsibleCN -->|playbooks over SSH| E2G
+    AnsibleCN -->|playbooks over SSH| IPT
+    AnsibleCN -->|playbooks over SSH| AW
+    Dash -->|REST :5600 via SSH tunnel| AW
+    AGH -. DNS (per client IP) .-> ClientBox
 ```
 
 Client machines are enrolled by running an Ansible playbook that installs and configures all of the above. Policy updates flow server→client via SSH+`timekpra` (session limits) and Ansible (file-level config changes). Telemetry flows client→server via SSH port-forwarding to the ActivityWatch REST API.

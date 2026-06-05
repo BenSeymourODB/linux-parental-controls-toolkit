@@ -8,64 +8,60 @@ constrain how components are allowed to communicate.
 
 ## Component diagram
 
-```
-                  ┌──────────────────┐    ┌───────────────────────┐
-                  │ Admin (desktop)  │    │ Parent / child (phone)│
-                  │ /admin (Jinja +  │    │ /app  (SvelteKit PWA, │
-                  │ HTMX + islands)  │    │ static, home-screen)  │
-                  └────────┬─────────┘    └──────────┬────────────┘
-                           │ HTTP                    │ HTTP/JSON via /api
-                           ▼                         ▼
-┌─────────────────────────── SERVER (Docker container) ────────────────────────────┐
-│                                                                                  │
-│   ┌────────────────────────────────────────────────────────────────┐             │
-│   │ Dashboard (FastAPI, Python 3.11+)                              │             │
-│   │                                                                │             │
-│   │  /admin (HTMX views) ─┐                                        │             │
-│   │  /app   (static SK)   │── all read/write through ──┐           │             │
-│   │  /api   (JSON)        │                            ▼           │             │
-│   │  /integrations  ──────┘                  ┌──────────────────┐  │             │
-│   │   (rewards webhook,                      │ Policy service   │  │             │
-│   │    token-auth, e.g.                      │ + Grant ledger   │  │             │
-│   │    next-digital-wall-                    └────────┬─────────┘  │             │
-│   │    calendar)                                      ▼            │             │
-│   │                                              ┌────────┐        │             │
-│   │                                              │ SQLite │        │             │
-│   │                                              └────────┘        │             │
-│   │                                                                │             │
-│   │            ┌──────────────────────────┐                        │             │
-│   │            │  Transport facade        │                        │             │
-│   │            └──────────────────────────┘                        │             │
-│   │                  │      │      │      │                        │             │
-│   │  ┌───────────────┘      │      │      └────────────────┐       │             │
-│   │  ▼                      ▼      ▼                       ▼       │             │
-│   │ SSH+timekpra      Ansible runner   AW REST client   AdGuard    │             │
-│   │  (subprocess)      (subprocess)    (HTTP via SSH    REST       │             │
-│   │                                     tunnel)         client     │             │
-│   └────────┬───────────────┬────────────────┬───────────┬──────────┘             │
-│            │               │                │           │                        │
-│            │               │                │           ▼                        │
-│            │               │                │  ┌────────────────────┐            │
-│            │               │                │  │ AdGuard Home       │            │
-│            │               │                │  │ (sidecar, GPL-3.0, │            │
-│            │               │                │  │ fetched on first   │            │
-│            │               │                │  │ run, not bundled)  │            │
-│            │               │                │  └────────────────────┘            │
-└────────────┼───────────────┼────────────────┼──────────────────────────────────┘
-             │ SSH key-auth  │ SSH key-auth   │ SSH port-forward to client:5600
-             ▼               ▼                ▼
-┌─────────────────────────── CLIENT (Linux Mint / Cinnamon) ───────────────────────┐
-│                                                                                  │
-│   Timekpr-nExT daemon  ◀── timekpra CLI (root, invoked by SSH user via sudoers)  │
-│   ActivityWatch:                                                                 │
-│       aw-server      (REST :5600, localhost only)                                │
-│       aw-watcher-window  (per-user systemd --user unit)                          │
-│       aw-watcher-afk     (per-user systemd --user unit)                          │
-│       browser extension  (Firefox / Chromium)                                    │
-│   e2guardian          (config files in /etc/e2guardian, per-UID filter groups)   │
-│   iptables OUTPUT     (per-UID redirect to e2guardian)                           │
-│                                                                                  │
-└──────────────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    Admin["<b>Admin (desktop)</b><br/><code>/admin</code><br/>Jinja + HTMX + Svelte islands"]
+    PWA["<b>Parent / child (phone)</b><br/><code>/app</code><br/>SvelteKit PWA, home-screen"]
+    Ext["<b>External integrator</b><br/>e.g. next-digital-wall-calendar"]
+
+    subgraph Server["Server — Docker container"]
+        direction TB
+        subgraph FastAPI["FastAPI (Python 3.11+)"]
+            direction LR
+            RAdmin["<code>/admin</code><br/>HTMX views"]
+            RApp["<code>/app</code><br/>static SvelteKit"]
+            RApi["<code>/api</code><br/>JSON"]
+            RInt["<code>/integrations</code><br/>token-auth webhooks"]
+        end
+        Policy["Policy service<br/>+ Grant ledger"]
+        DB[("SQLite")]
+        Transport["Transport facade"]
+        SSHTr["SSH + timekpra<br/>(subprocess)"]
+        AnsTr["Ansible runner<br/>(subprocess)"]
+        AWTr["AW REST client<br/>(HTTP via SSH tunnel)"]
+        AGTr["AdGuard REST client<br/>(HTTP, LAN)"]
+        AdGuard["AdGuard Home<br/>sidecar (GPL-3.0)<br/>fetched on first run<br/>not bundled in image"]
+
+        RAdmin --> Policy
+        RApp --> Policy
+        RApi --> Policy
+        RInt --> Policy
+        Policy --> DB
+        Policy --> Transport
+        Transport --> SSHTr
+        Transport --> AnsTr
+        Transport --> AWTr
+        Transport --> AGTr
+        AGTr --> AdGuard
+    end
+
+    subgraph Client["Client — Linux Mint / Cinnamon"]
+        direction TB
+        Timekpr["<b>Timekpr-nExT daemon</b><br/>timekpra CLI invoked as root via sudoers"]
+        AWClient["<b>ActivityWatch</b><br/>aw-server :5600 (localhost only)<br/>aw-watcher-window (systemd --user)<br/>aw-watcher-afk (systemd --user)<br/>browser extension (Firefox / Chromium)"]
+        E2GClient["<b>e2guardian</b><br/>/etc/e2guardian/*<br/>per-UID filter groups"]
+        IPTClient["<b>iptables OUTPUT</b><br/>per-UID redirect to e2guardian"]
+    end
+
+    Admin -->|HTTPS| RAdmin
+    PWA -->|HTTPS JSON| RApi
+    Ext -->|HTTPS bearer token| RInt
+
+    SSHTr -->|SSH key-auth| Timekpr
+    AnsTr -->|SSH key-auth, playbook run| E2GClient
+    AnsTr -->|SSH key-auth, playbook run| IPTClient
+    AnsTr -->|SSH key-auth, playbook run| AWClient
+    AWTr -->|SSH port-forward :5600| AWClient
 ```
 
 ## Process boundaries (license-critical)

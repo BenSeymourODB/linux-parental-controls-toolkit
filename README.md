@@ -53,40 +53,36 @@ so we don't paint ourselves into a corner:
 
 ## High-level architecture
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│  Server (Docker container, runs on TrueNAS SCALE / any Linux)    │
-│                                                                  │
-│   FastAPI (Python 3.11)                                          │
-│   ├── /admin        Jinja + HTMX + Svelte islands (desktop UI)   │
-│   ├── /app          SvelteKit static PWA (mobile / per-child)    │
-│   ├── /api          JSON API (single contract)                   │
-│   └── /integrations webhook API (e.g. calendar rewards)          │
-│            │                                                     │
-│            ▼                                                     │
-│   ┌─────────────────────┐                                        │
-│   │ Policy + Grant      │  SQLite                                │
-│   │ store               │                                        │
-│   └─────────────────────┘                                        │
-│            │                                                     │
-│            ├──▶ SSH / timekpra runner (live policy push)         │
-│            ├──▶ Ansible runner (config push, tamper revert)      │
-│            └──▶ ActivityWatch pull (telemetry, via SSH tunnel)   │
-│                                                                  │
-│   ┌────────────────┐                                             │
-│   │ AdGuard Home   │  (optional sidecar; pulled at first run)    │
-│   └────────────────┘                                             │
-└──────────────────────────────────────────────────────────────────┘
-            │  SSH (key-auth, port-forwarded API pull)
-            ▼
-┌──────────────────────────────────────────────────────────────────┐
-│  Client (Linux Mint / Cinnamon; other Debian-family supported)   │
-│                                                                  │
-│   Timekpr-nExT  ◀── timekpra CLI over SSH                        │
-│   ActivityWatch ──▶ aw-server REST (port 5600, SSH-tunnelled)    │
-│   e2guardian    ◀── config files + reload via Ansible            │
-│   iptables      ◀── per-UID redirect to e2guardian               │
-└──────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph Server["Server — Docker container (TrueNAS SCALE / any Linux)"]
+        direction TB
+        FastAPI["FastAPI (Python 3.11)<br/>/admin · /app · /api · /integrations"]
+        Store[("Policy + Grant store<br/>SQLite")]
+        SSHRun["SSH / timekpra runner<br/>(live policy push)"]
+        AnsRun["Ansible runner<br/>(config push, tamper revert)"]
+        AWPull["ActivityWatch pull<br/>(telemetry, via SSH tunnel)"]
+        AdGuard["AdGuard Home<br/>optional sidecar<br/>fetched on first run"]
+        FastAPI --> Store
+        FastAPI --> SSHRun
+        FastAPI --> AnsRun
+        FastAPI --> AWPull
+        FastAPI -.optional.-> AdGuard
+    end
+
+    subgraph Client["Client — Linux Mint / Cinnamon (other Debian-family supported)"]
+        direction TB
+        Timekpr["Timekpr-nExT daemon"]
+        AW["ActivityWatch<br/>(aw-server :5600 + watchers)"]
+        E2G["e2guardian<br/>(per-UID filter groups)"]
+        IPT["iptables OUTPUT<br/>per-UID redirect"]
+    end
+
+    SSHRun -->|timekpra over SSH| Timekpr
+    AnsRun -->|playbook over SSH| E2G
+    AnsRun -->|playbook over SSH| IPT
+    AnsRun -->|playbook over SSH| AW
+    AWPull -->|REST :5600, SSH-forwarded| AW
 ```
 
 See [`docs/architecture.md`](docs/architecture.md) for the detailed view.
