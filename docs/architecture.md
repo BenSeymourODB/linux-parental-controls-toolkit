@@ -56,10 +56,12 @@ flowchart TB
 ### View 2 — Outbound control plane
 
 How the dashboard reaches each managed client (and the optional
-AdGuard Home sidecar).
+AdGuard Home sidecar). This view reads left-to-right: the dashboard's
+transport facade is on the left, the client components it drives are
+on the right.
 
 ```mermaid
-flowchart TB
+flowchart LR
     subgraph Server["Server — Docker container"]
         direction TB
         Transport["Transport facade<br/>(from View 1)"]
@@ -77,7 +79,7 @@ flowchart TB
     end
 
     subgraph Client["Client — Linux Mint / Cinnamon"]
-        direction LR
+        direction TB
         Timekpr["<b>Timekpr-nExT daemon</b><br/>timekpra CLI invoked as root via sudoers"]
         AWClient["<b>ActivityWatch</b><br/>aw-server :5600 (localhost only)<br/>aw-watcher-window (systemd --user)<br/>aw-watcher-afk (systemd --user)<br/>browser extension (Firefox / Chromium)"]
         E2GClient["<b>e2guardian</b><br/>/etc/e2guardian/*<br/>per-UID filter groups"]
