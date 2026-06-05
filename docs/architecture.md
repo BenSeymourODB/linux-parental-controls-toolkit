@@ -61,6 +61,7 @@ above the Client row; edges cross the boundary downward, one per
 transport-to-client-component relationship.
 
 ```mermaid
+%%{init: {'flowchart': {'defaultRenderer': 'elk'}}}%%
 flowchart TB
     subgraph Server["Server — Docker container"]
         direction LR
