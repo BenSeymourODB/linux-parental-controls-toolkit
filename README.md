@@ -101,42 +101,19 @@ protected against.
 ## High-level architecture
 
 ```mermaid
-flowchart TB
-    subgraph Server["Server — Docker container (TrueNAS SCALE / any Linux)"]
-        direction TB
-        FastAPI["FastAPI (Python 3.11)<br/>/admin · /app · /api · /integrations"]
-        Store[("Policy + Grant store<br/>SQLite")]
-        SSHRun["SSH / timekpra runner<br/>(live policy push)"]
-        AnsRun["Ansible runner<br/>(config push, tamper revert)"]
-        AWPull["ActivityWatch pull<br/>(telemetry, via SSH tunnel)"]
-        Events["Events stream<br/>/api/events/stream<br/>(WebSocket, server → client)"]
-        AdGuard["AdGuard Home<br/>optional<br/>managed (fetched on first run)<br/>or external (existing homelab)"]
-        FastAPI --> Store
-        FastAPI --> SSHRun
-        FastAPI --> AnsRun
-        FastAPI --> AWPull
-        FastAPI --> Events
-        FastAPI -.optional.-> AdGuard
-    end
+flowchart LR
+    Users["<b>Consumers</b><br/>admin desktop<br/>parent / child phone<br/>external integrators<br/>(e.g. family calendar)"]
+    Server["<b>Dashboard server</b><br/>Docker container · Python · FastAPI<br/>policy + grant store · transport runners<br/>optional AdGuard Home (managed or external)"]
+    Client["<b>Supervised client</b><br/>Linux Mint / Cinnamon<br/>Timekpr-nExT · ActivityWatch · e2guardian · iptables<br/>pct-client agent (toasts · sound · per-app close)"]
 
-    subgraph Client["Client — Linux Mint / Cinnamon (other Debian-family supported)"]
-        direction TB
-        Timekpr["Timekpr-nExT daemon"]
-        AW["ActivityWatch<br/>(aw-server :5600 + watchers)"]
-        E2G["e2guardian<br/>(per-UID filter groups)"]
-        IPT["iptables OUTPUT<br/>per-UID redirect"]
-        Bridge["pct-client-bridge<br/>(system)"]
-        Agent["pct-client-agent<br/>(per supervised user)<br/>toasts · sound · per-app force-close"]
-        Bridge --> Agent
-    end
-
-    SSHRun -->|timekpra over SSH| Timekpr
-    AnsRun -->|playbook over SSH| E2G
-    AnsRun -->|playbook over SSH| IPT
-    AnsRun -->|playbook over SSH| AW
-    AWPull -->|REST :5600, SSH-forwarded| AW
-    Bridge -->|outbound WebSocket| Events
+    Users -->|HTTPS · JSON · webhooks| Server
+    Server -->|SSH · timekpra push · Ansible<br/>WebSocket events (grants, force-close)| Client
+    Client -.->|telemetry · liveness| Server
 ```
+
+Component-level detail (the four FastAPI route groups, each transport
+runner and its client target, the policy model, the event types) lives
+in [`docs/architecture.md`](docs/architecture.md).
 
 See [`docs/architecture.md`](docs/architecture.md) for the detailed view.
 
