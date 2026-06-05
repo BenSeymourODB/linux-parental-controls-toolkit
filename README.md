@@ -107,7 +107,7 @@ flowchart LR
     Client["<b>Supervised client</b><br/>Linux Mint / Cinnamon<br/>Timekpr-nExT · ActivityWatch · e2guardian · iptables<br/>pct-client agent (toasts · sound · per-app close)"]
 
     Users -->|HTTPS · JSON · webhooks| Server
-    Server -->|SSH · timekpra push · Ansible<br/>WebSocket events (grants, force-close)| Client
+    Server -->|SSH · timekpra push · Ansible<br/>WebSocket events: grants, force-close| Client
     Client -.->|telemetry · liveness| Server
 ```
 
