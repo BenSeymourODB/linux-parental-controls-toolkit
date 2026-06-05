@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+# Build artefacts
+dist/
+build/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Local runtime data
+/data/
+*.sqlite
+*.sqlite-journal
