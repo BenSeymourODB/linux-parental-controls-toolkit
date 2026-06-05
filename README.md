@@ -109,11 +109,13 @@ flowchart TB
         SSHRun["SSH / timekpra runner<br/>(live policy push)"]
         AnsRun["Ansible runner<br/>(config push, tamper revert)"]
         AWPull["ActivityWatch pull<br/>(telemetry, via SSH tunnel)"]
+        Events["Events stream<br/>/api/events/stream<br/>(WebSocket, server → client)"]
         AdGuard["AdGuard Home<br/>optional<br/>managed (fetched on first run)<br/>or external (existing homelab)"]
         FastAPI --> Store
         FastAPI --> SSHRun
         FastAPI --> AnsRun
         FastAPI --> AWPull
+        FastAPI --> Events
         FastAPI -.optional.-> AdGuard
     end
 
@@ -123,6 +125,9 @@ flowchart TB
         AW["ActivityWatch<br/>(aw-server :5600 + watchers)"]
         E2G["e2guardian<br/>(per-UID filter groups)"]
         IPT["iptables OUTPUT<br/>per-UID redirect"]
+        Bridge["pct-client-bridge<br/>(system)"]
+        Agent["pct-client-agent<br/>(per supervised user)<br/>toasts · sound · per-app force-close"]
+        Bridge --> Agent
     end
 
     SSHRun -->|timekpra over SSH| Timekpr
@@ -130,6 +135,7 @@ flowchart TB
     AnsRun -->|playbook over SSH| IPT
     AnsRun -->|playbook over SSH| AW
     AWPull -->|REST :5600, SSH-forwarded| AW
+    Bridge -->|outbound WebSocket| Events
 ```
 
 See [`docs/architecture.md`](docs/architecture.md) for the detailed view.
