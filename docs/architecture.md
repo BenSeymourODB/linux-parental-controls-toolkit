@@ -56,40 +56,40 @@ flowchart TB
 ### View 2 — Outbound control plane
 
 How the dashboard reaches each managed client (and the optional
-AdGuard Home sidecar). This view reads left-to-right: the dashboard's
-transport facade is on the left, the client components it drives are
-on the right.
+AdGuard Home, in either managed or external mode). The Server row sits
+above the Client row; edges cross the boundary downward, one per
+transport-to-client-component relationship.
 
 ```mermaid
-flowchart LR
+flowchart TB
     subgraph Server["Server — Docker container"]
-        direction TB
+        direction LR
         Transport["Transport facade<br/>(from View 1)"]
         SSHTr["SSH + timekpra<br/>(subprocess)"]
         AnsTr["Ansible runner<br/>(subprocess)"]
         AWTr["AW REST client<br/>(HTTP via SSH tunnel)"]
         AGTr["AdGuard REST client<br/>(HTTP, LAN)"]
-        AdGuard["AdGuard Home<br/>sidecar (GPL-3.0)<br/>fetched on first run<br/>not bundled in image"]
+        AdGuard["AdGuard Home<br/>managed or external<br/>see server-deployment.md"]
 
         Transport --> SSHTr
         Transport --> AnsTr
         Transport --> AWTr
         Transport --> AGTr
-        AGTr --> AdGuard
+        AGTr -.REST.-> AdGuard
     end
 
     subgraph Client["Client — Linux Mint / Cinnamon"]
-        direction TB
-        Timekpr["<b>Timekpr-nExT daemon</b><br/>timekpra CLI invoked as root via sudoers"]
-        AWClient["<b>ActivityWatch</b><br/>aw-server :5600 (localhost only)<br/>aw-watcher-window (systemd --user)<br/>aw-watcher-afk (systemd --user)<br/>browser extension (Firefox / Chromium)"]
+        direction LR
+        Timekpr["<b>Timekpr-nExT</b><br/>timekpra CLI invoked<br/>as root via sudoers"]
         E2GClient["<b>e2guardian</b><br/>/etc/e2guardian/*<br/>per-UID filter groups"]
-        IPTClient["<b>iptables OUTPUT</b><br/>per-UID redirect to e2guardian"]
+        IPTClient["<b>iptables OUTPUT</b><br/>per-UID redirect<br/>to e2guardian"]
+        AWClient["<b>ActivityWatch</b><br/>aw-server :5600<br/>+ watchers<br/>+ browser extension"]
     end
 
     SSHTr -->|SSH key-auth| Timekpr
-    AnsTr -->|SSH key-auth, playbook run| E2GClient
-    AnsTr -->|SSH key-auth, playbook run| IPTClient
-    AnsTr -->|SSH key-auth, playbook run| AWClient
+    AnsTr -->|playbook run| E2GClient
+    AnsTr -->|playbook run| IPTClient
+    AnsTr -->|playbook run| AWClient
     AWTr -->|SSH port-forward :5600| AWClient
 ```
 

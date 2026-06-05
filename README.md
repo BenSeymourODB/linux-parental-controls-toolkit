@@ -62,7 +62,7 @@ flowchart TB
         SSHRun["SSH / timekpra runner<br/>(live policy push)"]
         AnsRun["Ansible runner<br/>(config push, tamper revert)"]
         AWPull["ActivityWatch pull<br/>(telemetry, via SSH tunnel)"]
-        AdGuard["AdGuard Home<br/>optional sidecar<br/>fetched on first run"]
+        AdGuard["AdGuard Home<br/>optional<br/>managed (fetched on first run)<br/>or external (existing homelab)"]
         FastAPI --> Store
         FastAPI --> SSHRun
         FastAPI --> AnsRun
@@ -98,11 +98,16 @@ SSH keys for clients, Ansible inventory) lives in mounted volumes.
 The dashboard itself is original code with no GPL linkage; it only ever
 talks to GPL components across process or network boundaries (see
 [`docs/licensing-analysis.md`](docs/licensing-analysis.md)). To keep the
-published image free of bundled GPL binaries, GPL-licensed dependencies are
-**downloaded on first run** rather than baked into the image:
+published image free of bundled GPL binaries:
 
-- **AdGuard Home** (GPL-3.0): downloaded from upstream releases the first
-  time the admin enables DNS filtering, then run as a sidecar.
+- **AdGuard Home** (GPL-3.0): three deployment modes. The default is
+  `disabled` (no DNS layer). Homelab admins who already run AdGuard
+  Home (the common case) pick `external` and supply the URL +
+  credentials of their existing instance — the dashboard never
+  downloads or ships AdGuard at all. Greenfield deployments pick
+  `managed`, in which the dashboard fetches AdGuard from upstream on
+  first run into the data volume and supervises it. See
+  [`docs/server-deployment.md`](docs/server-deployment.md).
 - **Ansible** (GPL-3.0): installed into a separate, isolated venv inside the
   container's data volume on first run.
 - **Timekpr-nExT, ActivityWatch, e2guardian** (GPL-3.0 / MPL-2.0 / GPL-2.0):
@@ -111,8 +116,7 @@ published image free of bundled GPL binaries, GPL-licensed dependencies are
 
 This is consistent with the licensing analysis's recommendation: keep the
 dashboard's process boundary clean, and avoid distributing GPL binaries as
-part of the dashboard image. See [`docs/server-deployment.md`](docs/server-deployment.md)
-for the deployment story.
+part of the dashboard image.
 
 ## Client install
 

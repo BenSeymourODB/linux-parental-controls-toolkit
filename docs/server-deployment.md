@@ -19,8 +19,9 @@ The image is **dashboard code only**:
 
 The image deliberately does **not** include:
 
-- AdGuard Home (GPL-3.0). Fetched into the data volume on first run, only
-  if DNS filtering is enabled.
+- AdGuard Home (GPL-3.0). Either fetched into the data volume on first
+  run (managed mode) or not present at all (external / disabled modes
+  — see "AdGuard Home deployment modes" below).
 - Ansible (GPL-3.0). Installed into an isolated venv inside the data
   volume on first run.
 - Timekpr-nExT, e2guardian, ActivityWatch. These are client-side and
@@ -67,11 +68,15 @@ On container start, the entrypoint runs these steps idempotently:
 2. **Ansible bootstrap** — if `/data/ansible/venv` is missing, create it
    and `pip install ansible-core` (downloaded from PyPI at runtime, not
    from the image). Sync `playbooks/` from the image.
-3. **AdGuard Home bootstrap** — only if the admin has enabled DNS
-   filtering in the dashboard. The first-time fetch downloads the latest
-   stable release from `github.com/AdguardTeam/AdGuardHome/releases`,
-   verifies the checksum, and writes it to `/data/adguard/AdGuardHome`.
-   The dashboard then supervises it as a child process.
+3. **AdGuard Home bootstrap** — driven by `PCT_ADGUARD_MODE` (see
+   "AdGuard Home deployment modes" below). In `managed` mode, the
+   first-time fetch downloads the latest stable release from
+   `github.com/AdguardTeam/AdGuardHome/releases`, verifies the
+   checksum, and writes it to `/data/adguard/AdGuardHome`; the
+   dashboard then supervises it as a child process. In `external` mode,
+   the dashboard skips the download entirely and validates that it can
+   reach the configured AdGuard Home instance's REST API. In `disabled`
+   mode (the default), neither happens.
 4. **SSH key bootstrap** — if `/data/secrets/ssh/id_ed25519` is absent,
    generate one. The public key is shown in the dashboard's "Add client"
    flow for the admin to install on each new client (or, more commonly,
@@ -83,10 +88,105 @@ starts anyway with the affected feature disabled and surfaces an error
 in the admin UI. Core functionality (Timekpr policy, ActivityWatch pull,
 e2guardian via Ansible) is not blocked by a missing AdGuard Home.
 
+## AdGuard Home deployment modes
+
+DNS filtering is optional and configurable through `PCT_ADGUARD_MODE`.
+This deliberately accommodates the common case where the admin already
+runs AdGuard Home on their homelab and does not want a second instance.
+
+| Mode | What the dashboard does | When to use it |
+|---|---|---|
+| `disabled` (default) | No DNS integration. Per-website rules go through e2guardian on the client only. | If you don't want DNS-level filtering, or you have a different DNS solution you don't want the dashboard to touch. |
+| `managed` | Fetches AdGuard Home on first run, supervises it as a child process, owns the config under `/data/adguard/`. | Greenfield homelab with no existing DNS filter; you want the dashboard to be the only thing managing AdGuard Home. |
+| `external` | Dashboard makes REST calls against a pre-existing AdGuard Home instance you already run. No download, no supervision. | You already run AdGuard Home (typical homelab setup). The dashboard plugs into it. |
+
+### Configuration
+
+Set via environment variables:
+
+```bash
+# disabled (default) — nothing to configure
+
+# managed — dashboard hosts AdGuard Home
+PCT_ADGUARD_MODE=managed
+PCT_ADGUARD_BIND_ADDR=0.0.0.0:53   # what AdGuard listens on
+PCT_ADGUARD_ADMIN_PORT=3000        # AdGuard's own web UI; optional
+
+# external — point at your existing instance
+PCT_ADGUARD_MODE=external
+PCT_ADGUARD_URL=https://adguard.lan
+PCT_ADGUARD_USERNAME=parental-controls
+PCT_ADGUARD_PASSWORD_FILE=/run/secrets/adguard_password
+# or:
+# PCT_ADGUARD_API_TOKEN_FILE=/run/secrets/adguard_token
+```
+
+### What the dashboard expects from an external instance
+
+When in `external` mode, the dashboard treats the existing AdGuard Home
+as a shared service and confines itself to a well-defined slice of its
+configuration:
+
+- A **dedicated AdGuard user account** (created by the admin in
+  AdGuard's own UI) with the credentials supplied above. The dashboard
+  authenticates as that user.
+- A set of **per-client AdGuard "clients"** (in AdGuard's terminology —
+  these are network-side client identities, by IP/MAC) that this
+  dashboard owns and manages. The dashboard names them with a stable
+  prefix (e.g. `pct:alice-laptop`) so it can identify which clients are
+  its responsibility and leave everything else alone.
+- **Blocked-services and custom-rule entries** scoped to those
+  dashboard-owned clients only. The dashboard never edits global rules,
+  upstream DNS, or DHCP settings.
+
+This means the admin can keep using their existing AdGuard for
+household-wide blocklists, custom DNS, etc., without the dashboard
+clobbering any of it.
+
+### License posture is identical in both modes
+
+The dashboard talks to AdGuard Home only via its REST API in either
+mode. `managed` mode runs AdGuard as a separate child process under
+`/data/adguard/`, fetched from upstream at runtime — exactly the
+process boundary required by `licensing-analysis.md`. `external` mode
+removes the binary from the deployment entirely; the user runs AdGuard
+themselves. Neither mode causes the dashboard to link or import GPL
+code.
+
 ## TrueNAS SCALE deployment
 
-The reference deployment for TrueNAS SCALE will be provided as a
-`docker-compose.yml` (consumed by SCALE's Custom App feature):
+Two reference compose files; pick the one that matches your AdGuard
+mode.
+
+#### A) External AdGuard (typical homelab — you already run AdGuard)
+
+```yaml
+services:
+  dashboard:
+    image: ghcr.io/benseymourodb/linux-parental-controls-toolkit:latest
+    container_name: pct-dashboard
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - pct_data:/data
+    environment:
+      - PCT_BASE_URL=https://parentalcontrols.lan
+      - PCT_TIMEZONE=America/New_York
+      - PCT_ADGUARD_MODE=external
+      - PCT_ADGUARD_URL=https://adguard.lan
+      - PCT_ADGUARD_USERNAME=parental-controls
+      - PCT_ADGUARD_PASSWORD_FILE=/run/secrets/adguard_password
+    secrets:
+      - adguard_password
+volumes:
+  pct_data:
+secrets:
+  adguard_password:
+    file: ./secrets/adguard_password
+```
+
+#### B) Managed AdGuard (greenfield, dashboard hosts AdGuard too)
 
 ```yaml
 services:
@@ -96,13 +196,15 @@ services:
     restart: unless-stopped
     ports:
       - "8000:8000"          # dashboard UI
-      - "53:53/udp"          # only if AdGuard Home is enabled
-      - "53:53/tcp"          # only if AdGuard Home is enabled
+      - "53:53/udp"          # AdGuard DNS
+      - "53:53/tcp"          # AdGuard DNS
+      - "3000:3000"          # AdGuard's own admin UI (optional)
     volumes:
       - pct_data:/data
     environment:
       - PCT_BASE_URL=https://parentalcontrols.lan
       - PCT_TIMEZONE=America/New_York
+      - PCT_ADGUARD_MODE=managed
 volumes:
   pct_data:
 ```

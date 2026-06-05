@@ -96,15 +96,32 @@ deployment are all server-managed.
 
 ## Phase 7 — DNS filtering (optional)
 
-Goal: AdGuard Home runs as a managed sidecar and the dashboard
-manipulates its per-client blocklists.
+Goal: per-user / per-client DNS-level rules driven by the dashboard,
+in whichever AdGuard Home topology the admin already has.
 
-- First-run fetch of AdGuard Home from upstream releases.
-- Supervisor for AdGuard Home as a child process of the dashboard
-  container (or sibling container via compose — to be decided in
-  implementation).
-- AdGuard REST client in the dashboard.
-- UI: per-client domain blocklists with schedule support.
+The dashboard supports three modes (`PCT_ADGUARD_MODE`):
+
+- **`disabled`** — default; do nothing DNS-related.
+- **`external`** — point at an AdGuard Home the homelab admin already
+  runs (the common case for the target user). Confine the dashboard's
+  writes to a dedicated AdGuard user account and a `pct:`-prefixed
+  set of AdGuard clients so household-wide AdGuard config stays
+  untouched.
+- **`managed`** — first-run fetch of AdGuard Home from upstream
+  releases into the data volume; dashboard supervises it as a child
+  process (or sibling container — implementation decision).
+
+Deliverables:
+
+- AdGuard REST client in the dashboard (used by both `managed` and
+  `external` modes; same code path).
+- Configuration plumbing for the three modes; preflight check on
+  startup for `external` mode that the configured URL/credentials
+  reach a healthy AdGuard instance.
+- Managed-mode supervisor (only used when `PCT_ADGUARD_MODE=managed`).
+- UI: per-client domain blocklists with schedule support; surfaces
+  the active mode so the admin understands where their DNS rules
+  end up.
 
 ## Phase 8 — Per-activity time enforcement
 

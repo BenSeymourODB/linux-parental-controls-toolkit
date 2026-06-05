@@ -57,7 +57,12 @@ existing tool we configure and orchestrate.
   `aw-watcher-afk`, plus the browser extension).
 - **Web filtering:** e2guardian with per-Linux-UID filter groups; iptables
   OUTPUT-chain redirect to its proxy port.
-- **DNS filtering (optional, server-side):** AdGuard Home as a sidecar.
+- **DNS filtering (optional, server-side):** AdGuard Home in one of
+  three modes — `disabled` (default), `managed` (dashboard fetches and
+  supervises a sidecar), or `external` (dashboard talks to an existing
+  AdGuard Home instance the homelab already runs). All three integrate
+  only via AdGuard's REST API. See
+  [`docs/server-deployment.md`](docs/server-deployment.md).
 - **Configuration management:** Ansible (agentless, SSH).
 
 ### Tools that were considered and rejected
@@ -105,9 +110,12 @@ dashboard and GPL code. Concrete rules:
 3. **Talk to ActivityWatch and AdGuard Home over their REST APIs only.**
    No source-level integration.
 4. **Do not bundle GPL binaries inside the dashboard Docker image.**
-   GPL components (AdGuard Home, Ansible) are downloaded on first run into
-   the data volume. Client-side GPL components (Timekpr-nExT, e2guardian)
-   are installed by the client install script via `apt`.
+   GPL components are kept out of the image: Ansible is installed into
+   an isolated venv inside the data volume on first run; AdGuard Home
+   is either fetched at first run (managed mode), pointed at an
+   existing instance (external mode), or skipped entirely (disabled
+   mode). Client-side GPL components (Timekpr-nExT, e2guardian) are
+   installed by the client install script via `apt`.
 5. **e2guardian** is configured by writing config files and signalling a
    reload. No code-level integration.
 

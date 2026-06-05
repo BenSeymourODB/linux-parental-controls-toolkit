@@ -101,6 +101,22 @@ Three agents run on each enrolled client. All are installed and maintained via t
 
 **DNS layer (server-side, optional):** AdGuard Home running on the admin server provides a complementary network-level DNS blocklist enforcement layer. It operates per client-IP rather than per Linux user, making it useful for coarse-grained domain blocking (adult content categories, known malware domains) but insufficient on its own for per-user or time-limited policies.
 
+> **Refinement (post-original-draft):** Recognising that the target user
+> (parents already running a homelab / home server) often *already*
+> runs AdGuard Home, the dashboard supports three modes for the DNS
+> layer:
+>
+> - **`disabled`** — no DNS integration (default).
+> - **`managed`** — the dashboard fetches AdGuard Home on first run,
+>   supervises it as a sidecar, and owns its configuration.
+> - **`external`** — the dashboard makes REST calls against an existing
+>   AdGuard Home instance the admin already runs, confining itself to
+>   a dedicated AdGuard user account and a `pct:`-prefixed set of
+>   AdGuard "clients" so it does not touch unrelated configuration.
+>
+> Integration is REST-API-only in every mode, so the license posture
+> is identical to the sidecar approach.
+
 ---
 
 ## Layer 4 — Enforcement backends
