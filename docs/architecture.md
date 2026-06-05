@@ -77,6 +77,7 @@ binaries (see [`licensing-analysis.md`](licensing-analysis.md)).
 | Ansible runner | **ActivityWatch** (aw-server + watchers + browser extension deployment / upgrade) | SSH key-auth, playbook run |
 | AW REST client | **aw-server :5600** (telemetry pull) | SSH port-forward, then HTTP REST against `localhost:5600` |
 | AdGuard REST client | **AdGuard Home** (managed sidecar **or** existing homelab instance) | HTTP REST against the configured AdGuard API |
+| Event stream (`/api/events/stream`) | **`pct-client-bridge`** on each enrolled client, which routes to per-user **`pct-client-agent`** | Long-lived WebSocket, **client-initiated** outbound, bearer-token auth. Carries `grant.applied`, `policy.changed`, `enforce.force_close`, `enforce.session_lock`, `lockout.cleared` (see [`client-notifications.md`](client-notifications.md)). |
 
 ## Process boundaries (license-critical)
 
@@ -130,6 +131,12 @@ Grant         (id, user_id, scope=overall|activity|group, target_id?,
 IntegrationToken (id, name, scopes[], created_at, last_used_at,
                   revoked_at?, hashed_secret)
               --  one row per external system that may call /integrations/*
+
+NotificationPolicy (user_id, enabled, sound_profile,
+                    grace_seconds, cadence_overrides_json)
+              --  per-user knobs for the client-side notification
+                  experience; pushed to the client and cached there
+                  (see docs/client-notifications.md)
 ```
 
 Key derived views the dashboard renders:

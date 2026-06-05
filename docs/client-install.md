@@ -48,7 +48,11 @@ dashboard, has a short TTL, and is single-use.
    - e2guardian: the Mint/Ubuntu package, plus the recommended
      `libssl-dev` and bundled lists as needed.
 3. **Install packages**
-   - `apt install timekpr-next activitywatch e2guardian iptables-persistent`
+   - `apt install timekpr-next activitywatch e2guardian iptables-persistent libnotify-bin libcanberra-gtk3-module python3-dbus`
+   - Install the `pct-client` agent package (the system-level
+     `pct-client-bridge` service plus the per-user
+     `pct-client-agent` user service). Built from this repo's
+     `client/agent/` and shipped as a `.deb` from GitHub Releases.
 4. **Configure Timekpr-nExT**
    - Enable the daemon. Initial policy is empty; the server will push
      policy via `timekpra` after enrolment completes.
@@ -58,6 +62,17 @@ dashboard, has a short TTL, and is single-use.
    - Print instructions for installing the browser extension (Firefox /
      Chromium). The script cannot fully automate this; it leaves a
      `~/Desktop/install-aw-browser-extension.md` for the supervised user.
+
+5a. **Configure `pct-client` agent**
+   - Enable `pct-client-bridge.service` (system-level; runs as the
+     `pct-agent` user, holds the WebSocket to the dashboard).
+   - For each supervised user, enable `pct-client-agent.service` as
+     `systemd --user` so the daemon starts on their session login.
+     This is the component that renders toast notifications, plays
+     sounds, and computes the time-remaining cadence locally.
+   - The bridge is given a per-client bearer token (issued by the
+     dashboard at enrolment time) so it can authenticate to
+     `/api/events/stream`.
 6. **Configure e2guardian**
    - Generate a default config with per-UID filter groups corresponding
      to each supervised user.

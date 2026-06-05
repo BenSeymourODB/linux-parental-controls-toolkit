@@ -57,6 +57,13 @@ existing tool we configure and orchestrate.
   `aw-watcher-afk`, plus the browser extension).
 - **Web filtering:** e2guardian with per-Linux-UID filter groups; iptables
   OUTPUT-chain redirect to its proxy port.
+- **Client agent:** small Python daemon installed by the client install
+  script — system-level `pct-client-bridge` (event channel from the
+  server) plus a per-supervised-user `pct-client-agent` (notifications,
+  sound, time-remaining cadence, per-app force-close). The agent does
+  not replace Timekpr-nExT's session enforcement; it adds notifications
+  and a graceful end-of-budget experience around it. See
+  [`docs/client-notifications.md`](docs/client-notifications.md).
 - **DNS filtering (optional, server-side):** AdGuard Home in one of
   three modes — `disabled` (default), `managed` (dashboard fetches and
   supervises a sidecar), or `external` (dashboard talks to an existing
@@ -144,6 +151,9 @@ full reasoning.
   - `dashboard.transport.ansible` — playbook orchestration
   - `dashboard.transport.activitywatch` — telemetry pull
   - `dashboard.transport.adguard` — AdGuard Home REST client
+  - `dashboard.events` — WebSocket server-to-client event stream
+    (`grant.applied`, `policy.changed`, `enforce.force_close`, etc.;
+    see `docs/client-notifications.md`)
 - Tests live in `tests/` mirroring the package layout. Use `pytest`.
 - Do not introduce a new dependency without a sentence in the PR
   description explaining why an existing one doesn't suffice.

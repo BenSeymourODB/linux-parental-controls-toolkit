@@ -26,6 +26,17 @@ For each supervised Linux user account, an admin can set:
 - **Per-user web filtering** via e2guardian, with optional network-level
   blocking via AdGuard Home.
 
+And on the supervised user's desktop:
+
+- **Toast notifications and sound** when the server grants extra time
+  or changes a limit.
+- **Escalating warnings** as a budget runs down (every 15 min, then
+  every 5 min, then every minute) so nothing is killed without
+  warning, plus a configurable grace period after 0:00 to save work
+  before the app is force-closed (per-app limits) or the session is
+  locked (overall device limits). See
+  [`docs/client-notifications.md`](docs/client-notifications.md).
+
 Telemetry from each client (ActivityWatch) flows back to the dashboard so the
 admin can see what was actually used, not just what was allowed.
 
@@ -135,6 +146,7 @@ server. See [`docs/client-install.md`](docs/client-install.md).
 | [`docs/architecture.md`](docs/architecture.md) | Detailed component / data-flow diagrams and the policy model. |
 | [`docs/server-deployment.md`](docs/server-deployment.md) | Docker image design, TrueNAS SCALE deployment, GPL-component fetch-on-first-run pattern. |
 | [`docs/client-install.md`](docs/client-install.md) | Client enrollment script design and Linux Mint specifics. |
+| [`docs/client-notifications.md`](docs/client-notifications.md) | Client-side toast/sound notifications, time-remaining cadence, grace period, and end-of-budget enforcement (`pct-client` agent design). |
 | [`docs/roadmap.md`](docs/roadmap.md) | Phased milestone plan; the basis for GitHub issues. |
 | [`CLAUDE.md`](CLAUDE.md) | Guidance for AI coding agents working in this repo. |
 

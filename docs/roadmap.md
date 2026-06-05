@@ -123,15 +123,59 @@ Deliverables:
   the active mode so the admin understands where their DNS rules
   end up.
 
-## Phase 8 — Per-activity time enforcement
+## Phase 8 — Per-activity time enforcement (uses the agent from Phase 8b)
 
 Goal: when the dashboard sees a per-activity quota exhausted, the activity
-is stopped on the client.
+is stopped on the client — and the user gets the warning cadence and
+grace period from Phase 8b before that happens.
 
 - Decision logic in the dashboard based on `UsageSample` rollups.
-- Ad-hoc Ansible commands (or a small client-side helper invoked via SSH)
-  that kill or AppArmor-deny the relevant process.
-- Cool-down + notify-the-user behaviour to avoid thrash.
+- Server emits `enforce.force_close` over the event stream once the
+  grace period has elapsed. The per-user agent does the kill so we
+  avoid an SSH round-trip and don't need a privileged client-side
+  helper.
+- Cool-down to avoid thrash; respect the policy's `grace_seconds`.
+- Falls back to an SSH ad-hoc `pkill` if the agent isn't reachable.
+
+## Phase 8b — Client notifications and end-of-budget UX
+
+Goal: deliver the supervised-user-facing experience described in
+[`docs/client-notifications.md`](client-notifications.md) —
+toast/sound notifications for server events, escalating
+time-remaining warnings, grace period, force-close on per-app
+expiry, lock + grant-unlock on overall-screen-time expiry.
+
+- `dashboard.events` module exposing `GET /api/events/stream`
+  (WebSocket), with per-client bearer-token auth and reconnect
+  semantics.
+- `pct-client-bridge` system-level service (Python) on the client:
+  WebSocket client, reconnects with backoff, dispatches events to
+  per-user agents over `AF_UNIX` sockets, and holds a narrow
+  `sudoers` rule for the few privileged actions it needs (notably
+  `timekpra --kill-session` and clearing/setting lockouts).
+- `pct-client-agent` per-user service (Python, `systemd --user`):
+  libnotify + libcanberra rendering, locally computed warning
+  cadence (15/5/1 minute rules), grace-period countdown,
+  per-app force-close.
+- `NotificationPolicy` persisted in the policy store and pushed to
+  the client with the rest of policy.
+- Admin UI under `/admin/notifications` to set the per-user sound
+  profile, master enable/disable, and grace-period override.
+
+## Phase 8c — Lockout / grant-unlock flow
+
+Goal: when the overall screen-time budget hits zero, the user is
+locked out cleanly; when a grant arrives (from the admin or an
+external integrator like the calendar app), the lockout clears
+without manual intervention.
+
+- Bridge subscribes to `lockout.cleared` events.
+- When Timekpr's session-kill fires, the bridge records a local
+  "user locked out" marker and surfaces it in the admin UI.
+- On `grant.applied` against the overall budget, the server pushes
+  the new effective budget via SSH+`timekpra`; Timekpr unlocks the
+  user; bridge sends `lockout.cleared` to surface a toast on any
+  device the user happens to be logged into.
 
 ## Phase 9 — Mobile / PWA experience (`/app`)
 
