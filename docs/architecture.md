@@ -8,15 +8,11 @@ constrain how components are allowed to communicate.
 
 ## Component diagram
 
-The architecture is shown as two stacked views. The **Transport facade**
-appears in both — it is the seam between the inbound request plane
-(consumers → dashboard) and the outbound control plane (dashboard →
-clients).
-
-### View 1 — Inbound request plane
-
-How the three consumer surfaces flow into the dashboard and reach the
-policy store.
+How the three consumer surfaces flow into the dashboard, through the
+policy store, and out through the transport facade to its four
+runners. The runners' targets on the client side are listed in the
+table beneath the diagram (kept out of the diagram so Mermaid renders
+the dashboard at full width).
 
 ```mermaid
 flowchart TB
@@ -38,7 +34,15 @@ flowchart TB
         end
         Policy["Policy service<br/>+ Grant ledger"]
         DB[("SQLite")]
-        Transport["Transport facade<br/>(see View 2)"]
+        Transport["Transport facade"]
+        subgraph Runners["Transport runners"]
+            direction LR
+            SSHTr["SSH + timekpra<br/>(subprocess)"]
+            AnsTr["Ansible runner<br/>(subprocess)"]
+            AWTr["AW REST client<br/>(HTTP via SSH tunnel)"]
+            AGTr["AdGuard REST client<br/>(HTTP, LAN)"]
+        end
+        AdGuard["AdGuard Home<br/>managed or external<br/>see server-deployment.md"]
 
         RAdmin --> Policy
         RApp --> Policy
@@ -46,32 +50,6 @@ flowchart TB
         RInt --> Policy
         Policy --> DB
         Policy --> Transport
-    end
-
-    Admin -->|HTTPS| RAdmin
-    PWA -->|HTTPS JSON| RApi
-    Ext -->|HTTPS bearer token| RInt
-```
-
-### View 2 — Outbound control plane
-
-How the dashboard reaches each managed client (and the optional
-AdGuard Home, in either managed or external mode). The Server row sits
-above the Client row; edges cross the boundary downward, one per
-transport-to-client-component relationship.
-
-```mermaid
-%%{init: {'flowchart': {'defaultRenderer': 'elk'}}}%%
-flowchart TB
-    subgraph Server["Server — Docker container"]
-        direction LR
-        Transport["Transport facade<br/>(from View 1)"]
-        SSHTr["SSH + timekpra<br/>(subprocess)"]
-        AnsTr["Ansible runner<br/>(subprocess)"]
-        AWTr["AW REST client<br/>(HTTP via SSH tunnel)"]
-        AGTr["AdGuard REST client<br/>(HTTP, LAN)"]
-        AdGuard["AdGuard Home<br/>managed or external<br/>see server-deployment.md"]
-
         Transport --> SSHTr
         Transport --> AnsTr
         Transport --> AWTr
@@ -79,20 +57,26 @@ flowchart TB
         AGTr -.REST.-> AdGuard
     end
 
-    subgraph Client["Client — Linux Mint / Cinnamon"]
-        direction LR
-        Timekpr["<b>Timekpr-nExT</b><br/>timekpra CLI invoked<br/>as root via sudoers"]
-        E2GClient["<b>e2guardian</b><br/>/etc/e2guardian/*<br/>per-UID filter groups"]
-        IPTClient["<b>iptables OUTPUT</b><br/>per-UID redirect<br/>to e2guardian"]
-        AWClient["<b>ActivityWatch</b><br/>aw-server :5600<br/>+ watchers<br/>+ browser extension"]
-    end
-
-    SSHTr -->|SSH key-auth| Timekpr
-    AnsTr -->|playbook run| E2GClient
-    AnsTr -->|playbook run| IPTClient
-    AnsTr -->|playbook run| AWClient
-    AWTr -->|SSH port-forward :5600| AWClient
+    Admin -->|HTTPS| RAdmin
+    PWA -->|HTTPS JSON| RApi
+    Ext -->|HTTPS bearer token| RInt
 ```
+
+### Transport → client component mapping
+
+Each transport runner reaches one or more client-side components over
+SSH (or HTTP for AdGuard Home). All client-side components are
+installed by `client/install-client.sh`; the server never ships their
+binaries (see [`licensing-analysis.md`](licensing-analysis.md)).
+
+| Transport runner | Client component reached | Mechanism |
+|---|---|---|
+| SSH + timekpra | **Timekpr-nExT daemon** (timekpra CLI invoked as root via sudoers) | SSH key-auth, subprocess `timekpra` |
+| Ansible runner | **e2guardian** (`/etc/e2guardian/*`, per-UID filter groups) | SSH key-auth, playbook run |
+| Ansible runner | **iptables OUTPUT** (per-UID redirect to e2guardian) | SSH key-auth, playbook run |
+| Ansible runner | **ActivityWatch** (aw-server + watchers + browser extension deployment / upgrade) | SSH key-auth, playbook run |
+| AW REST client | **aw-server :5600** (telemetry pull) | SSH port-forward, then HTTP REST against `localhost:5600` |
+| AdGuard REST client | **AdGuard Home** (managed sidecar **or** existing homelab instance) | HTTP REST against the configured AdGuard API |
 
 ## Process boundaries (license-critical)
 
