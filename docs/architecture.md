@@ -10,18 +10,21 @@ constrain how components are allowed to communicate.
 
 ```mermaid
 flowchart TB
-    Admin["<b>Admin (desktop)</b><br/><code>/admin</code><br/>Jinja + HTMX + Svelte islands"]
-    PWA["<b>Parent / child (phone)</b><br/><code>/app</code><br/>SvelteKit PWA, home-screen"]
-    Ext["<b>External integrator</b><br/>e.g. next-digital-wall-calendar"]
+    subgraph Consumers["Consumers"]
+        direction LR
+        Admin["<b>Admin (desktop)</b><br/><code>/admin</code><br/>Jinja + HTMX + Svelte islands"]
+        PWA["<b>Parent / child (phone)</b><br/><code>/app</code><br/>SvelteKit PWA, home-screen"]
+        Ext["<b>External integrator</b><br/>e.g. next-digital-wall-calendar"]
+    end
 
     subgraph Server["Server — Docker container"]
         direction TB
         subgraph FastAPI["FastAPI (Python 3.11+)"]
-            direction LR
-            RAdmin["<code>/admin</code><br/>HTMX views"]
-            RApp["<code>/app</code><br/>static SvelteKit"]
-            RApi["<code>/api</code><br/>JSON"]
-            RInt["<code>/integrations</code><br/>token-auth webhooks"]
+            direction TB
+            RAdmin["<code>/admin</code> · HTMX views"]
+            RApp["<code>/app</code> · static SvelteKit"]
+            RApi["<code>/api</code> · JSON"]
+            RInt["<code>/integrations</code> · token-auth webhooks"]
         end
         Policy["Policy service<br/>+ Grant ledger"]
         DB[("SQLite")]
@@ -46,12 +49,16 @@ flowchart TB
     end
 
     subgraph Client["Client — Linux Mint / Cinnamon"]
-        direction TB
+        direction LR
         Timekpr["<b>Timekpr-nExT daemon</b><br/>timekpra CLI invoked as root via sudoers"]
         AWClient["<b>ActivityWatch</b><br/>aw-server :5600 (localhost only)<br/>aw-watcher-window (systemd --user)<br/>aw-watcher-afk (systemd --user)<br/>browser extension (Firefox / Chromium)"]
         E2GClient["<b>e2guardian</b><br/>/etc/e2guardian/*<br/>per-UID filter groups"]
         IPTClient["<b>iptables OUTPUT</b><br/>per-UID redirect to e2guardian"]
     end
+
+    %% invisible edges to force vertical ranking
+    Consumers ~~~ Server
+    Server ~~~ Client
 
     Admin -->|HTTPS| RAdmin
     PWA -->|HTTPS JSON| RApi
