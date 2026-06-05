@@ -9,32 +9,49 @@ constrain how components are allowed to communicate.
 ## Component diagram
 
 ```
+                  ┌──────────────────┐    ┌───────────────────────┐
+                  │ Admin (desktop)  │    │ Parent / child (phone)│
+                  │ /admin (Jinja +  │    │ /app  (SvelteKit PWA, │
+                  │ HTMX + islands)  │    │ static, home-screen)  │
+                  └────────┬─────────┘    └──────────┬────────────┘
+                           │ HTTP                    │ HTTP/JSON via /api
+                           ▼                         ▼
 ┌─────────────────────────── SERVER (Docker container) ────────────────────────────┐
 │                                                                                  │
-│   ┌────────────────────────────────────────────────┐                             │
-│   │ Dashboard (FastAPI + Jinja/HTMX, Python 3.11+) │                             │
-│   │                                                │                             │
-│   │  Routes  ─►  Policy service  ─►  SQLite        │                             │
-│   │                       │                        │                             │
-│   │                       ▼                        │                             │
-│   │            ┌──────────────────────────┐        │                             │
-│   │            │  Transport facade        │        │                             │
-│   │            └──────────────────────────┘        │                             │
-│   │                  │      │      │      │        │                             │
-│   │  ┌───────────────┘      │      │      └────────┴──────────────┐              │
-│   │  ▼                      ▼      ▼                              ▼              │
-│   │ SSH+timekpra      Ansible runner   AW REST client      AdGuard REST client   │
-│   │  (subprocess)      (subprocess)    (HTTP via SSH tunnel)   (HTTP, LAN)       │
-│   └────────┬───────────────┬────────────────┬────────────────────┬─────────────┘ │
-│            │               │                │                    │               │
-│            │               │                │                    ▼               │
-│            │               │                │           ┌────────────────────┐   │
-│            │               │                │           │ AdGuard Home       │   │
-│            │               │                │           │ (sidecar, GPL-3.0, │   │
-│            │               │                │           │ fetched on first   │   │
-│            │               │                │           │ run, not bundled)  │   │
-│            │               │                │           └────────────────────┘   │
-└────────────┼───────────────┼────────────────┼───────────────────────────────────┘
+│   ┌────────────────────────────────────────────────────────────────┐             │
+│   │ Dashboard (FastAPI, Python 3.11+)                              │             │
+│   │                                                                │             │
+│   │  /admin (HTMX views) ─┐                                        │             │
+│   │  /app   (static SK)   │── all read/write through ──┐           │             │
+│   │  /api   (JSON)        │                            ▼           │             │
+│   │  /integrations  ──────┘                  ┌──────────────────┐  │             │
+│   │   (rewards webhook,                      │ Policy service   │  │             │
+│   │    token-auth, e.g.                      │ + Grant ledger   │  │             │
+│   │    next-digital-wall-                    └────────┬─────────┘  │             │
+│   │    calendar)                                      ▼            │             │
+│   │                                              ┌────────┐        │             │
+│   │                                              │ SQLite │        │             │
+│   │                                              └────────┘        │             │
+│   │                                                                │             │
+│   │            ┌──────────────────────────┐                        │             │
+│   │            │  Transport facade        │                        │             │
+│   │            └──────────────────────────┘                        │             │
+│   │                  │      │      │      │                        │             │
+│   │  ┌───────────────┘      │      │      └────────────────┐       │             │
+│   │  ▼                      ▼      ▼                       ▼       │             │
+│   │ SSH+timekpra      Ansible runner   AW REST client   AdGuard    │             │
+│   │  (subprocess)      (subprocess)    (HTTP via SSH    REST       │             │
+│   │                                     tunnel)         client     │             │
+│   └────────┬───────────────┬────────────────┬───────────┬──────────┘             │
+│            │               │                │           │                        │
+│            │               │                │           ▼                        │
+│            │               │                │  ┌────────────────────┐            │
+│            │               │                │  │ AdGuard Home       │            │
+│            │               │                │  │ (sidecar, GPL-3.0, │            │
+│            │               │                │  │ fetched on first   │            │
+│            │               │                │  │ run, not bundled)  │            │
+│            │               │                │  └────────────────────┘            │
+└────────────┼───────────────┼────────────────┼──────────────────────────────────┘
              │ SSH key-auth  │ SSH key-auth   │ SSH port-forward to client:5600
              ▼               ▼                ▼
 ┌─────────────────────────── CLIENT (Linux Mint / Cinnamon) ───────────────────────┐
@@ -91,6 +108,18 @@ Exception     (id, user_id, ...,  expires_at)
 
 UsageSample   (user_id, client_id, activity_id, started_at, ended_at)
               --  populated from ActivityWatch pulls
+
+Grant         (id, user_id, scope=overall|activity|group, target_id?,
+                seconds_granted, expires_at,
+                source=admin|integration:<name>, source_ref?,
+                granted_at, revoked_at?)
+              --  immutable ledger; per-day budget = policy + Σ(active grants)
+              --  source_ref is the integrator's idempotency key
+                  (e.g. the calendar's chore-completion id)
+
+IntegrationToken (id, name, scopes[], created_at, last_used_at,
+                  revoked_at?, hashed_secret)
+              --  one row per external system that may call /integrations/*
 ```
 
 Key derived views the dashboard renders:
@@ -143,6 +172,68 @@ server, which is consistent with the upstream project's guidance.
 | Per-website filter | e2guardian | Ansible-deployed config |
 | Per-website time-window | e2guardian config swap on schedule | Ansible + systemd timer |
 | DNS-level block | AdGuard Home | Dashboard via REST API |
+
+## External integrations
+
+The dashboard's `/api/*` JSON contract is the single integration surface
+for both the built-in frontends and for external systems. A dedicated
+`/integrations/*` namespace under `/api` holds endpoints meant for
+machine-to-machine calls, authenticated with per-integration tokens
+managed in the admin UI.
+
+### Planned integrator: next-digital-wall-calendar
+
+The longer-term goal is API compatibility with
+[next-digital-wall-calendar](https://github.com/BenSeymourODB/next-digital-wall-calendar),
+a family calendar and chore-tracking app, so that completing a chore or
+calendar event in the calendar app can grant screen-time rewards in the
+parental-controls toolkit. Example flow:
+
+1. A child marks "clean room" complete in the calendar app.
+2. The calendar app's reward rule says "+30 min overall screen time".
+3. The calendar's backend POSTs to the dashboard:
+   ```http
+   POST /api/integrations/grants
+   Authorization: Bearer <integration-token>
+   Content-Type: application/json
+
+   {
+     "user_ref": "alice",
+     "scope": "overall",
+     "seconds": 1800,
+     "expires_at": "2026-06-05T23:59:59-04:00",
+     "source_ref": "calendar:chore-completion:42a9...",
+     "reason": "Cleaned room (chore reward)"
+   }
+   ```
+4. The dashboard records a `Grant` row, recomputes Alice's effective
+   budget for today, and pushes the new daily limit to her client via
+   the SSH+`timekpra` transport.
+5. If the calendar retries the same request (network blip, queue replay),
+   the dashboard recognises `source_ref` and no double-grant occurs.
+
+### Rules that apply to any external integrator
+
+- All external traffic enters via `/api/integrations/*`. No side channels.
+- Per-integration tokens are scoped (e.g. `grants:write`,
+  `policy:read`), revocable from the admin UI, and rate-limited per token.
+- Grant requests are **idempotent by `source_ref`**. The integrator owns
+  the dedupe key; the dashboard enforces uniqueness.
+- The `Grant` ledger is immutable: revocations are a separate row, not an
+  edit. The admin can see every grant the calendar (or any future
+  integrator) has ever made.
+- Grants are **additive** on top of policy budgets, never a replacement.
+  Policy stays the baseline; grants are a separable, auditable overlay.
+- Grant scopes mirror policy scopes (`overall`, `activity`, `group`) so
+  the integrator can grant "30 minutes of overall time" or
+  "45 minutes of YouTube" with the same primitive.
+- Grants always have an `expires_at` (typically end-of-day) to prevent
+  unbounded accumulation.
+
+The reciprocal direction (dashboard → calendar, e.g. notifying the
+calendar that a budget was exceeded) is out of scope for now but stays
+open: same pattern, the dashboard would hold a per-integration outbound
+webhook URL.
 
 ## Failure modes the design must handle
 

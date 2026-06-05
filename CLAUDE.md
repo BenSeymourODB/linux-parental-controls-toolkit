@@ -31,8 +31,18 @@ existing tool we configure and orchestrate.
 - **Web framework:** FastAPI (with Uvicorn). Do not introduce Flask, Django,
   or a separate frontend build pipeline unless the design doc is updated.
 - **Database:** SQLite for the policy store. Migrations via Alembic.
-- **Frontend:** Server-rendered Jinja2 templates plus light vanilla
-  JS / HTMX. No React, no separate Node build.
+- **Frontend:** Two surfaces, both served by the same FastAPI process:
+  - `/admin/*` — server-rendered Jinja2 + HTMX, plus small Svelte
+    "islands" where genuine interactivity helps (live burndown chart,
+    drag-to-reorder editors). Desktop admin experience.
+  - `/app/*` — a SvelteKit static build (PWA-capable) for the
+    mobile-first user/parent experience (per-child status, parents
+    adjusting limits from a phone). Talks only to `/api/*`.
+  - `/api/*` — JSON API; the single contract for both frontends **and
+    for external integrations** (see "External integrations" below).
+  Both frontends are built at image-build time. **No runtime Node
+  process** — the image stays Python-only at runtime. CI gains a Node
+  build step.
 - **Process management:** `subprocess` / `asyncio` subprocess for invoking
   external GPL tools (`timekpra`, `ansible-playbook`). No Python imports of
   GPL projects (see "License boundaries" below).
@@ -55,6 +65,29 @@ existing tool we configure and orchestrate.
 Do not reach for these without updating the design doc:
 LittleBrother, UCS / UCC, SaltStack, Puppet, Chef, Pi-hole, FleetDM,
 malcontent (Flatpak-only).
+
+## External integrations
+
+The dashboard exposes an authenticated JSON API at `/api/*` that is the
+single source of truth for both built-in frontends and for external
+systems. The first planned external integrator is
+[next-digital-wall-calendar](https://github.com/BenSeymourODB/next-digital-wall-calendar),
+which will call the dashboard to **grant** screen-time rewards when
+chores or calendar events are completed (e.g. "Alice finished her
+chores → grant +30 minutes of overall time today" or "+45 minutes of
+YouTube"). Design rules that apply now, even before this is built:
+
+- All inbound external traffic goes through `/api/*`; never expose a
+  separate side-channel.
+- Per-integration API tokens (scoped, revocable, rate-limited).
+- Grant requests are **idempotent** by an integration-supplied
+  `source_ref` so a retried calendar webhook does not double-grant.
+- Grants are recorded in an immutable ledger (`Grant` entity, see
+  `docs/architecture.md`) so the admin can audit who gave what time and
+  why, and revoke if needed.
+- Grants are additive adjustments on top of the policy, not a
+  replacement for it. The policy model stays the source of the
+  baseline; grants are a separate layer.
 
 ## License boundaries — non-negotiable
 
@@ -92,8 +125,13 @@ full reasoning.
   the dashboard package.
 - Keep modules small and per-responsibility. The dashboard already has a
   natural split:
-  - `dashboard.web` — FastAPI app, routes, templates
-  - `dashboard.policy` — policy model, DB access
+  - `dashboard.web` — FastAPI app: mounts `/api`, `/admin`,
+    `/app` (static), `/integrations`
+  - `dashboard.api` — DTOs, JSON routes used by both frontends and by
+    external integrations
+  - `dashboard.policy` — policy model, DB access, grant ledger
+  - `dashboard.integrations` — external-system inbound APIs (e.g. the
+    family-calendar rewards endpoint; see `docs/architecture.md`)
   - `dashboard.transport.ssh` — SSH + `timekpra` invocation
   - `dashboard.transport.ansible` — playbook orchestration
   - `dashboard.transport.activitywatch` — telemetry pull

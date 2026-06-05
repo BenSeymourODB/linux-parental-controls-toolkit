@@ -29,21 +29,50 @@ For each supervised Linux user account, an admin can set:
 Telemetry from each client (ActivityWatch) flows back to the dashboard so the
 admin can see what was actually used, not just what was allowed.
 
+## Long-term goals
+
+These are not in the initial scope but they shape the architecture today
+so we don't paint ourselves into a corner:
+
+- **Mobile-first / PWA experience.** A SvelteKit-built progressive web
+  app under `/app` for per-child status dashboards and for parents to
+  adjust limits from a phone (home-screen install, push notifications,
+  service worker). The Phase 1 scaffolding treats the JSON API as
+  first-class so the PWA can land later without refactoring the
+  internals. See `docs/roadmap.md` Phase 9.
+- **API compatibility with
+  [next-digital-wall-calendar](https://github.com/BenSeymourODB/next-digital-wall-calendar).**
+  A family calendar and chore-tracking app that should be able to grant
+  screen-time rewards when chores or calendar events are completed
+  ("Alice cleaned her room → +30 min of overall time today",
+  "Bob finished homework → +45 min of YouTube"). This is implemented via
+  an authenticated `/api/integrations/*` surface with an immutable
+  `Grant` ledger; the calendar app calls in, the dashboard records and
+  enforces the grant. See `docs/architecture.md` ("External
+  integrations") and `docs/roadmap.md` Phase 10.
+
 ## High-level architecture
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │  Server (Docker container, runs on TrueNAS SCALE / any Linux)    │
 │                                                                  │
-│   ┌────────────────┐   ┌─────────────────────┐                   │
-│   │ Web dashboard  │──▶│ Policy store        │                   │
-│   │ (FastAPI +     │   │ (SQLite)            │                   │
-│   │  HTML/JS)      │   └─────────────────────┘                   │
-│   │                │                                             │
-│   │                │──▶ Ansible runner (config push)             │
-│   │                │──▶ SSH/timekpra runner (live policy)        │
-│   │                │──▶ ActivityWatch pull (telemetry)           │
-│   └────────────────┘                                             │
+│   FastAPI (Python 3.11)                                          │
+│   ├── /admin        Jinja + HTMX + Svelte islands (desktop UI)   │
+│   ├── /app          SvelteKit static PWA (mobile / per-child)    │
+│   ├── /api          JSON API (single contract)                   │
+│   └── /integrations webhook API (e.g. calendar rewards)          │
+│            │                                                     │
+│            ▼                                                     │
+│   ┌─────────────────────┐                                        │
+│   │ Policy + Grant      │  SQLite                                │
+│   │ store               │                                        │
+│   └─────────────────────┘                                        │
+│            │                                                     │
+│            ├──▶ SSH / timekpra runner (live policy push)         │
+│            ├──▶ Ansible runner (config push, tamper revert)      │
+│            └──▶ ActivityWatch pull (telemetry, via SSH tunnel)   │
+│                                                                  │
 │   ┌────────────────┐                                             │
 │   │ AdGuard Home   │  (optional sidecar; pulled at first run)    │
 │   └────────────────┘                                             │

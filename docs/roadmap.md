@@ -35,16 +35,23 @@ Goal: a runnable, empty-but-correct dashboard skeleton and a CI baseline.
   builds the Docker image.
 - Add a basic `docker-compose.yml` example for local development.
 
-## Phase 2 — Policy store and admin UI shell
+## Phase 2 — Policy store, JSON API, and admin UI shell
 
 Goal: an admin can log in, define users, define clients (as records), and
-define a policy — but nothing is enforced yet.
+define a policy — but nothing is enforced yet. The JSON API is designed
+as a first-class surface from day one (it has to carry both the admin UI
+and, later, the PWA and external integrators).
 
 - Implement the SQLite schema for `User`, `Client`, `UserOnClient`,
-  `Activity`, `ActivityGroup`, `Budget`, `Schedule`, `Exception`.
+  `Activity`, `ActivityGroup`, `Budget`, `Schedule`, `Exception`,
+  `Grant`, `IntegrationToken`.
 - Alembic migrations.
-- Single-admin local password auth (Argon2).
-- HTMX-driven UI: users, clients, activities, budgets, schedules.
+- Single-admin local password auth (Argon2) for the admin UI.
+- **`/api/*` JSON endpoints** for the full policy model (the admin UI
+  calls these; the PWA and integrators will too).
+- HTMX-driven admin UI on `/admin/*`: users, clients, activities,
+  budgets, schedules. Renders Jinja templates that call the same
+  service layer the JSON API uses (no privileged in-process shortcuts).
 - No transport integration yet; all "push" actions are stubbed to log.
 
 ## Phase 3 — Client install script (Linux Mint)
@@ -109,7 +116,45 @@ is stopped on the client.
   that kill or AppArmor-deny the relevant process.
 - Cool-down + notify-the-user behaviour to avoid thrash.
 
-## Phase 9 — Hardening and polish
+## Phase 9 — Mobile / PWA experience (`/app`)
+
+Goal: parents and supervised users have a mobile-first, home-screen-
+installable view of the system.
+
+- SvelteKit project under `web/app/` that produces a static build
+  (`adapter-static`) consumed by FastAPI's `StaticFiles` mount at `/app`.
+- PWA basics: manifest, service worker, offline-friendly app shell.
+- Per-user status screen: how much time is left today, what's been used,
+  upcoming schedule transitions.
+- Parent-facing limit-adjustment screens (touch-friendly time pickers,
+  swipeable day/week/month views).
+- Auth: shared session with the admin UI for the admin role; an
+  additional lightweight per-user PIN/passcode model for child users
+  who should only see their own data.
+- Web Push for "5 minutes left" / "time's up" notifications.
+- CI gains a Node build step (no Node runtime in the image).
+
+## Phase 10 — External integrations: family-calendar rewards
+
+Goal: API-compatibility with
+[next-digital-wall-calendar](https://github.com/BenSeymourODB/next-digital-wall-calendar)
+so chore/calendar completions can grant screen-time rewards.
+
+- `/api/integrations/*` endpoints, including `POST /grants` per
+  `docs/architecture.md`.
+- `IntegrationToken` issuance / scoping / revocation in the admin UI.
+- Idempotency-by-`source_ref` enforcement; rate limiting per token.
+- Grant ledger UI in `/admin`: view, filter, revoke.
+- Recompute pipeline: when a grant lands, recompute the affected user's
+  effective budget for the day and push to the client(s) via the
+  existing SSH + `timekpra` transport.
+- Coordinate with the calendar repo on the exact request/response shape
+  before locking it in; treat the first version as `v1` and version the
+  endpoint path accordingly.
+- Stretch: outbound webhook from dashboard → calendar (e.g. "Alice has
+  10 min left") to enable richer cross-app behaviour.
+
+## Phase 11 — Hardening and polish
 
 - Reverse-proxy + TLS instructions for non-LAN deployments.
 - Multi-admin / OIDC option.
@@ -119,8 +164,12 @@ is stopped on the client.
 
 ## Out of scope (for now)
 
-- Non-Linux clients (macOS, Windows, Chromebook).
-- Mobile clients (Android, iOS).
+- Non-Linux **enforcement** clients (macOS, Windows, Chromebook). The
+  mobile/PWA experience in Phase 9 is a *control surface*, not an
+  enforcement target — it lets phones view and adjust policy; the
+  enforced devices are still Linux desktops.
+- Native mobile apps (Android, iOS). The Phase 9 PWA is the mobile
+  story.
 - Cloud-hosted SaaS multi-tenant model. The deployment target is the
   household / single-admin scenario.
 

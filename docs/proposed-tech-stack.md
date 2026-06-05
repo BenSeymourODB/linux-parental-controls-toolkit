@@ -24,6 +24,25 @@ The only fully custom layer. Responsibilities:
 
 **Technology choices for the dashboard itself** are left open at this stage, but the architecture favours a lightweight Python web framework (FastAPI or Flask) backed by SQLite for policy state, which is consistent with the Python tooling used across the rest of the stack. A React or plain HTML/JS frontend served by the same process is sufficient; no separate frontend build pipeline is required for the admin-only use case.
 
+> **Refinement (post-original-draft):** The "admin web dashboard" layer
+> evolves to expose **two frontends behind one FastAPI process**:
+>
+> - **`/admin/*`** — server-rendered Jinja2 + HTMX with small Svelte
+>   "islands" for high-interactivity bits (live burndown charts, schedule
+>   editors). Desktop admin experience.
+> - **`/app/*`** — a SvelteKit static build (PWA-capable) for the
+>   mobile-first user-facing experience: per-child status screens,
+>   parents adjusting limits from a phone, home-screen install with a
+>   service worker for live updates.
+> - **`/api/*`** — JSON API consumed by both frontends *and* by external
+>   integrations (e.g. a family-calendar reward system that grants
+>   screen time on chore completion — see "External integrations" in
+>   `docs/architecture.md`).
+>
+> Both frontends are produced at image-build time; the runtime image
+> stays Python-only. The CI pipeline gains a Node build step but the
+> Docker image does not gain a Node runtime.
+
 ---
 
 ## Layer 2 — Transport and orchestration
