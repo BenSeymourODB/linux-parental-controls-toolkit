@@ -8,6 +8,16 @@ constrain how components are allowed to communicate.
 
 ## Component diagram
 
+The architecture is shown as two stacked views. The **Transport facade**
+appears in both — it is the seam between the inbound request plane
+(consumers → dashboard) and the outbound control plane (dashboard →
+clients).
+
+### View 1 — Inbound request plane
+
+How the three consumer surfaces flow into the dashboard and reach the
+policy store.
+
 ```mermaid
 flowchart TB
     subgraph Consumers["Consumers"]
@@ -28,12 +38,7 @@ flowchart TB
         end
         Policy["Policy service<br/>+ Grant ledger"]
         DB[("SQLite")]
-        Transport["Transport facade"]
-        SSHTr["SSH + timekpra<br/>(subprocess)"]
-        AnsTr["Ansible runner<br/>(subprocess)"]
-        AWTr["AW REST client<br/>(HTTP via SSH tunnel)"]
-        AGTr["AdGuard REST client<br/>(HTTP, LAN)"]
-        AdGuard["AdGuard Home<br/>sidecar (GPL-3.0)<br/>fetched on first run<br/>not bundled in image"]
+        Transport["Transport facade<br/>(see View 2)"]
 
         RAdmin --> Policy
         RApp --> Policy
@@ -41,6 +46,29 @@ flowchart TB
         RInt --> Policy
         Policy --> DB
         Policy --> Transport
+    end
+
+    Admin -->|HTTPS| RAdmin
+    PWA -->|HTTPS JSON| RApi
+    Ext -->|HTTPS bearer token| RInt
+```
+
+### View 2 — Outbound control plane
+
+How the dashboard reaches each managed client (and the optional
+AdGuard Home sidecar).
+
+```mermaid
+flowchart TB
+    subgraph Server["Server — Docker container"]
+        direction TB
+        Transport["Transport facade<br/>(from View 1)"]
+        SSHTr["SSH + timekpra<br/>(subprocess)"]
+        AnsTr["Ansible runner<br/>(subprocess)"]
+        AWTr["AW REST client<br/>(HTTP via SSH tunnel)"]
+        AGTr["AdGuard REST client<br/>(HTTP, LAN)"]
+        AdGuard["AdGuard Home<br/>sidecar (GPL-3.0)<br/>fetched on first run<br/>not bundled in image"]
+
         Transport --> SSHTr
         Transport --> AnsTr
         Transport --> AWTr
@@ -55,14 +83,6 @@ flowchart TB
         E2GClient["<b>e2guardian</b><br/>/etc/e2guardian/*<br/>per-UID filter groups"]
         IPTClient["<b>iptables OUTPUT</b><br/>per-UID redirect to e2guardian"]
     end
-
-    %% invisible edges to force vertical ranking
-    Consumers ~~~ Server
-    Server ~~~ Client
-
-    Admin -->|HTTPS| RAdmin
-    PWA -->|HTTPS JSON| RApi
-    Ext -->|HTTPS bearer token| RInt
 
     SSHTr -->|SSH key-auth| Timekpr
     AnsTr -->|SSH key-auth, playbook run| E2GClient
