@@ -1,0 +1,170 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  lint:
+    name: Lint (Python)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install lint tools
+        run: pip install black ruff mypy
+
+      - name: black
+        run: |
+          if [ -d server/src ]; then
+            black --check server/src/ server/tests/
+          else
+            echo "server/src not yet present — skipping black"
+          fi
+
+      - name: ruff
+        run: |
+          if [ -d server/src ]; then
+            ruff check server/src/ server/tests/
+          else
+            echo "server/src not yet present — skipping ruff"
+          fi
+
+      - name: mypy
+        run: |
+          if [ -d server/src ]; then
+            mypy --strict server/src/
+          else
+            echo "server/src not yet present — skipping mypy"
+          fi
+
+  test:
+    name: Unit tests
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package + dev dependencies
+        run: |
+          if [ -f server/pyproject.toml ]; then
+            pip install -e "server/[dev]"
+          else
+            echo "server/pyproject.toml not yet present — skipping install"
+          fi
+
+      - name: pytest
+        run: |
+          if [ -d server/tests ]; then
+            pytest server/tests/ \
+              -m "not integration" \
+              --strict-markers \
+              -q \
+              --cov=dashboard \
+              --cov-report=term-missing \
+              --cov-fail-under=80
+          else
+            echo "server/tests not yet present — skipping pytest"
+          fi
+
+  svelte-build:
+    name: SvelteKit / Svelte islands build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Build admin Svelte islands
+        run: |
+          if [ -f server/frontend/admin/package.json ]; then
+            cd server/frontend/admin && npm ci && npm run build
+          else
+            echo "Admin frontend not yet scaffolded — skipping"
+          fi
+
+      - name: Build SvelteKit PWA
+        run: |
+          if [ -f server/frontend/app/package.json ]; then
+            cd server/frontend/app && npm ci && npm run build
+          else
+            echo "App (PWA) frontend not yet scaffolded — skipping"
+          fi
+
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ShellCheck (client scripts)
+        run: |
+          if compgen -G "client/**/*.sh" > /dev/null 2>&1 || compgen -G "client/*.sh" > /dev/null 2>&1; then
+            find client/ -name "*.sh" -print0 | xargs -0 shellcheck
+          else
+            echo "No shell scripts in client/ yet — skipping ShellCheck"
+          fi
+
+  ansible-lint:
+    name: ansible-lint
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install ansible-lint
+        run: pip install ansible-lint
+
+      - name: ansible-lint
+        run: |
+          if [ -d client/ansible ]; then
+            ansible-lint client/ansible/
+          else
+            echo "client/ansible not yet present — skipping ansible-lint"
+          fi
+
+  docker-build:
+    name: Docker image build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image (no push)
+        run: |
+          if [ -f server/Dockerfile ]; then
+            docker buildx build \
+              --cache-from type=gha \
+              --cache-to type=gha,mode=max \
+              --tag pct-dashboard:ci \
+              server/
+          else
+            echo "server/Dockerfile not yet present — skipping Docker build"
+          fi
+
+  pre-commit:
+    name: pre-commit hooks
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: pre-commit/action@v3.0.1

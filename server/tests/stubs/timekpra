@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Stub timekpra binary for SSH integration tests.
+#
+# Records every invocation to /tmp/timekpra-invocations.log so the test
+# can SSH-read the log and assert correct arguments were passed.
+# Always exits 0 (success). Does not simulate Timekpr-nExT behaviour.
+
+LOG=/tmp/timekpra-invocations.log
+echo "$(date -Iseconds) $*" >> "$LOG"
+
+# Emit minimal stdout for subcommands that our transport layer parses.
+case "$1" in
+  --gettimelimitforday)
+    # Format: <user> <seconds-used> <seconds-allowed>
+    echo "${2:-testuser} 0 7200"
+    ;;
+  --gettimetracked)
+    echo "${2:-testuser} 0"
+    ;;
+  *)
+    echo "OK"
+    ;;
+esac
