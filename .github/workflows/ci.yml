@@ -63,7 +63,7 @@ jobs:
 
       - name: pytest
         run: |
-          if [ -d server/tests ]; then
+          if [ -d server/tests ] && [ -f server/pyproject.toml ]; then
             pytest server/tests/ \
               -m "not integration" \
               --strict-markers \
@@ -72,7 +72,7 @@ jobs:
               --cov-report=term-missing \
               --cov-fail-under=80
           else
-            echo "server/tests not yet present — skipping pytest"
+            echo "server/tests or server/pyproject.toml not yet present — skipping pytest"
           fi
 
   svelte-build:

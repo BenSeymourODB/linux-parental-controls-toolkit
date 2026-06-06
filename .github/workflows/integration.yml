@@ -12,78 +12,88 @@ jobs:
   activitywatch:
     name: ActivityWatch REST client
     runs-on: ubuntu-22.04
-    # Spin up a real aw-server and run our REST client against it.
-    services:
-      activitywatch:
-        image: activitywatch/aw-server:latest
-        ports: ["5600:5600"]
-        options: >-
-          --health-cmd "curl -sf http://localhost:5600/api/0/info"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 15
+    # Starts a real aw-server via docker run (not a service container) so the
+    # step can be skipped gracefully when the transport tests don't exist yet.
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check prerequisites
+        id: check
+        run: |
+          if [ -f server/pyproject.toml ] && [ -d server/tests/transport/activitywatch ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "ActivityWatch transport tests not yet present — skipping job"
+          fi
+
       - uses: actions/setup-python@v5
+        if: steps.check.outputs.run == 'true'
         with:
           python-version: "3.11"
 
       - name: Install package + dev dependencies
+        if: steps.check.outputs.run == 'true'
+        run: pip install -e "server/[dev]"
+
+      - name: Start ActivityWatch server
+        if: steps.check.outputs.run == 'true'
         run: |
-          if [ -f server/pyproject.toml ]; then
-            pip install -e "server/[dev]"
-          else
-            echo "server/pyproject.toml not yet present — skipping"
-            exit 0
-          fi
+          docker run -d --name activitywatch \
+            -p 5600:5600 \
+            activitywatch/activitywatch:latest
+          for i in $(seq 1 20); do
+            curl -sf http://localhost:5600/api/0/info && break
+            sleep 3
+          done
 
       - name: Integration tests — ActivityWatch transport
-        run: |
-          if [ -d server/tests/transport/activitywatch ]; then
-            pytest server/tests/transport/activitywatch/ -m integration -v
-          else
-            echo "ActivityWatch transport tests not yet present — skipping"
-          fi
+        if: steps.check.outputs.run == 'true'
+        run: pytest server/tests/transport/activitywatch/ -m integration -v
         env:
           AW_SERVER_URL: http://localhost:5600
 
   adguard:
     name: AdGuard Home REST client
     runs-on: ubuntu-22.04
-    # Spin up a real AdGuard Home instance (disabled mode baseline; external mode tested here).
-    services:
-      adguardhome:
-        image: adguard/adguardhome:latest
-        ports: ["3000:3000"]
-        options: >-
-          --health-cmd "curl -sf http://localhost:3000"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 20
+    # Starts AdGuard Home via docker run (not a service container) so the step
+    # can be skipped gracefully when the transport tests don't exist yet.
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check prerequisites
+        id: check
+        run: |
+          if [ -f server/pyproject.toml ] && [ -d server/tests/transport/adguard ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "AdGuard transport tests not yet present — skipping job"
+          fi
+
       - uses: actions/setup-python@v5
+        if: steps.check.outputs.run == 'true'
         with:
           python-version: "3.11"
 
       - name: Install package + dev dependencies
+        if: steps.check.outputs.run == 'true'
+        run: pip install -e "server/[dev]"
+
+      - name: Start AdGuard Home
+        if: steps.check.outputs.run == 'true'
         run: |
-          if [ -f server/pyproject.toml ]; then
-            pip install -e "server/[dev]"
-          else
-            echo "server/pyproject.toml not yet present — skipping"
-            exit 0
-          fi
+          docker run -d --name adguardhome \
+            -p 3000:3000 \
+            adguard/adguardhome:latest
+          for i in $(seq 1 20); do
+            curl -sf http://localhost:3000 && break
+            sleep 3
+          done
 
       - name: Integration tests — AdGuard Home transport
-        run: |
-          if [ -d server/tests/transport/adguard ]; then
-            pytest server/tests/transport/adguard/ -m integration -v
-          else
-            echo "AdGuard transport tests not yet present — skipping"
-          fi
+        if: steps.check.outputs.run == 'true'
+        run: pytest server/tests/transport/adguard/ -m integration -v
         env:
           ADGUARD_URL: http://localhost:3000
           ADGUARD_USER: admin
@@ -97,48 +107,45 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check prerequisites
+        id: check
+        run: |
+          if [ -f server/pyproject.toml ] && [ -d server/tests/transport/ssh ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "SSH transport tests not yet present — skipping job"
+          fi
+
       - uses: actions/setup-python@v5
+        if: steps.check.outputs.run == 'true'
         with:
           python-version: "3.11"
 
       - name: Install package + dev dependencies
-        run: |
-          if [ -f server/pyproject.toml ]; then
-            pip install -e "server/[dev]"
-          else
-            echo "server/pyproject.toml not yet present — skipping"
-            exit 0
-          fi
+        if: steps.check.outputs.run == 'true'
+        run: pip install -e "server/[dev]"
 
       - name: Make stub timekpra executable
-        run: |
-          if [ -f server/tests/stubs/timekpra ]; then
-            chmod +x server/tests/stubs/timekpra
-          else
-            echo "server/tests/stubs/timekpra not yet present — skipping SSH tests"
-            exit 0
-          fi
+        if: steps.check.outputs.run == 'true'
+        run: chmod +x server/tests/stubs/timekpra
 
       - name: Start SSH target container with stub timekpra
+        if: steps.check.outputs.run == 'true'
         run: |
           docker run -d --name ssh-target \
             -p 2222:22 \
             -v "${{ github.workspace }}/server/tests/stubs:/usr/local/bin:ro" \
             -e PUID=1000 -e PGID=1000 \
             lscr.io/linuxserver/openssh-server:latest
-          # Wait up to 30 s for sshd to be ready
           for i in $(seq 1 15); do
             nc -z localhost 2222 && break
             sleep 2
           done
 
       - name: Integration tests — SSH transport
-        run: |
-          if [ -d server/tests/transport/ssh ]; then
-            pytest server/tests/transport/ssh/ -m integration -v
-          else
-            echo "SSH transport tests not yet present — skipping"
-          fi
+        if: steps.check.outputs.run == 'true'
+        run: pytest server/tests/transport/ssh/ -m integration -v
         env:
           SSH_TARGET_HOST: localhost
           SSH_TARGET_PORT: 2222
