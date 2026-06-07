@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "dashboard"
 version = "0.0.0"
 description = "Parental-controls dashboard: FastAPI orchestrator for Timekpr-nExT, ActivityWatch, e2guardian, and AdGuard Home."
-readme = "../README.md"
+readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "TBD" }
 authors = [{ name = "Ben Seymour" }]
@@ -39,7 +39,7 @@ dependencies = [
     # Phase 4+ — scheduling, auth, transport
     "apscheduler",
     "asyncssh",
-    "python-jose[cryptography]",
+    "pyjwt[crypto]",
     "passlib[bcrypt]",
 ]
 
@@ -48,7 +48,6 @@ dev = [
     "pytest",
     "pytest-asyncio",
     "pytest-cov",
-    "httpx",
     "black",
     "ruff",
     "mypy",
