@@ -1,0 +1,209 @@
+name: Integration tests
+
+on:
+  pull_request:
+    branches: [main]
+  schedule:
+    # 02:00 UTC nightly
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+jobs:
+  activitywatch:
+    name: ActivityWatch REST client
+    runs-on: ubuntu-22.04
+    # Starts a real aw-server via docker run (not a service container) so the
+    # step can be skipped gracefully when the transport tests don't exist yet.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check prerequisites
+        id: check
+        run: |
+          if [ -f server/pyproject.toml ] && [ -d server/tests/transport/activitywatch ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "ActivityWatch transport tests not yet present — skipping job"
+          fi
+
+      - uses: actions/setup-python@v5
+        if: steps.check.outputs.run == 'true'
+        with:
+          python-version: "3.11"
+
+      - name: Install package + dev dependencies
+        if: steps.check.outputs.run == 'true'
+        run: pip install -e "server/[dev]"
+
+      - name: Start ActivityWatch server
+        if: steps.check.outputs.run == 'true'
+        run: |
+          docker run -d --name activitywatch \
+            -p 5600:5600 \
+            activitywatch/activitywatch:latest
+          for i in $(seq 1 20); do
+            curl -sf http://localhost:5600/api/0/info && break
+            sleep 3
+          done
+
+      - name: Integration tests — ActivityWatch transport
+        if: steps.check.outputs.run == 'true'
+        run: pytest server/tests/transport/activitywatch/ -m integration -v
+        env:
+          AW_SERVER_URL: http://localhost:5600
+
+  adguard:
+    name: AdGuard Home REST client
+    runs-on: ubuntu-22.04
+    # Starts AdGuard Home via docker run (not a service container) so the step
+    # can be skipped gracefully when the transport tests don't exist yet.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check prerequisites
+        id: check
+        run: |
+          if [ -f server/pyproject.toml ] && [ -d server/tests/transport/adguard ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "AdGuard transport tests not yet present — skipping job"
+          fi
+
+      - uses: actions/setup-python@v5
+        if: steps.check.outputs.run == 'true'
+        with:
+          python-version: "3.11"
+
+      - name: Install package + dev dependencies
+        if: steps.check.outputs.run == 'true'
+        run: pip install -e "server/[dev]"
+
+      - name: Start AdGuard Home
+        if: steps.check.outputs.run == 'true'
+        run: |
+          docker run -d --name adguardhome \
+            -p 3000:3000 \
+            adguard/adguardhome:latest
+          for i in $(seq 1 20); do
+            curl -sf http://localhost:3000 && break
+            sleep 3
+          done
+
+      - name: Integration tests — AdGuard Home transport
+        if: steps.check.outputs.run == 'true'
+        run: pytest server/tests/transport/adguard/ -m integration -v
+        env:
+          ADGUARD_URL: http://localhost:3000
+          ADGUARD_USER: admin
+          ADGUARD_PASSWORD: password
+
+  ssh-transport:
+    name: SSH + timekpra stub
+    runs-on: ubuntu-22.04
+    # Uses an OpenSSH container with a stub timekpra binary that records
+    # its invocations. Validates the full SSH round-trip without Timekpr-nExT.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check prerequisites
+        id: check
+        run: |
+          if [ -f server/pyproject.toml ] && [ -d server/tests/transport/ssh ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "SSH transport tests not yet present — skipping job"
+          fi
+
+      - uses: actions/setup-python@v5
+        if: steps.check.outputs.run == 'true'
+        with:
+          python-version: "3.11"
+
+      - name: Install package + dev dependencies
+        if: steps.check.outputs.run == 'true'
+        run: pip install -e "server/[dev]"
+
+      - name: Make stub timekpra executable
+        if: steps.check.outputs.run == 'true'
+        run: chmod +x server/tests/stubs/timekpra
+
+      - name: Start SSH target container with stub timekpra
+        if: steps.check.outputs.run == 'true'
+        run: |
+          docker run -d --name ssh-target \
+            -p 2222:22 \
+            -v "${{ github.workspace }}/server/tests/stubs:/usr/local/bin:ro" \
+            -e PUID=1000 -e PGID=1000 \
+            lscr.io/linuxserver/openssh-server:latest
+          for i in $(seq 1 15); do
+            nc -z localhost 2222 && break
+            sleep 2
+          done
+
+      - name: Integration tests — SSH transport
+        if: steps.check.outputs.run == 'true'
+        run: pytest server/tests/transport/ssh/ -m integration -v
+        env:
+          SSH_TARGET_HOST: localhost
+          SSH_TARGET_PORT: 2222
+
+  migrations:
+    name: Alembic migration round-trip
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package + dev dependencies
+        run: |
+          if [ -f server/pyproject.toml ]; then
+            pip install -e "server/[dev]"
+          else
+            echo "server/pyproject.toml not yet present — skipping"
+            exit 0
+          fi
+
+      - name: Upgrade to head
+        run: |
+          if [ -f server/alembic.ini ]; then
+            cd server && alembic upgrade head
+          else
+            echo "alembic.ini not yet present — skipping"
+          fi
+        env:
+          DATABASE_URL: sqlite:///./ci_migration_test.sqlite
+
+      - name: Downgrade to base
+        run: |
+          if [ -f server/alembic.ini ]; then
+            cd server && alembic downgrade base
+          else
+            echo "alembic.ini not yet present — skipping"
+          fi
+        env:
+          DATABASE_URL: sqlite:///./ci_migration_test.sqlite
+
+  client-install-dryrun:
+    name: Client install script dry-run (Ubuntu 22.04)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dry-run install script in Ubuntu container
+        run: |
+          if [ -f client/install-client.sh ]; then
+            docker run --rm \
+              -v "${{ github.workspace }}/client:/scripts:ro" \
+              ubuntu:22.04 bash -c "
+                apt-get update -q && apt-get install -y -q curl sudo bash
+                PCT_SERVER_URL=http://mock.local PCT_DRY_RUN=1 bash /scripts/install-client.sh
+              "
+          else
+            echo "client/install-client.sh not yet present — skipping"
+          fi

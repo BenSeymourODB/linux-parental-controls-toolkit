@@ -1,0 +1,51 @@
+repos:
+  # Python formatting
+  - repo: https://github.com/psf/black
+    rev: 24.10.0
+    hooks:
+      - id: black
+        language_version: python3.11
+        files: ^server/
+
+  # Python linting (with auto-fix on commit)
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.0
+    hooks:
+      - id: ruff
+        args: [--fix]
+        files: ^server/
+
+  # Static type checking
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.13.0
+    hooks:
+      - id: mypy
+        args: [--strict]
+        files: ^server/src/
+        # Add type stubs here as dependencies land (e.g. types-aiofiles).
+        additional_dependencies: []
+
+  # Shell script linting
+  - repo: https://github.com/koalaman/shellcheck-precommit
+    rev: v0.10.0
+    hooks:
+      - id: shellcheck
+        files: ^client/.*\.sh$
+
+  # ansible-lint is intentionally kept in ci.yml only (not here), because
+  # the pre-commit hook has environment sensitivity with ansible-core versions
+  # and we need no playbooks yet. Add it back here once client/ansible/ lands.
+
+  # Standard file hygiene
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        # Allow the two-space hard line breaks that Markdown uses.
+        args: [--markdown-linebreak-ext=md]
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=500]
