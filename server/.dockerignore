@@ -1,0 +1,40 @@
+# Version control
+.git/
+.gitignore
+.gitattributes
+
+# Python build / cache
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtualenvs
+.venv/
+venv/
+env/
+
+# Tests (built image runs them in CI, not at runtime)
+tests/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Local runtime / secrets
+.env
+*.sqlite
+*.sqlite-journal
+/data/
+
+# Docker meta
+Dockerfile
+.dockerignore
