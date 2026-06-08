@@ -171,8 +171,15 @@ server. See [`docs/client-install.md`](docs/client-install.md).
 
 ## License
 
-The dashboard and tooling in this repository are intended to be released
-under a permissive license (final choice TBD — see Option B / Option C in
-[`docs/licensing-analysis.md`](docs/licensing-analysis.md)). All GPL-licensed
-upstream tools are used across process boundaries and are not redistributed
-as part of this repository.
+The dashboard and tooling in this repository are released under a
+**proprietary source-available license** — see [`LICENSE`](LICENSE).
+Source code is publicly available for inspection and personal non-commercial
+use. Commercial use requires a separate written agreement with the copyright
+holder. The copyright holder retains the right to re-license under different
+terms (including an open-source license) at any time.
+
+All GPL-licensed upstream tools (Timekpr-nExT, e2guardian, AdGuard Home,
+Ansible) are used across process and network boundaries and are not
+redistributed as part of this repository. See
+[`docs/licensing-analysis.md`](docs/licensing-analysis.md) for the full
+analysis.

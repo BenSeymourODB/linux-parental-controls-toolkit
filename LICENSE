@@ -1,0 +1,37 @@
+Copyright (c) 2026 Ben Seymour. All rights reserved.
+
+Source-Available Proprietary License
+
+The source code in this repository is made publicly available for inspection
+and personal non-commercial use only.
+
+You may:
+- Read, study, and evaluate the source code.
+- Run the software for personal, non-commercial use in your own household.
+- Fork the repository to propose changes via pull request.
+
+You may not, without a separate written commercial license from the copyright
+holder:
+- Use the software, or any substantial portion of it, for commercial purposes.
+- Redistribute, sublicense, or publish copies of the source code or compiled
+  binaries, with or without modification.
+- Incorporate the source code into another product or project that is
+  distributed to third parties.
+
+The copyright holder reserves the right to re-license this software at any
+time, including under an open-source or commercial license, without obligation
+to any party.
+
+GPL-LICENSED UPSTREAM COMPONENTS: This repository does not redistribute
+Timekpr-nExT, e2guardian, AdGuard Home, or Ansible. Those components are
+installed separately by end-users and governed solely by their own licenses
+(GPL-3.0 or GPL-2.0 as applicable). See docs/licensing-analysis.md for the
+full analysis of how this project interacts with GPL-licensed components.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF,
+OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

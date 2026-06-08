@@ -8,7 +8,7 @@ version = "0.0.0"
 description = "Parental-controls dashboard: FastAPI orchestrator for Timekpr-nExT, ActivityWatch, e2guardian, and AdGuard Home."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "TBD" }
+license = { text = "Proprietary" }
 authors = [{ name = "Ben Seymour" }]
 classifiers = [
     "Programming Language :: Python :: 3",
