@@ -25,10 +25,9 @@ Goal: a runnable, empty-but-correct dashboard skeleton and a CI baseline.
 
 - Create `server/` Python package layout (`pyproject.toml`, `src/dashboard`,
   `tests/`, `Dockerfile`, `.dockerignore`).
-- Pick and pin the dashboard's open-source license file (`LICENSE`) — the
-  decision in [`licensing-analysis.md`](licensing-analysis.md) is between
-  Option B (MIT/Apache-2.0) and Option C (proprietary). Default
-  assumption pending decision: **Apache-2.0**.
+- [x] Pin the dashboard license — **proprietary source-available** (Option C,
+  decided in issue #4). `LICENSE` is at the repo root;
+  [`licensing-analysis.md`](licensing-analysis.md) has the decision rationale.
 - Add `pre-commit` config: `black`, `ruff`, `mypy --strict`.
 - Add a minimal FastAPI app that serves a "hello, no policy yet" page.
 - Add a GitHub Actions workflow that lints, type-checks, runs tests, and

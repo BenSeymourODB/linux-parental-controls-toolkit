@@ -21,7 +21,7 @@
 | FleetDM | **MIT** (core); proprietary (`/ee/` directory) | None | Core is permissive; premium features require commercial license |
 | SaltStack | **Apache-2.0** | None | Permissive |
 | osquery (used by FleetDM) | **Apache-2.0** | None | Permissive |
-| Custom dashboard | **Your choice** | — | Entirely new code; no license constraints from the above apply unless the dashboard links GPL code at the binary level |
+| Custom dashboard | **Proprietary source-available** | — | Entirely new code; no license constraints from the above apply unless the dashboard links GPL code at the binary level. See decision note below. |
 
 ---
 
@@ -127,6 +127,26 @@ The one firm constraint that applies regardless of chosen license: **any distrib
 
 ---
 
+## Decision (closes #4)
+
+**Chosen: Option C — proprietary source-available.**
+
+The dashboard is released under a custom proprietary source-available license
+(see `LICENSE` at the repo root). Key properties of this choice:
+
+- Source code is publicly visible for inspection and personal non-commercial use.
+- Commercial use requires a separate written agreement with the copyright holder.
+- Since all dashboard code is original work by a single copyright holder with no
+  external contributors, the owner retains full re-licensing rights. This means
+  moving to a permissive open-source license (e.g. Apache-2.0 or MIT) or to a
+  structured commercial model is equally available in the future — no options
+  are foreclosed by starting here.
+
+The GPL-boundary rules in the rest of this document are unchanged; they apply
+regardless of what license the dashboard carries.
+
+---
+
 ## Quick-reference: per-component obligations when distributing
 
 | Component | If you distribute it unchanged | If you modify it and distribute it |
@@ -138,4 +158,4 @@ The one firm constraint that applies regardless of chosen license: **any distrib
 | Ansible (GPL-3.0) | Must provide or point to source | Must release modified source under GPL-3.0 |
 | SaltStack (Apache-2.0) | Must include license and notice | May keep changes proprietary; must include notice |
 | FleetDM core (MIT) | Must include copyright notice | May keep changes proprietary |
-| Custom dashboard (your choice) | Per your chosen license | Per your chosen license |
+| Custom dashboard (proprietary source-available) | See `LICENSE`; personal non-commercial use only | See `LICENSE`; commercial use requires a separate written agreement |
