@@ -22,3 +22,6 @@ build/
 
 # Coverage
 .coverage
+
+# Agent worktrees (created by .claude/commands/implement-issue.md)
+.claude/worktrees/
