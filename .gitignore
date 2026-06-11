@@ -1,14 +1,13 @@
-# Python
-__pycache__/
-*.py[cod]
-*.egg-info/
-.venv/
-venv/
+# Node
+node_modules/
+*.tsbuildinfo
+.eslintcache
 .env
 
 # Build artefacts
 dist/
 build/
+.svelte-kit/
 
 # Editor / OS
 .vscode/
@@ -21,7 +20,12 @@ build/
 *.sqlite-journal
 
 # Coverage
-.coverage
+coverage/
+
+# Python (only the first-run Ansible venv tooling ever touches Python locally)
+__pycache__/
+.venv/
+venv/
 
 # Agent worktrees (created by .claude/commands/implement-issue.md)
 .claude/worktrees/

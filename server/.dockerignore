@@ -3,23 +3,12 @@
 .gitignore
 .gitattributes
 
-# Python build / cache
-__pycache__/
-*.py[cod]
-*.egg-info/
-.eggs/
-build/
+# Node build / cache (the image's builder stage runs its own npm ci)
+node_modules/
 dist/
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.coverage
-htmlcov/
-
-# Virtualenvs
-.venv/
-venv/
-env/
+coverage/
+.eslintcache
+*.tsbuildinfo
 
 # Tests (built image runs them in CI, not at runtime)
 tests/

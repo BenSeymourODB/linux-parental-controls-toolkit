@@ -23,13 +23,18 @@ shared understanding.
 
 Goal: a runnable, empty-but-correct dashboard skeleton and a CI baseline.
 
-- Create `server/` Python package layout (`pyproject.toml`, `src/dashboard`,
-  `tests/`, `Dockerfile`, `.dockerignore`).
+- [x] Pin the dashboard implementation language — **TypeScript end-to-end**
+  (Node.js 22 + Fastify backend, SvelteKit frontend). Decision rationale and
+  the Python→TypeScript mapping table live in
+  [`proposed-tech-stack.md`](proposed-tech-stack.md)
+  ("Stack decision — TypeScript end-to-end").
+- Create `server/` package layout (`package.json`, `tsconfig.json`,
+  `src/`, `tests/`, `Dockerfile`, `.dockerignore`).
 - [x] Pin the dashboard license — **proprietary source-available** (Option C,
   decided in issue #4). `LICENSE` is at the repo root;
   [`licensing-analysis.md`](licensing-analysis.md) has the decision rationale.
-- Add `pre-commit` config: `black`, `ruff`, `mypy --strict`.
-- Add a minimal FastAPI app that serves a "hello, no policy yet" page.
+- Add `pre-commit` config: Prettier, ESLint, `tsc --noEmit`.
+- Add a minimal Fastify app that serves a "hello, no policy yet" page.
 - Add a GitHub Actions workflow that lints, type-checks, runs tests, and
   builds the Docker image.
 - Add a basic `docker-compose.yml` example for local development.
@@ -44,13 +49,14 @@ and, later, the PWA and external integrators).
 - Implement the SQLite schema for `User`, `Client`, `UserOnClient`,
   `Activity`, `ActivityGroup`, `Budget`, `Schedule`, `Exception`,
   `Grant`, `IntegrationToken`.
-- Alembic migrations.
+- drizzle-kit migrations.
 - Single-admin local password auth (Argon2) for the admin UI.
 - **`/api/*` JSON endpoints** for the full policy model (the admin UI
-  calls these; the PWA and integrators will too).
-- HTMX-driven admin UI on `/admin/*`: users, clients, activities,
-  budgets, schedules. Renders Jinja templates that call the same
-  service layer the JSON API uses (no privileged in-process shortcuts).
+  calls these; the PWA and integrators will too). Request/response
+  shapes are zod schemas shared with the frontend.
+- SvelteKit admin UI on `/admin/*`: users, clients, activities,
+  budgets, schedules. Talks only to `/api/*` — the same contract the
+  PWA and integrators use (no privileged in-process shortcuts).
 - No transport integration yet; all "push" actions are stubbed to log.
 
 ## Phase 3 — Client install script (Linux Mint)
@@ -67,7 +73,7 @@ Goal: enrolling a fresh Mint client is one command.
 
 Goal: dashboard pushes overall session limits to clients.
 
-- AsyncSSH-based transport facade.
+- ssh2-based transport facade.
 - `timekpra` invocations for: set daily/weekly/monthly limits, set
   allowed hours, set PlayTime configuration.
 - Offline-queue: changes for offline clients persisted and replayed on
@@ -78,7 +84,7 @@ Goal: dashboard pushes overall session limits to clients.
 
 Goal: dashboard shows actual usage per user per activity.
 
-- APScheduler job that opens SSH port-forwards and pulls AW events.
+- Scheduled job (croner) that opens SSH port-forwards and pulls AW events.
 - Normalisation into `UsageSample` rows; aggregation views.
 - Per-user "burndown" chart for overall and per-activity budgets.
 
@@ -144,17 +150,18 @@ toast/sound notifications for server events, escalating
 time-remaining warnings, grace period, force-close on per-app
 expiry, lock + grant-unlock on overall-screen-time expiry.
 
-- `dashboard.events` module exposing `GET /api/events/stream`
+- The server's `events` module exposing `GET /api/events/stream`
   (WebSocket), with per-client bearer-token auth and reconnect
   semantics.
-- `pct-client-bridge` system-level service (Python) on the client:
+- `pct-client-bridge` system-level service (TypeScript) on the client:
   WebSocket client, reconnects with backoff, dispatches events to
   per-user agents over `AF_UNIX` sockets, and holds a narrow
   `sudoers` rule for the few privileged actions it needs (notably
   `timekpra --kill-session` and clearing/setting lockouts).
-- `pct-client-agent` per-user service (Python, `systemd --user`):
-  libnotify + libcanberra rendering, locally computed warning
-  cadence (15/5/1 minute rules), grace-period countdown,
+- `pct-client-agent` per-user service (TypeScript, `systemd --user`):
+  notification + sound rendering via the desktop's own tools
+  (`notify-send` / `gdbus`, `canberra-gtk-play`), locally computed
+  warning cadence (15/5/1 minute rules), grace-period countdown,
   per-app force-close.
 - `NotificationPolicy` persisted in the policy store and pushed to
   the client with the rest of policy.
@@ -181,8 +188,8 @@ without manual intervention.
 Goal: parents and supervised users have a mobile-first, home-screen-
 installable view of the system.
 
-- SvelteKit project under `web/app/` that produces a static build
-  (`adapter-static`) consumed by FastAPI's `StaticFiles` mount at `/app`.
+- `/app` route group of the SvelteKit project (`server/frontend/`),
+  built statically (`adapter-static`) and served by Fastify at `/app`.
 - PWA basics: manifest, service worker, offline-friendly app shell.
 - Per-user status screen: how much time is left today, what's been used,
   upcoming schedule transitions.
@@ -192,7 +199,8 @@ installable view of the system.
   additional lightweight per-user PIN/passcode model for child users
   who should only see their own data.
 - Web Push for "5 minutes left" / "time's up" notifications.
-- CI gains a Node build step (no Node runtime in the image).
+- Built in the image's builder stage alongside the backend; the runtime
+  image serves the static output.
 
 ## Phase 10 — External integrations: family-calendar rewards
 

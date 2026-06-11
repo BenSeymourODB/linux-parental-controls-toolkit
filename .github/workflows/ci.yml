@@ -7,40 +7,47 @@ on:
 
 jobs:
   lint:
-    name: Lint (Python)
+    name: Lint (TypeScript)
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-node@v4
         with:
-          python-version: "3.11"
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: server/package-lock.json
 
-      - name: Install lint tools
-        run: pip install black ruff mypy
-
-      - name: black
+      - name: Install dependencies
         run: |
-          if [ -d server/src ]; then
-            black --check server/src/ server/tests/
+          if [ -f server/package.json ]; then
+            cd server && npm ci
           else
-            echo "server/src not yet present — skipping black"
+            echo "server/package.json not yet present — skipping install"
           fi
 
-      - name: ruff
+      - name: prettier
         run: |
-          if [ -d server/src ]; then
-            ruff check server/src/ server/tests/
+          if [ -f server/package.json ]; then
+            cd server && npm run format:check
           else
-            echo "server/src not yet present — skipping ruff"
+            echo "server not yet scaffolded — skipping prettier"
           fi
 
-      - name: mypy
+      - name: eslint
         run: |
-          if [ -d server/src ]; then
-            mypy --strict server/src/
+          if [ -f server/package.json ]; then
+            cd server && npm run lint
           else
-            echo "server/src not yet present — skipping mypy"
+            echo "server not yet scaffolded — skipping eslint"
+          fi
+
+      - name: tsc --noEmit
+        run: |
+          if [ -f server/package.json ]; then
+            cd server && npm run typecheck
+          else
+            echo "server not yet scaffolded — skipping typecheck"
           fi
 
   test:
@@ -49,56 +56,44 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-node@v4
         with:
-          python-version: "3.11"
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: server/package-lock.json
 
-      - name: Install package + dev dependencies
+      - name: Install dependencies
         run: |
-          if [ -f server/pyproject.toml ]; then
-            pip install -e "server/[dev]"
+          if [ -f server/package.json ]; then
+            cd server && npm ci
           else
-            echo "server/pyproject.toml not yet present — skipping install"
+            echo "server/package.json not yet present — skipping install"
           fi
 
-      - name: pytest
+      - name: vitest (unit, with coverage gate)
         run: |
-          if [ -d server/tests ] && [ -f server/pyproject.toml ]; then
-            pytest server/tests/ \
-              -m "not integration" \
-              --strict-markers \
-              -q \
-              --cov=dashboard \
-              --cov-report=term-missing \
-              --cov-fail-under=80
+          if [ -f server/package.json ]; then
+            cd server && npm test
           else
-            echo "server/tests or server/pyproject.toml not yet present — skipping pytest"
+            echo "server not yet scaffolded — skipping unit tests"
           fi
 
-  svelte-build:
-    name: SvelteKit / Svelte islands build
+  frontend-build:
+    name: SvelteKit build
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
 
-      - name: Build admin Svelte islands
+      - name: Build SvelteKit frontend (/admin + /app)
         run: |
-          if [ -f server/frontend/admin/package.json ]; then
-            cd server/frontend/admin && npm ci && npm run build
+          if [ -f server/frontend/package.json ]; then
+            cd server/frontend && npm ci && npm run build
           else
-            echo "Admin frontend not yet scaffolded — skipping"
-          fi
-
-      - name: Build SvelteKit PWA
-        run: |
-          if [ -f server/frontend/app/package.json ]; then
-            cd server/frontend/app && npm ci && npm run build
-          else
-            echo "App (PWA) frontend not yet scaffolded — skipping"
+            echo "Frontend not yet scaffolded — skipping"
           fi
 
   shellcheck:
@@ -166,5 +161,19 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      # The TS hooks (prettier/eslint/tsc) run via npm scripts and need
+      # the server dependencies installed.
+      - name: Install server dependencies
+        run: |
+          if [ -f server/package.json ]; then
+            cd server && npm ci
+          fi
 
       - uses: pre-commit/action@v3.0.1

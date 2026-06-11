@@ -18,17 +18,17 @@ the dashboard at full width).
 flowchart TB
     subgraph Consumers["Consumers"]
         direction LR
-        Admin["<b>Admin (desktop)</b><br/><code>/admin</code><br/>Jinja + HTMX + Svelte islands"]
+        Admin["<b>Admin (desktop)</b><br/><code>/admin</code><br/>SvelteKit admin routes"]
         PWA["<b>Parent / child (phone)</b><br/><code>/app</code><br/>SvelteKit PWA, home-screen"]
         Ext["<b>External integrator</b><br/>e.g. next-digital-wall-calendar"]
     end
 
     subgraph Server["Server — Docker container"]
         direction TB
-        subgraph FastAPI["FastAPI (Python 3.11+)"]
+        subgraph Fastify["Fastify (TypeScript · Node.js 22)"]
             direction TB
-            RAdmin["<code>/admin</code> · HTMX views"]
-            RApp["<code>/app</code> · static SvelteKit"]
+            RAdmin["<code>/admin</code> · static SvelteKit"]
+            RApp["<code>/app</code> · static SvelteKit (PWA)"]
             RApi["<code>/api</code> · JSON"]
             RInt["<code>/integrations</code> · token-auth webhooks"]
         end
@@ -84,20 +84,23 @@ binaries (see [`licensing-analysis.md`](licensing-analysis.md)).
 Every line that crosses the dashed boundary between dashboard code and an
 external tool is one of:
 
-- **subprocess** — `subprocess.run` / `asyncio.create_subprocess_exec`
-  (used for `timekpra`, `ansible-playbook`).
+- **subprocess** — `node:child_process` (`execFile` / `spawn`), used
+  for `timekpra` (locally or via `ssh2` exec) and `ansible-playbook`.
 - **local REST** — HTTP client against an API the tool exposes
   (ActivityWatch, AdGuard Home).
 - **config file + signal** — writing to a config path and sending the
   daemon a reload (e2guardian; managed via Ansible task).
 
-The dashboard's Python source must not `import` any GPL-licensed package.
-This is enforced by convention; CI may add an import-allowlist check.
+The dashboard's source must never link GPL code in-process. The GPL
+tools we orchestrate (Timekpr-nExT, Ansible) are Python, so a Node
+process cannot import them anyway — keep it that way: no bindings,
+embedded interpreters, or vendored GPL source. This is enforced by
+convention; CI may add a dependency-allowlist check.
 
 ## Policy model
 
 The policy store is the single source of truth on the server. Sketched
-entities (final schema lives in `server/src/dashboard/policy/models.py`
+entities (final schema lives in `server/src/policy/schema.ts`
 once implementation begins):
 
 ```
@@ -163,7 +166,7 @@ Key derived views the dashboard renders:
 
 ### Inbound (client → server) — telemetry pull
 
-1. Periodic job on the server (APScheduler inside the FastAPI app)
+1. Periodic job on the server (croner inside the dashboard process)
    opens an SSH tunnel to each enrolled client, forwarding a local port
    to the client's `aw-server` on `localhost:5600`.
 2. Dashboard calls `aw-server`'s REST API to pull events for the polling

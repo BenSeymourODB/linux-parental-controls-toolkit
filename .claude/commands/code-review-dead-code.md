@@ -6,51 +6,50 @@ longer serving a purpose and is adding maintenance burden.
 
 ## Scope
 
-Scan `server/src/dashboard/`, `server/tests/`, and
-`server/pyproject.toml`. (The Svelte frontends under `server/frontend/` are
-in scope only if they contain real code beyond the hello-world scaffold.)
+Scan `server/src/`, `server/tests/`, and
+`server/package.json`. (The SvelteKit frontend under `server/frontend/` is
+in scope only if it contains real code beyond the hello-world scaffold.)
 
 ## What to look for
 
-### 1. Unused public functions / classes in `dashboard.*`
+### 1. Unused exported functions / classes in `src/`
 
-For each public name (no leading underscore) exported from a
-`dashboard.*` module, verify it is imported or used somewhere. Pay special
-attention to the service/policy layer and the transport facades, where
-helper functions accumulate. Use Grep to confirm each name's usages across
-`server/`.
+For each name exported from a module under `server/src/`, verify it is
+imported or used somewhere. Pay special attention to the service/policy
+layer and the transport facades, where helper functions accumulate. Use
+Grep to confirm each name's usages across `server/`.
 
-### 2. Unused dependencies in `pyproject.toml`
+### 2. Unused dependencies in `package.json`
 
 The runtime dependency list is intentionally seeded ahead of the code that
 uses it (each entry is grouped by the phase that will need it). Distinguish:
 
 - **Genuinely dead**: a dependency that is neither imported now nor
   earmarked for a near-term phase. Flag it.
-- **Forward-declared**: an unpinned stub for an upcoming phase (the
-  `pyproject.toml` comments say as much). Do NOT flag these as dead — note
+- **Forward-declared**: a stub for an upcoming phase (cross-check the
+  phase notes in `docs/roadmap.md`). Do NOT flag these as dead — note
   them as "forward-declared, not yet used" at most, Low severity.
 
-Read `pyproject.toml`, then Grep each dependency's import name across
+Read `package.json`, then Grep each dependency's import name across
 `server/src/`.
 
 ### 3. Vestigial / superseded code
 
 Code left behind after a refactor or a superseded design decision — e.g. an
-old config-loading path after the `pydantic-settings` loader lands, or a
+old config-loading path after the zod-validated settings loader lands, or a
 placeholder kept past the phase that replaced it. Cross-check against
 `docs/roadmap.md` to tell "not built yet" from "built then abandoned".
 
 ### 4. Commented-out code blocks
 
 Blocks of commented-out code (3+ consecutive commented lines that look like
-code, not prose/docstrings). These should be restored or removed.
+code, not prose/JSDoc). These should be restored or removed.
 
-### 5. Empty / placeholder packages past their phase
+### 5. Empty / placeholder modules past their phase
 
-The package tree was scaffolded with empty `__init__.py` modules. An empty
-package is fine while its phase is pending; flag one only if its phase has
-landed and it should now contain code but doesn't (Low severity, as a
+The module tree was scaffolded with empty `index.ts` barrel modules. An
+empty barrel is fine while its phase is pending; flag one only if its phase
+has landed and it should now contain code but doesn't (Low severity, as a
 reminder).
 
 ### 6. Orphaned tests
@@ -73,21 +72,21 @@ EFFORT: {S|M|L}
 
 - **Critical**: a genuinely dead runtime dependency that adds attack
   surface or image weight.
-- **High**: an unused public module/function with real logic, or a large
+- **High**: an unused exported module/function with real logic, or a large
   block (>50 lines) of vestigial code.
-- **Medium**: an unused public export from an otherwise-used module.
+- **Medium**: an unused export from an otherwise-used module.
 - **Low**: small commented-out blocks, forward-declared deps, empty
-  post-phase packages, minor unused internals.
+  post-phase barrels, minor unused internals.
 
 ## Instructions
 
 1. Use Glob to inventory all source and test files.
-2. For public exports: Read each `dashboard.*` module, then Grep each
+2. For exports: Read each module under `server/src/`, then Grep each
    exported name across `server/`.
-3. For dependencies: Read `pyproject.toml`, then Grep each dependency name
-   in `server/src/`; classify dead vs forward-declared using the file's own
-   comments and `docs/roadmap.md`.
-4. For commented code: Grep for `^\s*#` runs that contain code-like syntax
+3. For dependencies: Read `package.json`, then Grep each dependency name
+   in `server/src/`; classify dead vs forward-declared using the phase
+   notes in `docs/roadmap.md`.
+4. For commented code: Grep for `^\s*//` runs that contain code-like syntax
    across multiple lines.
 5. Return ALL findings in the structured format.
 6. Be careful to distinguish "scaffolded ahead of its phase" (expected)

@@ -13,8 +13,9 @@ writing code.
 A server/client toolkit that lets an admin set time and content limits on
 specific Linux user accounts:
 
-- **Server**: a custom web dashboard (Python, FastAPI, SQLite) packaged as
-  a Docker container. Orchestrates clients over SSH and via Ansible.
+- **Server**: a custom web dashboard (TypeScript, Node.js, Fastify, SQLite)
+  packaged as a Docker container. Orchestrates clients over SSH and via
+  Ansible.
 - **Client**: a supervised Linux desktop. Initial target is **Linux Mint
   with Cinnamon** (Ubuntu/Debian-family). Enforcement uses existing
   open-source tools — we do not reimplement screen-time or web-filtering
@@ -23,31 +24,50 @@ specific Linux user accounts:
 The dashboard is the only fully custom component. Everything else is an
 existing tool we configure and orchestrate.
 
+> **Stack migration note (2026-06):** the project was originally designed
+> around Python/FastAPI. It moved to TypeScript end-to-end before any
+> feature code landed, so the maintainer can work in the language they
+> know across backend and frontend. The architecture, license boundaries,
+> module split, and roadmap are unchanged; only the implementation
+> technology moved. If you find a stray Python-era reference in docs or
+> issues, map it through the table in `docs/proposed-tech-stack.md`
+> ("Stack decision — TypeScript end-to-end").
+
 ## Tech stack — what to use, what not to use
 
 ### Server side (this repo's primary code)
 
-- **Language:** Python 3.11+.
-- **Web framework:** FastAPI (with Uvicorn). Do not introduce Flask, Django,
-  or a separate frontend build pipeline unless the design doc is updated.
-- **Database:** SQLite for the policy store. Migrations via Alembic.
-- **Frontend:** Two surfaces, both served by the same FastAPI process:
-  - `/admin/*` — server-rendered Jinja2 + HTMX, plus small Svelte
-    "islands" where genuine interactivity helps (live burndown chart,
-    drag-to-reorder editors). Desktop admin experience.
-  - `/app/*` — a SvelteKit static build (PWA-capable) for the
-    mobile-first user/parent experience (per-child status, parents
-    adjusting limits from a phone). Talks only to `/api/*`.
+- **Language:** TypeScript (`strict: true`), Node.js 22 LTS. ESM modules.
+- **Web framework:** Fastify 5. Do not introduce Express, Nest, or a
+  second backend framework unless the design doc is updated.
+- **Validation / DTOs:** zod. API request/response schemas are zod
+  schemas in `server/src/api/`; both frontends and external integrators
+  consume the types inferred from them.
+- **Database:** SQLite for the policy store, via better-sqlite3 +
+  Drizzle ORM. Migrations via drizzle-kit (generated SQL committed under
+  `server/drizzle/`).
+- **Frontend:** Two surfaces, one SvelteKit project (`server/frontend/`,
+  Svelte 5, `adapter-static`), served by the same Fastify process:
+  - `/admin/*` — desktop admin experience (policy editors, live
+    burndown charts, drag-to-reorder editors).
+  - `/app/*` — the mobile-first PWA surface for the user/parent
+    experience (per-child status, parents adjusting limits from a
+    phone).
   - `/api/*` — JSON API; the single contract for both frontends **and
     for external integrations** (see "External integrations" below).
-  Both frontends are built at image-build time. **No runtime Node
-  process** — the image stays Python-only at runtime. CI gains a Node
-  build step.
-- **Process management:** `subprocess` / `asyncio` subprocess for invoking
-  external GPL tools (`timekpra`, `ansible-playbook`). No Python imports of
-  GPL projects (see "License boundaries" below).
-- **Packaging:** Single Docker image. Persistent state lives in a mounted
-  volume. The image must not contain GPL binaries; see
+  The frontend is built at image-build time into static assets that
+  Fastify serves. **One runtime: Node.js** — backend and frontend share
+  the language, the toolchain, and the API types.
+- **Process management:** `node:child_process` (`execFile` / `spawn`)
+  for invoking external GPL tools (`timekpra`, `ansible-playbook`). No
+  in-process linkage to GPL projects (see "License boundaries" below).
+- **SSH:** the `ssh2` library for remote `timekpra` invocation and
+  ActivityWatch port-forwarding.
+- **Scheduling:** croner for in-process periodic jobs (telemetry pull,
+  Ansible re-apply).
+- **Packaging:** Single Docker image (`node:22-slim` base, multi-stage
+  build). Persistent state lives in a mounted volume. The image must not
+  contain GPL binaries; see
   [`docs/server-deployment.md`](docs/server-deployment.md).
 
 ### Client side
@@ -57,12 +77,14 @@ existing tool we configure and orchestrate.
   `aw-watcher-afk`, plus the browser extension).
 - **Web filtering:** e2guardian with per-Linux-UID filter groups; iptables
   OUTPUT-chain redirect to its proxy port.
-- **Client agent:** small Python daemon installed by the client install
-  script — system-level `pct-client-bridge` (event channel from the
-  server) plus a per-supervised-user `pct-client-agent` (notifications,
-  sound, time-remaining cadence, per-app force-close). The agent does
-  not replace Timekpr-nExT's session enforcement; it adds notifications
-  and a graceful end-of-budget experience around it. See
+- **Client agent:** small TypeScript daemon installed by the client
+  install script — system-level `pct-client-bridge` (event channel from
+  the server) plus a per-supervised-user `pct-client-agent`
+  (notifications, sound, time-remaining cadence, per-app force-close).
+  Shipped as a `.deb` that bundles its own Node runtime so it does not
+  depend on the distro's Node packages. The agent does not replace
+  Timekpr-nExT's session enforcement; it adds notifications and a
+  graceful end-of-budget experience around it. See
   [`docs/client-notifications.md`](docs/client-notifications.md).
 - **DNS filtering (optional, server-side):** AdGuard Home in one of
   three modes — `disabled` (default), `managed` (dashboard fetches and
@@ -70,13 +92,18 @@ existing tool we configure and orchestrate.
   AdGuard Home instance the homelab already runs). All three integrate
   only via AdGuard's REST API. See
   [`docs/server-deployment.md`](docs/server-deployment.md).
-- **Configuration management:** Ansible (agentless, SSH).
+- **Configuration management:** Ansible (agentless, SSH). Invoked by the
+  dashboard as a subprocess from a Python venv bootstrapped into the
+  data volume at first run (the image ships a stock Python 3 interpreter
+  for this purpose only — no dashboard code is Python).
 
 ### Tools that were considered and rejected
 
 Do not reach for these without updating the design doc:
 LittleBrother, UCS / UCC, SaltStack, Puppet, Chef, Pi-hole, FleetDM,
-malcontent (Flatpak-only).
+malcontent (Flatpak-only). On the server stack: Flask/Django/FastAPI
+(superseded by the TypeScript migration), Express/Nest, Prisma (Drizzle
+chosen for its plain-SQL migrations and lighter runtime).
 
 ## External integrations
 
@@ -107,23 +134,27 @@ The dashboard is **not** a derivative work of any GPL component. This is
 true only as long as we keep process and network boundaries between the
 dashboard and GPL code. Concrete rules:
 
-1. **Never `import` a GPL project's Python modules.** Specifically:
-   no `import timekpr*`, no `import ansible.*` from dashboard code.
-   Ansible is invoked as a subprocess (`ansible-playbook ...`).
-2. **Talk to `timekpra` as a subprocess.** Use `subprocess.run` /
-   `asyncio.create_subprocess_exec`. Pass arguments via the CLI; parse
-   stdout. Do not parse Timekpr-nExT's on-disk state files using its own
-   parsing code.
-3. **Talk to ActivityWatch and AdGuard Home over their REST APIs only.**
+1. **Never link GPL code into the dashboard process.** The GPL tools we
+   orchestrate (Timekpr-nExT, Ansible) are Python; a Node process cannot
+   import them in-process, and that structural separation is the point —
+   do not undermine it with bindings, embedded interpreters, or vendored
+   GPL source.
+2. **Talk to `timekpra` as a subprocess.** Use `node:child_process`
+   (`execFile` / `spawn`), locally or through `ssh2`'s `exec`. Pass
+   arguments via the CLI; parse stdout. Do not parse Timekpr-nExT's
+   on-disk state files using its own parsing code.
+3. **Invoke Ansible as a subprocess** (`ansible-playbook ...` from the
+   first-run venv in the data volume). Never embed or vendor it.
+4. **Talk to ActivityWatch and AdGuard Home over their REST APIs only.**
    No source-level integration.
-4. **Do not bundle GPL binaries inside the dashboard Docker image.**
+5. **Do not bundle GPL binaries inside the dashboard Docker image.**
    GPL components are kept out of the image: Ansible is installed into
    an isolated venv inside the data volume on first run; AdGuard Home
    is either fetched at first run (managed mode), pointed at an
    existing instance (external mode), or skipped entirely (disabled
    mode). Client-side GPL components (Timekpr-nExT, e2guardian) are
    installed by the client install script via `apt`.
-5. **e2guardian** is configured by writing config files and signalling a
+6. **e2guardian** is configured by writing config files and signalling a
    reload. No code-level integration.
 
 If any of these rules ever becomes inconvenient, **stop and update the
@@ -134,29 +165,45 @@ full reasoning.
 
 ## Code conventions
 
-- Format with **black**, lint with **ruff**. Both should be wired into a
-  pre-commit hook once the codebase exists.
-- Type-annotate all public functions. Run **mypy** in `--strict` mode for
-  the dashboard package.
-- Keep modules small and per-responsibility. The dashboard already has a
-  natural split:
-  - `dashboard.web` — FastAPI app: mounts `/api`, `/admin`,
-    `/app` (static), `/integrations`
-  - `dashboard.api` — DTOs, JSON routes used by both frontends and by
+- Format with **Prettier**, lint with **ESLint** (typescript-eslint).
+  Both are wired into the pre-commit hook.
+- TypeScript `strict: true` everywhere; `tsc --noEmit` must pass. No
+  `any`, no unchecked `as` casts, no `@ts-ignore` (use `@ts-expect-error`
+  with a reason comment in the rare case it's justified).
+- Validate all external input (HTTP bodies, subprocess stdout, REST
+  responses from AW/AdGuard) with zod schemas before it crosses into
+  typed code.
+- Keep modules small and per-responsibility. The dashboard's split
+  (under `server/src/`):
+  - `web/` — Fastify app: mounts `/api`, serves the built frontend
+    at `/admin` and `/app`, hosts `/integrations`
+  - `api/` — zod DTOs, JSON routes used by both frontends and by
     external integrations
-  - `dashboard.policy` — policy model, DB access, grant ledger
-  - `dashboard.integrations` — external-system inbound APIs (e.g. the
+  - `policy/` — Drizzle schema, policy model, DB access, grant ledger
+  - `integrations/` — external-system inbound APIs (e.g. the
     family-calendar rewards endpoint; see `docs/architecture.md`)
-  - `dashboard.transport.ssh` — SSH + `timekpra` invocation
-  - `dashboard.transport.ansible` — playbook orchestration
-  - `dashboard.transport.activitywatch` — telemetry pull
-  - `dashboard.transport.adguard` — AdGuard Home REST client
-  - `dashboard.events` — WebSocket server-to-client event stream
+  - `transport/ssh/` — SSH + `timekpra` invocation
+  - `transport/ansible/` — playbook orchestration
+  - `transport/activitywatch/` — telemetry pull
+  - `transport/adguard/` — AdGuard Home REST client
+  - `events/` — WebSocket server-to-client event stream
     (`grant.applied`, `policy.changed`, `enforce.force_close`, etc.;
     see `docs/client-notifications.md`)
-- Tests live in `tests/` mirroring the package layout. Use `pytest`.
+- Tests live in `server/tests/` mirroring the source layout. Use
+  **Vitest**. Unit tests are `*.test.ts`; integration tests (live
+  services) are `*.int.test.ts` and excluded from the default run.
 - Do not introduce a new dependency without a sentence in the PR
   description explaining why an existing one doesn't suffice.
+
+The full quality gate, from `server/`:
+
+```bash
+npm ci
+npm run format:check   # prettier
+npm run lint           # eslint
+npm run typecheck      # tsc --noEmit
+npm test               # vitest unit tests + coverage gate (80%)
+```
 
 ## Repository layout (target)
 
@@ -165,13 +212,17 @@ full reasoning.
 ├── CLAUDE.md                 # this file
 ├── README.md                 # human-facing overview
 ├── docs/                     # architecture, deployment, licensing, roadmap
-├── server/                   # the Docker-packaged dashboard (Python)
-│   ├── pyproject.toml
-│   ├── src/dashboard/...
+├── server/                   # the Docker-packaged dashboard (TypeScript)
+│   ├── package.json
+│   ├── tsconfig.json
+│   ├── src/...               # web, api, policy, events, integrations, transport/*
 │   ├── tests/
+│   ├── frontend/             # SvelteKit project (admin + app surfaces)
+│   ├── drizzle/              # generated SQL migrations
 │   └── Dockerfile
 ├── client/                   # client-side install scripts and templates
 │   ├── install-client.sh
+│   ├── agent/                # pct-client bridge + agent (TypeScript)
 │   └── ansible/              # playbooks invoked by the server
 └── scripts/                  # dev utilities (lint, build, etc.)
 ```
@@ -181,8 +232,8 @@ than scaffolding everything up front.
 
 ## Working on this repo
 
-- Designated feature branch: `claude/fervent-galileo-Bb2il`. Do not push
-  elsewhere without explicit approval.
+- Develop on the session's designated `claude/*` feature branch. Do not
+  push elsewhere without explicit approval.
 - All non-trivial work should be tracked by an issue on the
   [roadmap project](https://github.com/users/BenSeymourODB/projects/2).
 - Keep PRs small and focused on one milestone item at a time.

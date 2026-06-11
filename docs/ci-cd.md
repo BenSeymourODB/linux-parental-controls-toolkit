@@ -27,26 +27,26 @@ merge.
 
 ### Jobs
 
-**`lint`** — Python static analysis
-- `black --check` formatting
-- `ruff check` linting
-- `mypy --strict` type checking over `server/src/`
+**`lint`** — TypeScript static analysis (in `server/`)
+- `npm run format:check` — Prettier formatting
+- `npm run lint` — ESLint (typescript-eslint)
+- `npm run typecheck` — `tsc --noEmit` with `strict: true`
 
 All three are also enforced by the pre-commit hooks (see below), so they
 should never fail in CI for code developed locally.
 
 **`test`** — Unit tests
-- `pytest server/tests/ -m "not integration"` — unit tests only, no live
-  services required.
-- Coverage threshold: 80 % (enforced via `--cov-fail-under`). Raise the
-  threshold as coverage improves; do not lower it.
+- `npm test` — Vitest unit tests only (`*.test.ts`, excluding
+  `*.int.test.ts`); no live services required.
+- Coverage threshold: 80 % (enforced via the Vitest coverage
+  thresholds). Raise the threshold as coverage improves; do not lower it.
 
-**`svelte-build`** — Frontend compilation
-- Builds the Jinja2+HTMX Svelte islands (`server/frontend/admin/`).
-- Builds the SvelteKit PWA (`server/frontend/app/`).
+**`frontend-build`** — SvelteKit compilation
+- Builds the SvelteKit project (`server/frontend/`) that provides both
+  the `/admin` and `/app` surfaces.
 - Catches TypeScript/Svelte type errors at the API boundary before they
-  become runtime failures.
-- Skips gracefully if the frontend directories do not exist yet.
+  become runtime failures (`svelte-check` runs as part of the build job).
+- Skips gracefully if the frontend directory does not exist yet.
 
 **`shellcheck`** — Shell script linting
 - Runs ShellCheck on every `*.sh` under `client/`.
@@ -67,7 +67,7 @@ should never fail in CI for code developed locally.
 - Runs `pre-commit run --all-files` using the project's
   `.pre-commit-config.yaml`.
 - This is a catch-all for any hook not covered by the dedicated jobs above
-  (file hygiene, YAML/TOML validity, large-file guard, merge-conflict
+  (file hygiene, YAML/JSON validity, large-file guard, merge-conflict
   markers).
 
 ---
@@ -81,19 +81,24 @@ Integration jobs are *not* required to pass to merge a feature branch —
 only PRs to `main` trigger them. This keeps iteration fast during feature
 development while ensuring `main` is always integration-clean.
 
+Each job's prerequisite check looks for actual `*.int.test.ts` files in
+the relevant test tree (not just the directory), so scaffolded-but-empty
+trees skip cleanly (see issue #19).
+
 ### Jobs
 
 **`activitywatch`**
-- Starts `activitywatch/aw-server:latest` as a GitHub Actions service
-  container on port 5600.
-- Runs `pytest server/tests/transport/activitywatch/ -m integration`.
+- Starts a real `aw-server` on port 5600 (see issue #20 for the
+  image/bootstrap decision — the upstream project publishes no official
+  Docker image).
+- Runs `npm run test:integration -- tests/transport/activitywatch/`.
 - The `AW_SERVER_URL` env var points the transport client at the live
-  container. Tests verify bucket creation, window-event ingestion, and
+  server. Tests verify bucket creation, window-event ingestion, and
   `UsageSample` normalisation against a real server.
 
 **`adguard`**
 - Starts `adguard/adguardhome:latest` as a service container on port 3000.
-- Runs `pytest server/tests/transport/adguard/ -m integration`.
+- Runs `npm run test:integration -- tests/transport/adguard/`.
 - Tests cover the `external` mode client (REST calls to a running instance),
   blocklist push/verify, and 401/409 error handling.
 
@@ -101,15 +106,16 @@ development while ensuring `main` is always integration-clean.
 - Starts `lscr.io/linuxserver/openssh-server` on port 2222.
 - Mounts `server/tests/stubs/` into the container's `PATH`, providing a
   stub `timekpra` script that records its CLI invocations to a file.
-- Runs `pytest server/tests/transport/ssh/ -m integration`.
+- Runs `npm run test:integration -- tests/transport/ssh/`.
 - Tests validate the full SSH round-trip (connect → invoke → parse stdout)
   without requiring Timekpr-nExT to be installed on the runner.
 - See [`server/tests/stubs/timekpra`](../server/tests/stubs/timekpra) for
   the stub implementation.
 
 **`migrations`**
-- Creates a temporary SQLite database, runs `alembic upgrade head`, then
-  `alembic downgrade base`.
+- Creates a temporary SQLite database, applies all drizzle-kit migrations,
+  and runs `drizzle-kit check` to catch drift between the committed SQL
+  and the schema definition.
 - Catches broken migration scripts before they reach production.
 - The database file is discarded at the end of the job.
 
@@ -168,6 +174,10 @@ If any match, the job fails. This is a hard invariant: the image must
 remain GPL-binary-free. GPL components are installed at first-run into the
 data volume or kept on the client machine, never bundled into the image.
 
+(The stock Python 3 interpreter the image carries for the first-run
+Ansible venv is PSF-licensed and deliberately not on this list; the venv
+itself lives in the data volume, never in the image.)
+
 ---
 
 ## Local development tooling
@@ -177,12 +187,13 @@ data volume or kept on the client machine, never bundled into the image.
 Install once after cloning:
 
 ```bash
-pip install pre-commit
+pip install pre-commit   # or: pipx install pre-commit / brew install pre-commit
 pre-commit install
+cd server && npm ci      # the TS hooks run via npx from server/
 ```
 
 The hooks run automatically on every `git commit`. They cover the same
-checks as CI (black, ruff, mypy, shellcheck, ansible-lint) plus file
+checks as CI (Prettier, ESLint, `tsc --noEmit`, ShellCheck) plus file
 hygiene. Running them locally means CI lint failures should be rare.
 
 To run all hooks manually without committing:
@@ -201,15 +212,15 @@ pre-commit autoupdate
 
 ```bash
 cd server
-pip install -e ".[dev]"
-pytest tests/ -m "not integration" -q
+npm ci
+npm test
 ```
 
 ### Running integration tests locally
 
 Each integration test job has a corresponding Docker Compose snippet in
 [`docs/testing.md`](testing.md) so you can reproduce the exact service
-configuration locally.
+configuration locally, then run `npm run test:integration`.
 
 ---
 
@@ -218,7 +229,7 @@ configuration locally.
 - Keep each job focused on one concern (lint, test, build, scan).
 - Add skip guards (`if [ -d path ]; then ...`) for any step that depends on
   code that does not exist yet. Remove the guard when the code lands.
-- Mark slow or service-dependent tests with `@pytest.mark.integration` so
-  the unit-test job can exclude them with `-m "not integration"`.
+- Put slow or service-dependent tests in `*.int.test.ts` files so the
+  unit-test job's include/exclude patterns keep them out of `npm test`.
 - Update this document and `docs/testing.md` when you add a new job that
   tests a new component.

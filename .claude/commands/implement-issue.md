@@ -14,9 +14,10 @@ keep the dashboard from becoming a derivative work of any GPL component.
 ## Hard rules
 
 - **License boundaries (see `CLAUDE.md` → "License boundaries"):**
-  - Never `import` a GPL project's Python modules — no `import timekpr*`,
-    no `import ansible.*`. Drive `timekpra` and `ansible-playbook` as
-    subprocesses (`asyncio.create_subprocess_exec` / `subprocess.run`).
+  - Never link GPL code in-process. Drive `timekpra` and
+    `ansible-playbook` as subprocesses (`node:child_process`
+    `execFile` / `spawn`) — the GPL tools are Python/C++ and cannot be
+    imported from Node anyway; keep it that way.
   - Talk to ActivityWatch and AdGuard Home over their REST APIs only.
   - Configure e2guardian by writing config files and signalling a reload —
     no code-level integration.
@@ -28,15 +29,16 @@ keep the dashboard from becoming a derivative work of any GPL component.
   modules, eBPF, obfuscation, or `/etc`/`/usr`/boot lockdown. If a ticket
   seems to call for hardening beyond what's documented, push back in the
   issue thread instead of building it.
-- **Python:** 3.11+, type-annotate all public functions, `mypy --strict`
-  must pass. No new dependency without a sentence in the PR description
-  justifying why an existing one doesn't suffice.
+- **TypeScript:** strict mode on Node.js 22 LTS, type all public
+  functions, `tsc --noEmit` must pass. No new dependency without a
+  sentence in the PR description justifying why an existing one doesn't
+  suffice.
 - **Tests required.** Land tests with the code (prefer test-first). Tests
   live under `server/tests/` mirroring the package layout. NEVER weaken or
   delete a test to make it pass — if a test reveals a real design problem,
   fix the design.
 - **Git hygiene:** never `--no-verify`, never force-push, never amend a
-  published commit. Don't commit `.coverage`, build output, or
+  published commit. Don't commit `coverage/`, build output, or
   `.claude/worktrees/`.
 
 Where this guide shows `gh ...`, use the GitHub MCP tools
@@ -150,7 +152,7 @@ else
   git worktree add -b "$branch" "$worktree" origin/main
   cd "$worktree"
 fi
-pip install -e "server/[dev]"
+(cd server && npm ci)
 ```
 
 If the branch already exists from a crashed prior run, reuse it:
@@ -181,25 +183,25 @@ pushes update it.
 ## 6. Tests
 
 Write tests for every behavior — unit at minimum, plus integration where a
-transport or external boundary is involved. Integration tests are marked
-`@pytest.mark.integration` and run against the Docker Compose environment
-documented in [`docs/testing.md`](../../docs/testing.md); the unit job
-excludes them. NEVER weaken or delete a test to make it pass.
+transport or external boundary is involved. Integration tests are named
+`*.int.test.ts` (run via `npm run test:integration`) against the Docker
+Compose environment documented in [`docs/testing.md`](../../docs/testing.md);
+the unit job excludes them. NEVER weaken or delete a test to make it pass.
 
 ## 7. Implement, validate, push (per phase)
 
-Run the full quality gate from the repo root after each phase. These mirror
+Run the full quality gate from `server/` after each phase. These mirror
 the CI `lint` and `test` jobs:
 
 ```bash
-black server/src/ server/tests/
-ruff check --fix server/src/ server/tests/
-mypy --strict server/src/
-pytest server/tests/ -m "not integration" --strict-markers -q \
-  --cov=dashboard --cov-report=term-missing --cov-fail-under=80
+cd server
+npm run format        # prettier --write .
+npm run lint:fix      # eslint . --fix
+npm run typecheck     # tsc --noEmit
+npm test              # vitest run (unit only, excludes *.int.test.ts) with coverage
 ```
 
-All four must succeed (coverage gate is 80%). `pre-commit run --all-files`
+All four must succeed (coverage gate is 80%). The repo's pre-commit hooks
 should also be clean. Then commit (HEREDOC body, ending with the standard
 footer below) and push.
 
@@ -244,19 +246,19 @@ EOF
 
 ## 8. UI changes → frontend build / E2E (when applicable)
 
-The dashboard has two frontends (`CLAUDE.md` → frontend split):
-`server/frontend/admin/` (Vite + Svelte islands alongside Jinja2 + HTMX)
-and `server/frontend/app/` (SvelteKit `adapter-static` PWA). Both build at
-image-build time — there is **no Node runtime in the image**.
+The dashboard has a single SvelteKit frontend (`CLAUDE.md` → frontend
+split): `server/frontend/` (SvelteKit `adapter-static`, Svelte 5), serving
+both the `/admin` and `/app` surfaces. It builds at image-build time —
+there is **no Node frontend toolchain in the runtime image**.
 
 For any UI-affecting issue:
 
-- Build the affected frontend the way CI does:
-  `cd server/frontend/<admin|app> && npm ci && npm run build`. The build
+- Build the frontend the way CI does:
+  `cd server/frontend && npm ci && npm run build`. The build
   must succeed.
 - If (and only if) the frontend already has an E2E/test toolchain wired
   up, write tests covering the intended behavior and the realistic edge
-  cases, and run them. The frontends are only lightly scaffolded today —
+  cases, and run them. The frontend is only lightly scaffolded today —
   do not stand up a heavyweight Playwright harness as a side effect of an
   unrelated ticket; that belongs to its own roadmap item.
 - `git status` after any frontend run — never commit `node_modules/`,
@@ -267,10 +269,8 @@ For any UI-affecting issue:
 ## 9. Finalize
 
 ```bash
-black server/src/ server/tests/ && ruff check server/src/ server/tests/ \
-  && mypy --strict server/src/ \
-  && pytest server/tests/ -m "not integration" --strict-markers -q \
-       --cov=dashboard --cov-fail-under=80
+cd server
+npm run format:check && npm run lint && npm run typecheck && npm test
 gh pr ready <num>
 ```
 
@@ -287,10 +287,10 @@ model). Instruct it to:
    read the full diff (`gh pr diff <num>`), check tests, check `CLAUDE.md`
    and `docs/` compliance — **especially the license-boundary rules** —
    and produce file-level comments with explicit `path` + `line` + `body`.
-2. Pay specific attention to: any new `import` that crosses a GPL
-   boundary; any subprocess/REST boundary being collapsed; missing type
-   annotations; tests that assert too little; tamper-resistance scope
-   creep.
+2. Pay specific attention to: any new in-process linkage that crosses a
+   GPL boundary; any subprocess/REST boundary being collapsed; missing or
+   weakened types (`any`, `as` casts, `@ts-ignore`); tests that assert
+   too little; tamper-resistance scope creep.
 3. Post comments via the GitHub MCP review tools or
    `gh api repos/BenSeymourODB/linux-parental-controls-toolkit/pulls/<num>/comments`,
    or return them verbatim for you to post — do not paraphrase.

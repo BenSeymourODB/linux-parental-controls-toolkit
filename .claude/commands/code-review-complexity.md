@@ -7,11 +7,11 @@ maintain.
 
 ## Scope
 
-Scan all `.py` files under `server/src/dashboard/` **excluding**:
+Scan all `.ts` files under `server/src/` **excluding**:
 
-- Test files (`server/tests/`, `test_*.py`)
-- Generated files (Alembic migration scaffolding under
-  `server/migrations/versions/` — flag only genuinely hand-written
+- Test files (`server/tests/`, `*.test.ts`)
+- Generated files (drizzle-kit generated migration files under
+  `server/drizzle/` — flag only genuinely hand-written
   complexity there)
 
 ## What to look for
@@ -19,40 +19,42 @@ Scan all `.py` files under `server/src/dashboard/` **excluding**:
 ### 1. Long functions (>40 lines)
 
 Read each source file and identify functions/methods exceeding 40 lines of
-actual logic (excluding blank lines, docstrings, and comments). These are
+actual logic (excluding blank lines, JSDoc, and comments). These are
 prime candidates for extraction.
 
 ### 2. Large modules (>300 lines)
 
 Flag modules exceeding 300 lines of source code. In this codebase a module
-that large usually means a `dashboard.*` submodule has taken on more than
-its single responsibility (see the module split in `CLAUDE.md`).
+that large usually means a `src/` module (e.g. `src/policy`,
+`src/transport/ssh`) has taken on more than its single responsibility (see
+the module split in `CLAUDE.md`).
 
 ### 3. Deep nesting (3+ levels)
 
-Conditionals, loops, `try/except`, and `async with` blocks nested 3 or more
+Conditionals, loops, `try/catch`, and callback blocks nested 3 or more
 levels deep are hard to follow and test.
 
 ### 4. High parameter count (4+)
 
 Functions with 4+ positional parameters suggest the function is doing too
-much or wants a dataclass / Pydantic model for its config.
+much or wants a typed options object / zod schema for its config.
 
 ### 5. Async / subprocess complexity
 
 This codebase drives external tools as subprocesses and external services
 over REST/SSH. Flag:
 
-- Tangled `asyncio` flows (nested `gather`, manual task juggling, missing
-  `await`, fire-and-forget tasks with no error handling).
+- Tangled async flows (nested `Promise.all`, manual promise juggling,
+  missing `await`, fire-and-forget promises with no error handling).
 - Subprocess invocations whose argument-building and stdout-parsing are
   crammed into one large function rather than split (build args → run →
   parse result).
 
-### 6. `Any` / type-escape complexity
+### 6. `any` / type-escape complexity
 
-`mypy --strict` is required. Flag functions that lean on `Any`,
-`# type: ignore`, or `cast()` to paper over complexity rather than model it.
+TypeScript `strict: true` is required. Flag functions that lean on `any`,
+`@ts-expect-error` / `@ts-ignore`, `as` casts, or non-null assertions
+(`!`) to paper over complexity rather than model it.
 
 ### 7. Approximate CRAP score
 
@@ -81,13 +83,13 @@ EFFORT: {S|M|L}
 - **High**: function >60 lines, nesting >4 levels, module >500 lines, or a
   tangled async flow with no error handling
 - **Medium**: function >40 lines, nesting 3 levels, module >300 lines, or
-  `Any`/`cast` used to dodge complexity
+  `any` / `as` casts used to dodge complexity
 - **Low**: 4+ parameters, or repeated small subprocess/parse blocks that
   want a shared helper
 
 ## Instructions
 
-1. Use Glob to find all source files in scope (`server/src/dashboard/**/*.py`).
+1. Use Glob to find all source files in scope (`server/src/**/*.ts`).
 2. Use Read to examine each file (start with the largest files first).
 3. Analyze each file against the criteria above.
 4. Return ALL findings in the structured format.
