@@ -11,7 +11,7 @@ collapsed.
 
 ## Scope
 
-Scan all `.py` files under `server/src/dashboard/` **excluding** test files.
+Scan all `.ts` files under `server/src/` **excluding** test files.
 
 ## What to look for
 
@@ -19,10 +19,11 @@ Scan all `.py` files under `server/src/dashboard/` **excluding** test files.
 
 These are architectural invariants, not style. Flag as **Critical**:
 
-- Any `import timekpr*`, `import ansible.*`, or other import of a GPL
-  project's Python modules from dashboard code.
+- Any in-process linkage to GPL code from dashboard code. (The GPL tools
+  are Python/C++ and cannot be imported from Node anyway — keep it that
+  way.)
 - `timekpra` or `ansible-playbook` being invoked any way other than as a
-  subprocess (`asyncio.create_subprocess_exec` / `subprocess.run`).
+  subprocess (`node:child_process` `execFile` / `spawn`).
 - Parsing Timekpr-nExT's on-disk state with its own parsing code instead of
   the CLI's stdout.
 - ActivityWatch or AdGuard Home being integrated at the source level
@@ -34,21 +35,23 @@ These are architectural invariants, not style. Flag as **Critical**:
 If a boundary looks like it's being collapsed "for convenience", that's a
 finding — the rule is to update the design docs first, not to collapse it.
 
-### 2. The `dashboard.*` module split
+### 2. The dashboard module split
 
-`CLAUDE.md` prescribes a split: `web` (FastAPI app + mounts), `api` (DTOs +
-JSON routes), `policy` (model, DB, grant ledger), `integrations` (inbound
-external APIs), `transport.{ssh,ansible,activitywatch,adguard}`, `events`
-(WebSocket). Flag code that lands in the wrong layer, e.g.:
+`CLAUDE.md` prescribes a split: `web` (Fastify app + mounts), `api` (zod
+DTO schemas + JSON routes), `policy` (Drizzle schema, DB, grant ledger),
+`integrations` (inbound external APIs),
+`transport/{ssh,ansible,activitywatch,adguard}`, `events` (WebSocket).
+Flag code that lands in the wrong layer, e.g.:
 
-- DB/ORM access inside `web` or `transport` instead of `policy`.
+- DB/Drizzle access inside `web` or `transport` instead of `policy`.
 - Transport (SSH/subprocess/REST) calls made directly from `api` or `web`
-  route handlers instead of going through a `transport.*` facade.
-- DTOs (request/response shapes) defined in `policy` instead of `api`.
+  route handlers instead of going through a `transport/*` facade.
+- DTO schemas (request/response shapes) defined in `policy` instead of
+  `api`.
 
 ### 3. Business logic in route handlers
 
-API routes in `dashboard.api` / `dashboard.integrations` should delegate to
+API routes in `src/api` / `src/integrations` should delegate to
 the service/policy layer. Flag routes where validation, computation, budget
 math, or complex data manipulation happens directly in the handler instead
 of in a reusable function.
@@ -57,7 +60,7 @@ of in a reusable function.
 
 Modules that handle too many concerns at once — e.g. config loading +
 business logic + I/O in one file, or a transport facade that also owns
-policy decisions. A `dashboard.*` submodule should have one clear job.
+policy decisions. Each module under `src/` should have one clear job.
 
 ### 5. Missing abstraction layers
 
@@ -69,7 +72,7 @@ handling duplicated across integration endpoints.
 ### 6. Tangled module dependencies
 
 Circular imports or import chains that couple layers that should be
-independent (e.g. `policy` importing from `web`).
+independent (e.g. `src/policy` importing from `src/web`).
 
 ## Output format
 
@@ -87,7 +90,8 @@ EFFORT: {S|M|L}
 - **Critical**: any license-boundary violation (category 1), or a god
   module with 5+ distinct responsibilities.
 - **High**: transport/DB calls made directly from route handlers, heavy
-  business logic in a route, or code in the wrong `dashboard.*` layer.
+  business logic in a route, or code in the wrong layer of the module
+  split.
 - **Medium**: repeated auth/validation/transport patterns not extracted, a
   module doing 2-3 unrelated things.
 - **Low**: minor coupling, slightly mixed concerns that don't significantly
@@ -100,8 +104,8 @@ EFFORT: {S|M|L}
    `integrations/`, then `api/`, then `web/`, then `policy/`.
 3. Use Read to examine each file for mixed responsibilities and boundary
    violations.
-4. Use Grep to check for cross-layer imports (`import timekpr`,
-   `import ansible`, `from dashboard.web` inside `policy`, etc.) and
+4. Use Grep to check for cross-layer imports (e.g. an import from
+   `../web` inside `policy`, transport imports inside `api`, etc.) and
    repeated code.
 5. Return ALL findings in the structured format.
 6. Be specific about WHAT to extract and WHERE it belongs.

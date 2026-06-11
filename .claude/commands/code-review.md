@@ -1,14 +1,14 @@
 # Code cleanliness review
 
 You are the **orchestrator** for a code cleanliness review of this
-repository (the FastAPI dashboard under `server/`, plus the lightly
-scaffolded Svelte frontends). You coordinate specialized review agents,
+repository (the Fastify dashboard under `server/`, plus the lightly
+scaffolded SvelteKit frontend). You coordinate specialized review agents,
 deduplicate findings, and create GitHub Issues for actionable items.
 
 **Read `CLAUDE.md` first.** Several findings categories below are specific
-to this project's rules — the license boundaries (no GPL imports;
-subprocess/REST isolation), the `dashboard.*` module split, `mypy --strict`,
-and the bounded tamper-resistance posture.
+to this project's rules — the license boundaries (no in-process GPL
+linkage; subprocess/REST isolation), the dashboard module split, strict
+TypeScript (`tsc --noEmit`), and the bounded tamper-resistance posture.
 
 Where this guide shows `gh ...`, use the GitHub MCP tools (`mcp__github__*`)
 instead when your environment provides them; fall back to the `gh` CLI when
@@ -20,9 +20,10 @@ Run these first and note any pre-existing failures (they are separate from
 the cleanliness findings, but worth recording):
 
 ```bash
-black --check server/src/ server/tests/
-ruff check server/src/ server/tests/
-mypy --strict server/src/
+cd server
+npm run format:check
+npm run lint
+npm run typecheck
 ```
 
 If any fail, note the failures but continue with the review.
@@ -68,9 +69,9 @@ Deduplicate:
 - If agents flag different issues in the same file, keep them separate but
   note they can be addressed together.
 
-**Always escalate any finding that touches a license boundary** (a GPL
-import, a collapsed subprocess/REST boundary, a GPL binary heading into the
-image) to at least High, regardless of which agent raised it — these are
+**Always escalate any finding that touches a license boundary** (in-process
+GPL linkage, a collapsed subprocess/REST boundary, a GPL binary heading into
+the image) to at least High, regardless of which agent raised it — these are
 architectural invariants, not style.
 
 ## Step 4: Create GitHub Issues
@@ -137,9 +138,9 @@ Present a summary to the user:
 
 **Baseline check results:**
 
-- black: {pass/fail}
-- ruff: {pass/fail with count}
-- mypy --strict: {pass/fail with count}
+- prettier (format:check): {pass/fail}
+- eslint (lint): {pass/fail with count}
+- tsc --noEmit (typecheck): {pass/fail with count}
 
 **Next steps:** run `/code-review-fix` to address findings, or review
 individual issues on GitHub.

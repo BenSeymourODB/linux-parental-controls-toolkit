@@ -16,20 +16,22 @@ jobs:
       - uses: actions/checkout@v4
 
       # Run the unit test suite before publishing anything.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-node@v4
         with:
-          python-version: "3.11"
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: server/package-lock.json
 
-      - name: Install package + dev dependencies
+      - name: Install dependencies
         run: |
-          if [ -f server/pyproject.toml ]; then
-            pip install -e "server/[dev]"
+          if [ -f server/package.json ]; then
+            cd server && npm ci
           fi
 
       - name: Unit tests (gate)
         run: |
-          if [ -d server/tests ]; then
-            pytest server/tests/ -m "not integration" --strict-markers -q
+          if [ -f server/package.json ]; then
+            cd server && npm test
           else
             echo "No tests yet — proceeding (remove this once tests exist)"
           fi

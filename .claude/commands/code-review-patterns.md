@@ -11,18 +11,18 @@ against.
 
 ## Scope
 
-Scan all `.py` files under `server/src/dashboard/` and the matching tests
+Scan all `.ts` files under `server/src/` and the matching tests
 under `server/tests/`.
 
 ## What to look for
 
 ### 1. API route structure consistency
 
-Compare the route handlers in `dashboard.api` (and
-`dashboard.integrations`). Check for consistent patterns in:
+Compare the route handlers in `src/api` (and
+`src/integrations`). Check for consistent patterns in:
 
 - Auth / session verification — do all protected routes check the same way?
-- Input validation — is it consistently done with Pydantic models?
+- Input validation — is it consistently done with zod schemas?
 - Error responses — same shape and status codes across routes?
 - Response shape — do routes return data through consistent DTOs?
 - Service-layer delegation — do all routes call into `policy`/services the
@@ -32,13 +32,14 @@ Read several route modules and compare.
 
 ### 2. Transport facade consistency
 
-The `transport.{ssh,ansible,activitywatch,adguard}` packages should follow
-parallel shapes:
+The `src/transport/{ssh,ansible,activitywatch,adguard}` modules should
+follow parallel shapes:
 
 - Subprocess-based transports (`ssh`/`timekpra`, `ansible`) should build
   args → run → parse in a consistent structure.
 - REST-based transports (`activitywatch`, `adguard`) should use the same
-  HTTP client conventions, timeout handling, and error mapping.
+  HTTP client conventions (global fetch / undici), timeout handling, and
+  error mapping.
 - Audit-logging of issued commands should be done the same way everywhere.
 
 Flag a transport that invents its own structure where a sibling already
@@ -48,31 +49,31 @@ established one.
 
 - Are errors caught and handled consistently?
 - Is logging done through the project's structured logging setup rather
-  than ad-hoc `print()` or bare loggers?
-- Are there bare `except Exception:` blocks that swallow errors without
-  logging or re-raising?
+  than ad-hoc `console.log()` or bare loggers?
+- Are there bare `catch` blocks that swallow errors without
+  logging or re-throwing?
 
 ### 4. Import & module-layout consistency
 
-- Are imports consistent (absolute `dashboard.*` imports, `import type`
-  equivalents via `TYPE_CHECKING` where used)?
+- Are imports consistent (consistent path style, `import type` for
+  type-only imports where used)?
 - Does each module sit in the layer `CLAUDE.md` prescribes?
-- Is `__init__.py` used consistently (thin packages vs re-export surfaces)?
+- Is `index.ts` used consistently (thin barrels vs re-export surfaces)?
 
-### 5. Pydantic / model conventions
+### 5. zod / schema conventions
 
-- Are request/response DTOs consistently defined in `dashboard.api`, and
-  ORM models in `dashboard.policy`?
-- Is there one consistent approach to model config (e.g. `model_config`,
-  field validators), or a mix?
+- Are request/response DTO schemas consistently defined in `src/api`, and
+  Drizzle schema/tables in `src/policy`?
+- Is there one consistent approach to schema definition (e.g. shared
+  refinements, `z.infer` types, error mapping), or a mix?
 
 ### 6. Test patterns
 
-- Does `server/tests/` mirror the package layout (the prescribed
-  convention)?
-- Do tests use the shared fixtures (`db`, `client`, `mock_subprocess`)
-  rather than re-inventing them?
-- Are integration tests consistently marked `@pytest.mark.integration`?
+- Does `server/tests/` mirror the source layout (the prescribed
+  convention, e.g. `server/tests/transport/ssh/`)?
+- Do tests use the shared Vitest fixtures/helpers (`db`, `client`,
+  `mockSubprocess`) rather than re-inventing them?
+- Are integration tests consistently named `*.int.test.ts`?
 - Do all testable modules actually have tests?
 
 ## Output format
@@ -93,7 +94,7 @@ EFFORT: {S|M|L}
   structure in a way that risks the license boundary.
 - **High**: inconsistent API route patterns that make the surface
   unpredictable, or a module placed in the wrong layer.
-- **Medium**: mixed model/DTO placement, inconsistent fixture usage,
+- **Medium**: mixed schema/DTO placement, inconsistent fixture usage,
   inconsistent component/module structure.
 - **Low**: minor import-style inconsistencies, test placement variations.
 
@@ -102,9 +103,9 @@ EFFORT: {S|M|L}
 1. Start by reading 2-3 route modules to establish the "expected" API
    pattern, then read the rest and flag deviations.
 2. Read the transport facades side by side to compare their shapes.
-3. Use Grep to check import patterns, `print(` usage, and bare
-   `except Exception` blocks.
-4. Check that `server/tests/` mirrors `server/src/dashboard/` and that
+3. Use Grep to check import patterns, `console.log(` usage, and bare
+   catch-and-swallow blocks.
+4. Check that `server/tests/` mirrors `server/src/` and that
    shared fixtures are reused.
 5. Return ALL findings in the structured format.
 6. When flagging inconsistency, always specify which pattern is the

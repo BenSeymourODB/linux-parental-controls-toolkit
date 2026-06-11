@@ -6,11 +6,11 @@ harder to understand than it needs to be.
 
 ## Scope
 
-Scan all `.py` files under `server/src/dashboard/` **excluding** test
-files. The codebase is formatted with **black** (line length 100) and
-linted with **ruff** — do not flag anything those tools already enforce
-(formatting, import sorting, unused imports). Focus on what they cannot
-catch.
+Scan all `.ts` files under `server/src/` **excluding** test
+files. The codebase is formatted with **Prettier** and linted with
+**ESLint** (typescript-eslint) — do not flag anything those tools already
+enforce (formatting, import sorting, unused imports). Focus on what they
+cannot catch.
 
 ## What to look for
 
@@ -35,23 +35,25 @@ Literal numbers or strings used in logic without a named constant:
 
 ### 3. Missing or weak type annotations
 
-`mypy --strict` is required, so most signatures are typed — but flag:
+TypeScript `strict: true` is required, so most signatures are typed — but
+flag:
 
-- Public functions returning bare containers (`dict`, `list`) where a typed
-  model or `TypedDict`/dataclass would document the shape.
-- Overuse of `Any`, `object`, or `# type: ignore` where a precise type is
-  available.
+- Public functions returning bare shapes (`Record<string, unknown>`,
+  `any[]`) where a typed interface or zod-inferred type would document the
+  shape.
+- Overuse of `any`, `as` casts, or `@ts-expect-error` / `@ts-ignore` where
+  a precise type is available.
 
-### 4. Missing docstrings on public APIs
+### 4. Missing doc comments on public APIs
 
-Public functions/classes in `dashboard.*` (especially `policy`, `api`, and
-the `transport.*` facades) should carry at least a one-line docstring
-explaining their purpose. Flag undocumented public names that aren't
+Exported functions/classes in `src/` (especially `policy`, `api`, and
+the `transport/*` facades) should carry at least a one-line JSDoc comment
+explaining their purpose. Flag undocumented exported names that aren't
 self-explanatory.
 
 ### 5. Long boolean expressions
 
-Conditions with 3+ clauses joined by `and`/`or` that aren't extracted into
+Conditions with 3+ clauses joined by `&&`/`||` that aren't extracted into
 a descriptively named variable or helper (e.g. budget-eligibility or
 schedule-window checks).
 
@@ -83,9 +85,9 @@ EFFORT: {S|M|L}
   named `grant_time` that revokes), or a stale comment that misstates a
   license boundary.
 - **High**: magic numbers in budget/enforcement logic, completely unclear
-  function purposes, `Any` hiding an important shape.
-- **Medium**: missing docstrings on complex public functions, long boolean
-  expressions, weakly-typed public returns.
+  function purposes, `any` hiding an important shape.
+- **Medium**: missing doc comments on complex exported functions, long
+  boolean expressions, weakly-typed public returns.
 - **Low**: minor naming nits, trivial magic numbers, small style
   inconsistencies.
 
@@ -96,6 +98,6 @@ EFFORT: {S|M|L}
    `transport/`, then `api/` and `integrations/`, then `web/` and
    `events/`.
 3. Use Grep to spot magic numbers (`\b\d{2,}\b` outside obvious constants)
-   and bare `Any` / `# type: ignore`.
+   and bare `any` / `@ts-ignore` / `@ts-expect-error`.
 4. Return ALL findings in the structured format.
 5. Suggest specific improved names or extractions — not just "rename this".

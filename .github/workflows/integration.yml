@@ -14,27 +14,33 @@ jobs:
     runs-on: ubuntu-22.04
     # Starts a real aw-server via docker run (not a service container) so the
     # step can be skipped gracefully when the transport tests don't exist yet.
+    # NOTE (issue #20): activitywatch/activitywatch is not a published Docker
+    # Hub image; the bootstrap below must be fixed before the first real
+    # ActivityWatch integration tests land.
     steps:
       - uses: actions/checkout@v4
 
       - name: Check prerequisites
         id: check
         run: |
-          if [ -f server/pyproject.toml ] && [ -d server/tests/transport/activitywatch ]; then
+          if [ -f server/package.json ] \
+             && find server/tests/transport/activitywatch -name '*.int.test.ts' -type f 2>/dev/null | grep -q .; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "ActivityWatch transport tests not yet present — skipping job"
+            echo "ActivityWatch integration tests not yet present — skipping job"
           fi
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-node@v4
         if: steps.check.outputs.run == 'true'
         with:
-          python-version: "3.11"
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: server/package-lock.json
 
-      - name: Install package + dev dependencies
+      - name: Install dependencies
         if: steps.check.outputs.run == 'true'
-        run: pip install -e "server/[dev]"
+        run: cd server && npm ci
 
       - name: Start ActivityWatch server
         if: steps.check.outputs.run == 'true'
@@ -49,7 +55,7 @@ jobs:
 
       - name: Integration tests — ActivityWatch transport
         if: steps.check.outputs.run == 'true'
-        run: pytest server/tests/transport/activitywatch/ -m integration -v
+        run: cd server && npm run test:integration -- tests/transport/activitywatch/
         env:
           AW_SERVER_URL: http://localhost:5600
 
@@ -64,21 +70,24 @@ jobs:
       - name: Check prerequisites
         id: check
         run: |
-          if [ -f server/pyproject.toml ] && [ -d server/tests/transport/adguard ]; then
+          if [ -f server/package.json ] \
+             && find server/tests/transport/adguard -name '*.int.test.ts' -type f 2>/dev/null | grep -q .; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "AdGuard transport tests not yet present — skipping job"
+            echo "AdGuard integration tests not yet present — skipping job"
           fi
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-node@v4
         if: steps.check.outputs.run == 'true'
         with:
-          python-version: "3.11"
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: server/package-lock.json
 
-      - name: Install package + dev dependencies
+      - name: Install dependencies
         if: steps.check.outputs.run == 'true'
-        run: pip install -e "server/[dev]"
+        run: cd server && npm ci
 
       - name: Start AdGuard Home
         if: steps.check.outputs.run == 'true'
@@ -93,7 +102,7 @@ jobs:
 
       - name: Integration tests — AdGuard Home transport
         if: steps.check.outputs.run == 'true'
-        run: pytest server/tests/transport/adguard/ -m integration -v
+        run: cd server && npm run test:integration -- tests/transport/adguard/
         env:
           ADGUARD_URL: http://localhost:3000
           ADGUARD_USER: admin
@@ -110,21 +119,24 @@ jobs:
       - name: Check prerequisites
         id: check
         run: |
-          if [ -f server/pyproject.toml ] && [ -d server/tests/transport/ssh ]; then
+          if [ -f server/package.json ] \
+             && find server/tests/transport/ssh -name '*.int.test.ts' -type f 2>/dev/null | grep -q .; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "SSH transport tests not yet present — skipping job"
+            echo "SSH integration tests not yet present — skipping job"
           fi
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-node@v4
         if: steps.check.outputs.run == 'true'
         with:
-          python-version: "3.11"
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: server/package-lock.json
 
-      - name: Install package + dev dependencies
+      - name: Install dependencies
         if: steps.check.outputs.run == 'true'
-        run: pip install -e "server/[dev]"
+        run: cd server && npm ci
 
       - name: Make stub timekpra executable
         if: steps.check.outputs.run == 'true'
@@ -145,49 +157,50 @@ jobs:
 
       - name: Integration tests — SSH transport
         if: steps.check.outputs.run == 'true'
-        run: pytest server/tests/transport/ssh/ -m integration -v
+        run: cd server && npm run test:integration -- tests/transport/ssh/
         env:
           SSH_TARGET_HOST: localhost
           SSH_TARGET_PORT: 2222
 
   migrations:
-    name: Alembic migration round-trip
+    name: Drizzle migration round-trip
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-node@v4
         with:
-          python-version: "3.11"
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: server/package-lock.json
 
-      - name: Install package + dev dependencies
+      - name: Install dependencies
         run: |
-          if [ -f server/pyproject.toml ]; then
-            pip install -e "server/[dev]"
+          if [ -f server/package.json ]; then
+            cd server && npm ci
           else
-            echo "server/pyproject.toml not yet present — skipping"
-            exit 0
+            echo "server/package.json not yet present — skipping"
           fi
 
-      - name: Upgrade to head
+      - name: Apply migrations to a fresh database
         run: |
-          if [ -f server/alembic.ini ]; then
-            cd server && alembic upgrade head
+          if [ -f server/drizzle.config.ts ]; then
+            cd server && npx drizzle-kit migrate
           else
-            echo "alembic.ini not yet present — skipping"
-          fi
-        env:
-          DATABASE_URL: sqlite:///./ci_migration_test.sqlite
-
-      - name: Downgrade to base
-        run: |
-          if [ -f server/alembic.ini ]; then
-            cd server && alembic downgrade base
-          else
-            echo "alembic.ini not yet present — skipping"
+            echo "drizzle.config.ts not yet present — skipping"
           fi
         env:
-          DATABASE_URL: sqlite:///./ci_migration_test.sqlite
+          DATABASE_URL: file:./ci_migration_test.sqlite
+
+      - name: Check schema/migration drift
+        run: |
+          if [ -f server/drizzle.config.ts ]; then
+            cd server && npx drizzle-kit check
+          else
+            echo "drizzle.config.ts not yet present — skipping"
+          fi
+        env:
+          DATABASE_URL: file:./ci_migration_test.sqlite
 
   client-install-dryrun:
     name: Client install script dry-run (Ubuntu 22.04)

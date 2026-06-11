@@ -1,29 +1,32 @@
 repos:
-  # Python formatting
-  - repo: https://github.com/psf/black
-    rev: 24.10.0
+  # TypeScript formatting / linting / type checking run through the
+  # server's own npm scripts so the hook and CI share one source of
+  # truth. Requires `cd server && npm ci` once after cloning.
+  - repo: local
     hooks:
-      - id: black
-        language_version: python3.11
+      - id: prettier
+        name: prettier
+        language: system
+        entry: bash -c 'cd server && npm run --silent format:check'
         files: ^server/
+        exclude: ^server/(node_modules|dist|coverage|drizzle|frontend)/
+        pass_filenames: false
 
-  # Python linting (with auto-fix on commit)
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.8.0
-    hooks:
-      - id: ruff
-        args: [--fix]
-        files: ^server/
+      - id: eslint
+        name: eslint
+        language: system
+        entry: bash -c 'cd server && npm run --silent lint'
+        files: ^server/.*\.(ts|js)$
+        exclude: ^server/(node_modules|dist|coverage|frontend)/
+        pass_filenames: false
 
-  # Static type checking
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.13.0
-    hooks:
-      - id: mypy
-        args: [--strict]
-        files: ^server/src/
-        # Add type stubs here as dependencies land (e.g. types-aiofiles).
-        additional_dependencies: []
+      - id: typecheck
+        name: tsc --noEmit
+        language: system
+        entry: bash -c 'cd server && npm run --silent typecheck'
+        files: ^server/.*\.ts$
+        exclude: ^server/(node_modules|dist|coverage|frontend)/
+        pass_filenames: false
 
   # Shell script linting
   - repo: https://github.com/koalaman/shellcheck-precommit
@@ -45,7 +48,7 @@ repos:
         args: [--markdown-linebreak-ext=md]
       - id: end-of-file-fixer
       - id: check-yaml
-      - id: check-toml
+      - id: check-json
       - id: check-merge-conflict
       - id: check-added-large-files
         args: [--maxkb=500]

@@ -5,8 +5,8 @@ to read open code-review issues from GitHub, help the user prioritize, and
 execute fixes one at a time.
 
 **Read `CLAUDE.md` first** — every fix must respect the license boundaries,
-the `dashboard.*` module split, `mypy --strict`, and the bounded
-tamper-resistance posture.
+the dashboard module split, strict TypeScript (`tsc --noEmit`), and the
+bounded tamper-resistance posture.
 
 Where this guide shows `gh ...`, use the GitHub MCP tools (`mcp__github__*`)
 instead when your environment provides them; fall back to the `gh` CLI when
@@ -48,19 +48,20 @@ For each selected issue, in order:
 2. **Read the affected file** to understand the current code.
 3. **Implement the suggested fix** (or a better one if you identify it).
    Keep changes scoped to the finding — don't refactor unrelated code.
-4. **Run the quality gate** from the repo root:
+4. **Run the quality gate** from `server/`:
    ```bash
-   black server/src/ server/tests/
-   ruff check --fix server/src/ server/tests/
-   mypy --strict server/src/
+   cd server
+   npm run format        # prettier --write .
+   npm run lint:fix      # eslint . --fix
+   npm run typecheck     # tsc --noEmit
    ```
 5. **Run the relevant tests** (the unit selection CI uses):
    ```bash
-   pytest server/tests/ -m "not integration" --strict-markers -q \
-     --cov=dashboard --cov-fail-under=80
+   npm test              # vitest run (unit only, excludes *.int.test.ts) with coverage
    ```
    If the fix touches a transport or external boundary, also run its
-   integration tests via the Docker Compose recipe in `docs/testing.md`.
+   integration tests (`npm run test:integration`) via the Docker Compose
+   recipe in `docs/testing.md`.
 6. **If all checks pass**, note the fix is ready.
 7. **If checks fail**, diagnose and fix before moving on.
 
@@ -97,8 +98,8 @@ Present a remediation summary:
 
 ## Important notes
 
-- **Never skip quality checks** — every fix must pass black, ruff,
-  `mypy --strict`, and the unit tests (coverage gate 80%).
+- **Never skip quality checks** — every fix must pass Prettier, ESLint,
+  `tsc --noEmit`, and the unit tests (coverage gate 80%).
 - **One fix at a time** — don't batch unrelated fixes into one change.
 - **Preserve existing tests** — never remove or weaken a test to make a fix
   pass; if a test reveals a real problem, fix the code.
@@ -107,4 +108,4 @@ Present a remediation summary:
 - **Ask before large refactors** — if a fix would touch >5 files, confirm
   with the user first.
 - **Follow `CLAUDE.md` conventions** — all fixes must adhere to the
-  project's standards and the `dashboard.*` module split.
+  project's standards and the dashboard module split.
