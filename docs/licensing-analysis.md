@@ -34,14 +34,14 @@ GPL-3.0 is a **strong copyleft** license. The key obligation: if you distribute 
 **What counts as a derivative work?** This is the central question for this project. The FSF's guidance and established industry practice both focus on the **process boundary and the intimacy of coupling** between components:
 
 - Code that is **statically or dynamically linked** into the same binary as GPL code is almost universally considered a derivative work.
-- Code that **calls a GPL binary as a subprocess** (e.g., invoking `timekpra` via `subprocess.run()`) and communicates only through standard pipes, sockets, or command-line arguments is generally considered **separate** and thus not a derivative work. The FSF's own FAQ acknowledges this distinction.
+- Code that **calls a GPL binary as a subprocess** (e.g., invoking `timekpra` via `child_process.execFile()`) and communicates only through standard pipes, sockets, or command-line arguments is generally considered **separate** and thus not a derivative work. The FSF's own FAQ acknowledges this distinction.
 - Code that **communicates with a GPL service over a network socket or REST API** (e.g., the dashboard calling AdGuard Home's HTTP API) is similarly understood to be separate, since there is no code-level coupling.
 
 The `timekpr-webui` and `timekpr-next-remote` projects both invoke `timekpra` as a subprocess over SSH, and neither treats itself as GPL-3.0 software as a result (timekpr-webui uses MIT). This is consistent with the above analysis.
 
 **For this project:** The custom dashboard never imports, links against, or embeds any GPL-3.0 code. It calls `timekpra` as a subprocess and calls AdGuard Home's REST API over HTTP. It invokes Ansible as a separate process. Under the process-boundary interpretation, the dashboard is not a derivative work of any GPL-3.0 component and is not subject to GPL-3.0 copyleft.
 
-However, if the dashboard were ever refactored to **import Timekpr-nExT Python modules directly** (e.g., to read its data files using its own parsing logic), that would collapse the process boundary and likely create a derivative work.
+However, if the dashboard were ever refactored to **incorporate Timekpr-nExT's code directly** (e.g., embedding a Python interpreter to import its modules, or porting/vendoring its data-file parsing logic), that would collapse the process boundary and likely create a derivative work. The dashboard being TypeScript makes the in-process import impossible by construction — Timekpr-nExT and Ansible are Python and cannot be `import`ed from Node — which turns the license boundary from a convention into a structural property. Keep it that way.
 
 ### GPL-2.0 (e2guardian)
 
@@ -76,7 +76,7 @@ Under the integration architecture described in the tech stack document, **GPL-3
 
 The GPL-licensed components remain GPL-licensed. The custom dashboard code is free to use whatever license the project owner chooses.
 
-**The main architectural risk to watch:** If a future developer adds a Python import of a Timekpr-nExT internal module (e.g., to avoid a subprocess call), that import would likely create a derivative-work relationship and subject the dashboard module containing the import to GPL-3.0. The process boundary must be maintained deliberately.
+**The main architectural risk to watch:** If a future developer collapses the process boundary — embedding an interpreter to load a Timekpr-nExT internal module, or porting GPL source into the dashboard to avoid a subprocess call — that would likely create a derivative-work relationship and subject the affected dashboard code to GPL-3.0. The process boundary must be maintained deliberately.
 
 ---
 

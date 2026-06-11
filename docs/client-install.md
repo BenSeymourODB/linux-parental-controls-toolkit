@@ -48,11 +48,13 @@ dashboard, has a short TTL, and is single-use.
    - e2guardian: the Mint/Ubuntu package, plus the recommended
      `libssl-dev` and bundled lists as needed.
 3. **Install packages**
-   - `apt install timekpr-next activitywatch e2guardian iptables-persistent libnotify-bin libcanberra-gtk3-module python3-dbus`
+   - `apt install timekpr-next activitywatch e2guardian iptables-persistent libnotify-bin libcanberra-gtk3-module`
    - Install the `pct-client` agent package (the system-level
      `pct-client-bridge` service plus the per-user
      `pct-client-agent` user service). Built from this repo's
-     `client/agent/` and shipped as a `.deb` from GitHub Releases.
+     `client/agent/` (TypeScript) and shipped as a `.deb` from
+     GitHub Releases; the package bundles its own Node runtime, so
+     no distro Node package is required.
 4. **Configure Timekpr-nExT**
    - Enable the daemon. Initial policy is empty; the server will push
      policy via `timekpra` after enrolment completes.

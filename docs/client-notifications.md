@@ -12,6 +12,13 @@ continues to do the actual session-kill enforcement; the agent
 layers notifications, per-app force-close, and a user-friendly grace
 period on top.
 
+Both agent components are TypeScript (the same language as the
+dashboard), shipped as a `.deb` that bundles its own Node runtime
+under `/usr/lib/pct-client/` — the distro's Node packages are too old
+on the target platforms, so we don't depend on them. All desktop
+integration (notifications, sound) goes through the desktop's own
+command-line tools as subprocesses, not native bindings.
+
 ## Goals
 
 For each supervised user on each managed client:
@@ -73,11 +80,14 @@ nothing is killed without warning.
   render warnings locally without round-tripping the server. The
   authoritative budget value (policy + active grants) is pushed
   down by the server on policy/grant changes and cached locally.
-- Renders notifications via libnotify (`dbus-python` →
-  `org.freedesktop.Notifications`). Falls back to `notify-send` if
-  the D-Bus bind fails.
-- Plays sounds via `libcanberra` (`canberra-gtk-play`), respecting
-  the user's desktop sound theme and a per-policy "muted" flag.
+- Renders notifications via the desktop notification stack: `gdbus
+  call` against `org.freedesktop.Notifications` (needed for updating
+  the countdown toast in place), falling back to `notify-send` if
+  that fails. Both are subprocess invocations — no native D-Bus
+  bindings.
+- Plays sounds via `libcanberra`'s `canberra-gtk-play` (subprocess),
+  respecting the user's desktop sound theme and a per-policy
+  "muted" flag.
 - Force-closes the user's own processes when instructed
   (`SIGTERM` → wait 5s → `SIGKILL`), which does not require
   privilege escalation since they are the user's own processes.
@@ -95,7 +105,7 @@ trigger.
 ## Event channel
 
 ```
-Dashboard (FastAPI)
+Dashboard (Fastify)
    │
    │  WebSocket /api/events/stream
    │  Bearer <client_token>

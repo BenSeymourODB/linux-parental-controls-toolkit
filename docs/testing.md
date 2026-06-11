@@ -19,7 +19,7 @@ Testing in this project has two tiers:
 **Tier 2 — Integration tests** (slower, Docker service containers)
 - Spin up the real upstream tool (ActivityWatch, AdGuard Home, OpenSSH) and
   exercise the actual network or process boundary.
-- Marked `@pytest.mark.integration`; excluded from the unit-test job.
+- Named `*.int.test.ts`; excluded from the unit-test run.
 - Run on PRs to `main` and nightly via `integration.yml`.
 
 The split is intentional. Integration tests give confidence that the
@@ -33,60 +33,75 @@ feedback during feature development. Neither replaces the other.
 ```
 server/
 └── tests/
-    ├── conftest.py              # shared fixtures (test DB, mock subprocess, etc.)
+    ├── helpers/                 # shared fixtures (test DB, subprocess mock, etc.)
     ├── stubs/
     │   └── timekpra             # stub CLI recorded by SSH integration tests
     ├── policy/
-    │   ├── test_budget.py
-    │   ├── test_grant_ledger.py
-    │   ├── test_migrations.py
-    │   └── test_schedule.py
+    │   ├── budget.test.ts
+    │   ├── grant-ledger.test.ts
+    │   ├── migrations.test.ts
+    │   └── schedule.test.ts
     ├── api/
-    │   ├── test_auth.py
-    │   ├── test_grants.py
-    │   ├── test_policy_endpoints.py
-    │   └── test_rate_limiting.py
+    │   ├── auth.test.ts
+    │   ├── grants.test.ts
+    │   ├── policy-endpoints.test.ts
+    │   └── rate-limiting.test.ts
     ├── transport/
     │   ├── ssh/
-    │   │   ├── test_timekpra_invocation.py   # unit
-    │   │   ├── test_offline_queue.py          # unit
-    │   │   └── test_integration.py            # @pytest.mark.integration
+    │   │   ├── timekpra-invocation.test.ts   # unit
+    │   │   ├── offline-queue.test.ts          # unit
+    │   │   └── ssh.int.test.ts                # integration
     │   ├── ansible/
-    │   │   ├── test_playbook_generation.py   # unit
-    │   │   └── test_integration.py            # @pytest.mark.integration (Molecule)
+    │   │   ├── playbook-generation.test.ts   # unit
+    │   │   └── ansible.int.test.ts            # integration (Molecule)
     │   ├── activitywatch/
-    │   │   ├── test_normalisation.py          # unit
-    │   │   └── test_integration.py            # @pytest.mark.integration
+    │   │   ├── normalisation.test.ts          # unit
+    │   │   └── activitywatch.int.test.ts      # integration
     │   └── adguard/
-    │       ├── test_client.py                 # unit
-    │       └── test_integration.py            # @pytest.mark.integration
+    │       ├── client.test.ts                 # unit
+    │       └── adguard.int.test.ts            # integration
     ├── events/
-    │   ├── test_broadcaster.py
-    │   └── test_event_schemas.py
+    │   ├── broadcaster.test.ts
+    │   └── event-schemas.test.ts
     ├── web/
-    │   └── test_admin_routes.py
+    │   └── admin-routes.test.ts
     └── integrations/
-        ├── test_token_scoping.py
-        └── test_idempotency.py
+        ├── token-scoping.test.ts
+        └── idempotency.test.ts
 ```
 
 ---
 
-## pytest configuration
+## Vitest configuration
 
-`server/pyproject.toml` (relevant section):
+Two run configurations, selected by filename convention:
 
-```toml
-[tool.pytest.ini_options]
-addopts = "--strict-markers -q"
-markers = [
-    "integration: requires live external services (deselect with -m 'not integration')",
-]
-testpaths = ["tests"]
+- `npm test` — unit tests only: runs `tests/**/*.test.ts`, **excluding**
+  `*.int.test.ts`. Includes coverage (`@vitest/coverage-v8`) with the
+  80 % gate.
+- `npm run test:integration` — integration tests only: runs
+  `tests/**/*.int.test.ts`. Requires the Docker services described in
+  "Integration tests — local reproduction" below.
+
+`server/vitest.config.ts` (relevant section):
+
+```ts
+export default defineConfig({
+  test: {
+    include: ["tests/**/*.test.ts"],
+    exclude: ["tests/**/*.int.test.ts", "node_modules/**"],
+    coverage: {
+      provider: "v8",
+      include: ["src/**"],
+      thresholds: { lines: 80, branches: 80, functions: 80, statements: 80 },
+    },
+  },
+});
 ```
 
-`--strict-markers` means any test decorated with an unregistered marker fails
-immediately — a useful safeguard against typos like `@pytest.mark.integation`.
+The filename convention replaces pytest's `@pytest.mark.integration`
+marker: a test that needs a live service goes in an `*.int.test.ts`
+file, full stop. There is no per-test marker to typo.
 
 ---
 
@@ -94,96 +109,107 @@ immediately — a useful safeguard against typos like `@pytest.mark.integation`.
 
 ### Transport — subprocess (SSH + Ansible)
 
-Never invoke `timekpra` or `ansible-playbook` in unit tests. Patch at the
-`asyncio` level so the transport code under test cannot tell the difference:
+Never invoke `timekpra` or `ansible-playbook` in unit tests. Mock
+`node:child_process` at the module level so the transport code under
+test cannot tell the difference:
 
-```python
-import asyncio
-from unittest.mock import AsyncMock, patch, MagicMock
+```ts
+import { describe, expect, it, vi } from "vitest";
 
-@patch("asyncio.create_subprocess_exec")
-async def test_set_daily_limit(mock_exec):
-    proc = MagicMock()
-    proc.communicate = AsyncMock(return_value=(b"OK\n", b""))
-    proc.returncode = 0
-    mock_exec.return_value = proc
+const execFile = vi.hoisted(() => vi.fn());
+vi.mock("node:child_process", () => ({ execFile }));
 
-    await ssh_transport.set_daily_limit(user="alice", seconds=7200)
+it("sets the daily limit with the right timekpra arguments", async () => {
+  execFile.mockImplementation((_cmd, _args, _opts, cb) =>
+    cb(null, "OK\n", ""),
+  );
 
-    mock_exec.assert_called_once_with(
-        "timekpra",
-        "--settimelimitforday", "alice", "7200",
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
+  await sshTransport.setDailyLimit({ user: "alice", seconds: 7200 });
+
+  expect(execFile).toHaveBeenCalledWith(
+    "timekpra",
+    ["--settimelimitforday", "alice", "7200"],
+    expect.anything(),
+    expect.any(Function),
+  );
+});
 ```
 
 Key assertions to make for every timekpra call:
 - Correct subcommand and argument order
 - Correct user name passed (never a different user due to a scoping bug)
-- Non-zero returncode raises a typed exception (not a silent pass)
-- Malformed stdout raises a typed exception (not a silent pass)
+- Non-zero exit code rejects with a typed error (not a silent pass)
+- Malformed stdout rejects with a typed error (not a silent pass)
 
 ### Transport — REST (ActivityWatch, AdGuard Home)
 
-Use `respx` (mock transport for `httpx`) to intercept outbound HTTP without
-a live server:
+The REST clients use the global `fetch` (undici). Use undici's
+`MockAgent` to intercept outbound HTTP without a live server:
 
-```python
-import respx
-import httpx
+```ts
+import { MockAgent, setGlobalDispatcher } from "undici";
 
-@respx.mock
-async def test_push_blocklist():
-    respx.put("http://adguard.local/control/filtering/set_rules").mock(
-        return_value=httpx.Response(200)
-    )
-    await adguard_client.push_blocklist(rules=["||ads.example.com^"])
-    assert respx.calls.call_count == 1
+it("pushes a blocklist", async () => {
+  const agent = new MockAgent();
+  agent.disableNetConnect();
+  setGlobalDispatcher(agent);
+
+  agent
+    .get("http://adguard.local")
+    .intercept({ path: "/control/filtering/set_rules", method: "PUT" })
+    .reply(200);
+
+  await adguardClient.pushBlocklist({ rules: ["||ads.example.com^"] });
+
+  agent.assertNoPendingInterceptors();
+});
 ```
 
 Test the following error cases for every REST client:
-- 401 Unauthorized — raises `AuthError`
+- 401 Unauthorized — rejects with `AuthError`
 - 409 Conflict — handled idempotently (no exception)
-- Connection refused / timeout — raises `TransportError` with retry context
+- Connection refused / timeout — rejects with `TransportError` carrying
+  retry context
 
 ### Policy model
 
-Use a SQLite in-memory database (`:memory:`) via a pytest fixture:
+Use an in-memory SQLite database via a shared helper. better-sqlite3
+supports `:memory:` natively, and the Drizzle migrations run against it
+in milliseconds:
 
-```python
-import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session
-from dashboard.policy.models import Base
+```ts
+import Database from "better-sqlite3";
+import { drizzle } from "drizzle-orm/better-sqlite3";
+import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 
-@pytest.fixture
-def db():
-    engine = create_engine("sqlite:///:memory:")
-    Base.metadata.create_all(engine)
-    with Session(engine) as session:
-        yield session
+export function testDb() {
+  const sqlite = new Database(":memory:");
+  const db = drizzle(sqlite);
+  migrate(db, { migrationsFolder: "drizzle" });
+  return db;
+}
 ```
 
 This keeps policy tests hermetic and fast — no file I/O, no leftover state.
 
-### FastAPI routes
+### HTTP routes
 
-Use FastAPI's built-in `TestClient`:
+Use Fastify's built-in injection — no sockets, no port binding:
 
-```python
-from fastapi.testclient import TestClient
-from dashboard.web.app import app
+```ts
+import { buildApp } from "../src/web/app.js";
 
-client = TestClient(app)
+it("grant endpoint is idempotent by source_ref", async () => {
+  const app = await buildApp({ db: testDb() });
+  const payload = { user: "alice", seconds: 1800, source_ref: "chore-abc-001" };
 
-def test_grant_endpoint_idempotent():
-    payload = {"user": "alice", "seconds": 1800, "source_ref": "chore-abc-001"}
-    r1 = client.post("/api/grants", json=payload, headers=auth_headers)
-    r2 = client.post("/api/grants", json=payload, headers=auth_headers)
-    assert r1.status_code == 201
-    assert r2.status_code == 200       # idempotent: same grant, not a new one
-    assert r1.json()["id"] == r2.json()["id"]
+  const r1 = await app.inject({ method: "POST", url: "/api/grants", headers: authHeaders, payload });
+  const r2 = await app.inject({ method: "POST", url: "/api/grants", headers: authHeaders, payload });
+
+  expect(r1.statusCode).toBe(201);
+  expect(r2.statusCode).toBe(200); // idempotent: same grant, not a new one
+  expect(r1.json().id).toBe(r2.json().id);
+});
 ```
 
 ---
@@ -192,29 +218,29 @@ def test_grant_endpoint_idempotent():
 
 | Module | Target | Notes |
 |---|---|---|
-| `dashboard.policy` | 90 % | Core business logic; highest priority |
-| `dashboard.api` | 85 % | All routes and auth paths |
-| `dashboard.transport.*` | 80 % | Unit tests only; integration tests supplement |
-| `dashboard.events` | 80 % | WebSocket broadcaster and schema validation |
-| `dashboard.integrations` | 85 % | Idempotency is critical |
-| `dashboard.web` | 70 % | Route rendering; UI tested manually |
-| Overall | 80 % | Enforced in CI via `--cov-fail-under=80` |
+| `src/policy` | 90 % | Core business logic; highest priority |
+| `src/api` | 85 % | All routes and auth paths |
+| `src/transport/*` | 80 % | Unit tests only; integration tests supplement |
+| `src/events` | 80 % | WebSocket broadcaster and schema validation |
+| `src/integrations` | 85 % | Idempotency is critical |
+| `src/web` | 70 % | Route wiring; UI tested manually |
+| Overall | 80 % | Enforced in CI via the Vitest coverage thresholds |
 
 ---
 
 ## Policy module — what to test
 
-### `tests/policy/test_grant_ledger.py`
+### `tests/policy/grant-ledger.test.ts`
 
-- Second `create_grant` with the same `source_ref` returns the existing
+- Second `createGrant` with the same `source_ref` returns the existing
   `Grant` row, not a new one (idempotency invariant).
 - Revoking a grant marks it revoked but does not delete the row
   (immutability invariant).
-- `budget_remaining` = base policy seconds + sum of unrevoked grant seconds.
-- A revoked grant is excluded from `budget_remaining`.
-- `budget_remaining` never goes below zero (floor invariant).
+- `budgetRemaining` = base policy seconds + sum of unrevoked grant seconds.
+- A revoked grant is excluded from `budgetRemaining`.
+- `budgetRemaining` never goes below zero (floor invariant).
 
-### `tests/policy/test_schedule.py`
+### `tests/policy/schedule.test.ts`
 
 - A schedule with no exceptions evaluates correctly at boundaries
   (midnight, day-change).
@@ -224,18 +250,19 @@ def test_grant_endpoint_idempotent():
 - Clock-skew tolerance: a sample timestamped ≤60 s in the future is
   accepted; >60 s is rejected.
 
-### `tests/policy/test_migrations.py`
+### `tests/policy/migrations.test.ts`
 
-- `alembic upgrade head` on an empty DB succeeds.
-- `alembic downgrade base` after `upgrade head` succeeds.
-- Re-running `upgrade head` on an already-migrated DB is a no-op (alembic
-  already guarantees this, but the test documents the expectation).
+- Applying all drizzle-kit migrations to an empty DB succeeds.
+- Re-applying on an already-migrated DB is a no-op (drizzle's journal
+  guarantees this, but the test documents the expectation).
+- The migrated schema matches the Drizzle schema definition
+  (`drizzle-kit check` is also run in CI to catch drift).
 
 ---
 
 ## API module — what to test
 
-### `tests/api/test_auth.py`
+### `tests/api/auth.test.ts`
 
 - Request with no `Authorization` header → 401.
 - Request with an expired token → 401.
@@ -243,28 +270,28 @@ def test_grant_endpoint_idempotent():
 - Request with a token scoped to `grants:write` hitting a `policy:write`
   endpoint → 403 (wrong scope, not a missing token).
 
-### `tests/api/test_rate_limiting.py`
+### `tests/api/rate-limiting.test.ts`
 
 - N+1 requests within the rate-limit window from the same integration token
   → 429 on the N+1th request.
 - Requests from two different tokens do not share a rate-limit bucket.
 
-### `tests/api/test_grants.py`
+### `tests/api/grants.test.ts`
 
 - POST with valid payload and token → 201 with `Grant` schema.
 - POST same `source_ref` again → 200 with same `Grant` (idempotency).
-- POST with missing `source_ref` → 422.
-- POST that would push `budget_remaining` negative → behaviour is documented
+- POST with missing `source_ref` → 400 from zod validation.
+- POST that would push `budgetRemaining` negative → behaviour is documented
   (either capped at zero or rejected — pick one and test it).
 
 ---
 
 ## Transport module — what to test
 
-### `tests/transport/ssh/test_timekpra_invocation.py`
+### `tests/transport/ssh/timekpra-invocation.test.ts`
 
-For each public method of the SSH transport (e.g. `set_daily_limit`,
-`get_time_used`, `kill_session`):
+For each public method of the SSH transport (e.g. `setDailyLimit`,
+`getTimeUsed`, `killSession`):
 
 - The correct `timekpra` subcommand is called.
 - Arguments are passed in the order `timekpra` expects (the CLI is
@@ -272,44 +299,46 @@ For each public method of the SSH transport (e.g. `set_daily_limit`,
 - The user identifier is always the one passed to the method (no
   scoping-leak bugs).
 - stdout is parsed correctly for the happy path.
-- A non-zero exit code raises `TimekpraError`.
-- Unparseable stdout raises `TimekpraParseError`.
+- A non-zero exit code rejects with `TimekpraError`.
+- Unparseable stdout rejects with `TimekpraParseError`.
 
-### `tests/transport/activitywatch/test_normalisation.py`
+### `tests/transport/activitywatch/normalisation.test.ts`
 
 - A raw `aw-server` window-event response is normalised to a `UsageSample`
-  with the correct `duration_seconds` and `app_name`.
+  with the correct `durationSeconds` and `appName`.
 - Overlapping events (a client-clock-skew artifact) are deduplicated.
 - An event with a future timestamp beyond the tolerance window is dropped,
   not summed into the total.
 - An empty bucket response produces an empty list, not an exception.
+- The raw response is validated with a zod schema before use; a response
+  that doesn't match the expected shape rejects with a typed error.
 
-### `tests/transport/adguard/test_client.py`
+### `tests/transport/adguard/client.test.ts`
 
 - `disabled` mode: all public methods are no-ops that return immediately.
 - `external` mode: methods make REST calls to the configured URL.
 - `managed` mode: `start()` spawns the AdGuard Home subprocess; `stop()`
   terminates it; REST calls go to `localhost`.
-- All three modes implement the same interface (duck-type compatible).
+- All three modes implement the same TypeScript interface.
 
 ---
 
 ## Events module — what to test
 
-### `tests/events/test_broadcaster.py`
+### `tests/events/broadcaster.test.ts`
 
 - A `grant.applied` event delivered to the broadcaster is received by all
   connected WebSocket clients.
-- A slow consumer (simulated with `asyncio.sleep`) does not block the
-  broadcaster from delivering to other consumers.
+- A slow consumer does not block the broadcaster from delivering to other
+  consumers.
 - A disconnected client is removed from the subscriber list without an
-  unhandled exception.
+  unhandled rejection.
 
-### `tests/events/test_event_schemas.py`
+### `tests/events/event-schemas.test.ts`
 
 - Each event type (`grant.applied`, `policy.changed`, `enforce.force_close`,
   `enforce.session_lock`, `lockout.cleared`) serialises to valid JSON and
-  deserialises back to the correct schema without data loss.
+  parses back through its zod schema without data loss.
 
 ---
 
@@ -350,7 +379,7 @@ cd server
 AW_SERVER_URL=http://localhost:5600 \
 ADGUARD_URL=http://localhost:3000 \
 SSH_TARGET_HOST=localhost SSH_TARGET_PORT=2222 \
-  pytest tests/ -m integration -v
+  npm run test:integration
 ```
 
 ---
@@ -358,7 +387,9 @@ SSH_TARGET_HOST=localhost SSH_TARGET_PORT=2222 \
 ## Ansible playbooks — Molecule
 
 Playbook integration tests use [Molecule](https://ansible.readthedocs.io/projects/molecule/)
-with the Docker driver. The scenario lives at
+with the Docker driver. (Molecule is part of the Ansible ecosystem and is
+installed with `pip` into a throwaway environment — it never enters the
+dashboard's dependency tree.) The scenario lives at
 `client/ansible/molecule/default/`. Running it locally:
 
 ```bash

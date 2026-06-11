@@ -103,7 +103,7 @@ protected against.
 ```mermaid
 flowchart LR
     Users["<b>Consumers</b><br/>admin desktop<br/>parent / child phone<br/>external integrators<br/>(e.g. family calendar)"]
-    Server["<b>Dashboard server</b><br/>Docker container · Python · FastAPI<br/>policy + grant store · transport runners<br/>optional AdGuard Home (managed or external)"]
+    Server["<b>Dashboard server</b><br/>Docker container · TypeScript · Node.js · Fastify<br/>policy + grant store · transport runners<br/>optional AdGuard Home (managed or external)"]
     Client["<b>Supervised client</b><br/>Linux Mint / Cinnamon<br/>Timekpr-nExT · ActivityWatch · e2guardian · iptables<br/>pct-client agent (toasts · sound · per-app close)"]
 
     Users -->|HTTPS · JSON · webhooks| Server
@@ -111,7 +111,7 @@ flowchart LR
     Client -.->|telemetry · liveness| Server
 ```
 
-Component-level detail (the four FastAPI route groups, each transport
+Component-level detail (the four Fastify route groups, each transport
 runner and its client target, the policy model, the event types) lives
 in [`docs/architecture.md`](docs/architecture.md).
 
@@ -138,8 +138,10 @@ published image free of bundled GPL binaries:
   `managed`, in which the dashboard fetches AdGuard from upstream on
   first run into the data volume and supervises it. See
   [`docs/server-deployment.md`](docs/server-deployment.md).
-- **Ansible** (GPL-3.0): installed into a separate, isolated venv inside the
-  container's data volume on first run.
+- **Ansible** (GPL-3.0): installed into a separate, isolated Python venv
+  inside the container's data volume on first run. (The image carries a
+  stock PSF-licensed Python 3 interpreter solely to host this venv; no
+  dashboard code is Python.)
 - **Timekpr-nExT, ActivityWatch, e2guardian** (GPL-3.0 / MPL-2.0 / GPL-2.0):
   installed on the *client* by the client enrollment script via the
   distribution's own package manager; the server never ships their binaries.

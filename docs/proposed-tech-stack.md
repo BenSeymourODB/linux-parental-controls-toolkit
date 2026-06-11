@@ -25,23 +25,87 @@ The only fully custom layer. Responsibilities:
 **Technology choices for the dashboard itself** are left open at this stage, but the architecture favours a lightweight Python web framework (FastAPI or Flask) backed by SQLite for policy state, which is consistent with the Python tooling used across the rest of the stack. A React or plain HTML/JS frontend served by the same process is sufficient; no separate frontend build pipeline is required for the admin-only use case.
 
 > **Refinement (post-original-draft):** The "admin web dashboard" layer
-> evolves to expose **two frontends behind one FastAPI process**:
+> evolves to expose **two frontend surfaces behind one server process**:
 >
-> - **`/admin/*`** — server-rendered Jinja2 + HTMX with small Svelte
->   "islands" for high-interactivity bits (live burndown charts, schedule
->   editors). Desktop admin experience.
-> - **`/app/*`** — a SvelteKit static build (PWA-capable) for the
->   mobile-first user-facing experience: per-child status screens,
->   parents adjusting limits from a phone, home-screen install with a
->   service worker for live updates.
+> - **`/admin/*`** — the desktop admin experience (policy editors, live
+>   burndown charts, schedule editors).
+> - **`/app/*`** — a PWA-capable static build for the mobile-first
+>   user-facing experience: per-child status screens, parents adjusting
+>   limits from a phone, home-screen install with a service worker for
+>   live updates.
 > - **`/api/*`** — JSON API consumed by both frontends *and* by external
 >   integrations (e.g. a family-calendar reward system that grants
 >   screen time on chore completion — see "External integrations" in
 >   `docs/architecture.md`).
 >
-> Both frontends are produced at image-build time; the runtime image
-> stays Python-only. The CI pipeline gains a Node build step but the
-> Docker image does not gain a Node runtime.
+> The frontend is produced at image-build time as static assets; the
+> runtime image contains a single application runtime. See the stack
+> decision below for the concrete technologies.
+
+> **Stack decision — TypeScript end-to-end (2026-06, supersedes the
+> Python/FastAPI choice above):** before any feature code landed, the
+> dashboard's implementation language was re-evaluated against the
+> maintainer's own strengths (C# and TypeScript) and the surrounding
+> design. Three candidates were compared: staying on Python/FastAPI,
+> Node.js + Svelte end-to-end, and a C#/ASP.NET Core backend with a
+> Svelte frontend.
+>
+> **Chosen: TypeScript end-to-end.** The deciding factors:
+>
+> 1. The frontends were *already* designed as Svelte/SvelteKit, i.e.
+>    TypeScript. A C# backend would still leave two languages and two
+>    toolchains (dotnet + Node) to maintain; a TypeScript backend
+>    collapses the whole custom surface into one language.
+> 2. Shared types: the zod schemas that validate `/api/*` requests are
+>    the same types the admin UI, the PWA, and (via a published types
+>    package, later) external integrators consume. Neither Python nor
+>    C# can offer that without code generation.
+> 3. SSH ergonomics: the mature `ssh2` library covers the
+>    exec-over-SSH and port-forwarding patterns this design depends
+>    on; the C# equivalent (SSH.NET) is less actively maintained, and
+>    there is essentially no prior art for .NET-driven `timekpra`
+>    orchestration.
+> 4. Contributor pool for a niche Linux OSS tool is materially larger
+>    for TypeScript than for C#.
+>
+> What we give up from Python: in-language affinity with the
+> Ansible/Timekpr ecosystem (acceptable — the license boundary already
+> forces subprocess/REST isolation, so the dashboard never imports that
+> ecosystem anyway) and the smallest possible image (~50 MB larger with
+> Node). The HTMX + "Svelte islands" hybrid for `/admin` is dropped:
+> it existed to avoid adopting a Node toolchain in a Python project,
+> and that rationale evaporates once the backend is Node. Both surfaces
+> are now route groups of **one SvelteKit project** built statically.
+>
+> Concrete mapping (use this table when reading older issues or docs):
+>
+> | Concern | Python-era choice | Current choice |
+> |---|---|---|
+> | Language / runtime | Python 3.11+ | TypeScript (strict), Node.js 22 LTS |
+> | Web framework | FastAPI + Uvicorn | Fastify 5 |
+> | Validation / DTOs | Pydantic | zod |
+> | ORM / DB access | SQLAlchemy | Drizzle ORM + better-sqlite3 |
+> | Migrations | Alembic | drizzle-kit |
+> | Admin frontend | Jinja2 + HTMX + Svelte islands | SvelteKit (`/admin` routes) |
+> | PWA frontend | Separate SvelteKit project | Same SvelteKit project (`/app` routes) |
+> | Subprocess calls | `asyncio.create_subprocess_exec` | `node:child_process` (`execFile`/`spawn`) |
+> | SSH | AsyncSSH | ssh2 |
+> | HTTP client | httpx | global fetch (undici) |
+> | Scheduler | APScheduler | croner |
+> | Auth primitives | passlib (Argon2), PyJWT | argon2, jose |
+> | WebSockets | FastAPI WebSocket | @fastify/websocket |
+> | Settings | pydantic-settings | zod-validated env loader |
+> | Tests | pytest (+respx) | Vitest (+undici MockAgent) |
+> | Format / lint / types | black / ruff / mypy --strict | Prettier / ESLint / tsc --noEmit |
+> | Package manifest | `server/pyproject.toml` | `server/package.json` |
+>
+> The license posture is unchanged in every respect (see
+> `licensing-analysis.md`): GPL tools are reached only via subprocess,
+> REST, or config files, and the Docker image ships no GPL binaries.
+> One practical wrinkle: the image now carries a stock Python 3
+> interpreter *solely* so the first-run bootstrap can create the
+> isolated Ansible venv in the data volume (Python itself is
+> PSF-licensed, not GPL). No dashboard code is Python.
 
 ---
 
@@ -166,7 +230,7 @@ These are the system-level mechanisms that the agent layer configures and that a
 flowchart TB
     subgraph AdminBox["Admin machine (or headless server)"]
         direction TB
-        Dash["<b>Custom dashboard</b><br/>Python / SQLite<br/>serves web UI on localhost or LAN"]
+        Dash["<b>Custom dashboard</b><br/>TypeScript (Node.js) / SQLite<br/>serves web UI on localhost or LAN"]
         AGH["<b>AdGuard Home</b><br/>optional, per-client DNS blocklists"]
         AnsibleCN["<b>Ansible control node</b><br/>SSH key access to all clients"]
         IPA["<b>FreeIPA server</b><br/>optional, multi-machine identity"]

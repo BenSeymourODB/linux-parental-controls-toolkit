@@ -10,12 +10,18 @@ keeps the published image free of bundled GPL binaries.
 
 The image is **dashboard code only**:
 
-- Python 3.11 slim base.
-- The `dashboard` Python package and its non-GPL Python dependencies
-  (FastAPI, Uvicorn, SQLAlchemy, Alembic, Pydantic, Jinja2, HTTPX,
-  Paramiko or AsyncSSH, APScheduler, etc.).
+- `node:22-slim` base (multi-stage build: TypeScript and the SvelteKit
+  frontend are compiled in a builder stage; the runtime stage gets only
+  the compiled output and production dependencies).
+- The `dashboard` Node package and its non-GPL npm dependencies
+  (Fastify, zod, Drizzle ORM, better-sqlite3, ssh2, croner, argon2,
+  jose, etc.), plus the static frontend build.
+- A stock Python 3 interpreter (PSF-licensed, from the distro's
+  `python3-venv` package). It exists **solely** so first-run setup can
+  create the isolated Ansible venv in the data volume; no dashboard
+  code is Python.
 - A small entrypoint script that performs first-run setup and then
-  starts Uvicorn.
+  starts the Node server.
 
 The image deliberately does **not** include:
 
@@ -56,15 +62,15 @@ container.
 ```
 
 The dashboard's database schema, the read-only copy of playbooks shipped
-inside the image, and Alembic migrations all live in the image and are
-reconciled into `/data` on each start.
+inside the image, and the drizzle-kit SQL migrations all live in the
+image and are reconciled into `/data` on each start.
 
 ## First-run setup
 
 On container start, the entrypoint runs these steps idempotently:
 
-1. **Schema migration** — `alembic upgrade head` against
-   `/data/policy.sqlite`.
+1. **Schema migration** — apply the committed drizzle-kit migrations
+   against `/data/policy.sqlite`.
 2. **Ansible bootstrap** — if `/data/ansible/venv` is missing, create it
    and `pip install ansible-core` (downloaded from PyPI at runtime, not
    from the image). Sync `playbooks/` from the image.
@@ -81,7 +87,7 @@ On container start, the entrypoint runs these steps idempotently:
    generate one. The public key is shown in the dashboard's "Add client"
    flow for the admin to install on each new client (or, more commonly,
    for the client install script to fetch via a one-time enrollment URL).
-5. Start Uvicorn on `0.0.0.0:8000` (default).
+5. Start the Node server on `0.0.0.0:8000` (default).
 
 If any of the optional downloads fail (no network, etc.), the dashboard
 starts anyway with the affected feature disabled and surfaces an error
@@ -234,7 +240,7 @@ the image.
 
 ## Upgrade path
 
-`docker pull` a newer image tag and restart. The entrypoint's
-`alembic upgrade head` handles schema migrations. The Ansible venv inside
+`docker pull` a newer image tag and restart. The entrypoint's migration
+step applies any new drizzle-kit migrations. The Ansible venv inside
 `/data/ansible/venv` is pinned per image release; upgrades reconcile it
 on first start under the new tag.
