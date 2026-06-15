@@ -30,6 +30,15 @@ function migrationTableExists(sqlite: Database.Database): boolean {
   return row !== undefined;
 }
 
+/** How many migrations the migrator believes it has applied. */
+function appliedMigrationCount(sqlite: Database.Database): number {
+  const value = sqlite.prepare("SELECT count(*) FROM __drizzle_migrations").pluck().get();
+  if (typeof value !== "number") {
+    throw new Error(`expected a numeric count, got ${typeof value}`);
+  }
+  return value;
+}
+
 describe("policy migrations", () => {
   it("applies all migrations to an empty database", () => {
     const sqlite = new Database(":memory:");
@@ -48,7 +57,13 @@ describe("policy migrations", () => {
     const db = drizzle(sqlite);
 
     migrate(db, { migrationsFolder });
+    const countAfterFirst = appliedMigrationCount(sqlite);
+
     expect(() => migrate(db, { migrationsFolder })).not.toThrow();
+    // Re-applying must not record any additional migrations — the journal's
+    // bookkeeping count is unchanged. (Phase-1 empty journal: stays 0; the
+    // assertion keeps holding once Phase 2 adds real migrations.)
+    expect(appliedMigrationCount(sqlite)).toBe(countAfterFirst);
 
     sqlite.close();
   });
