@@ -87,10 +87,12 @@ export function registerFrontend(app: FastifyInstance, settings: Settings): void
       );
       // Trailing-slash form: redirect to the canonical URL so the page's
       // relative asset paths resolve against `/` rather than `/<surface>/`.
-      scope.get(
-        `${url}/`,
-        (_request: FastifyRequest, reply: FastifyReply): FastifyReply => reply.redirect(url, 308),
-      );
+      // Preserve any query string so client-side state survives the redirect.
+      scope.get(`${url}/`, (request: FastifyRequest, reply: FastifyReply): FastifyReply => {
+        const queryStart = request.url.indexOf("?");
+        const target = queryStart === -1 ? url : url + request.url.slice(queryStart);
+        return reply.redirect(target, 308);
+      });
     }
   });
 }

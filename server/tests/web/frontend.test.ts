@@ -72,10 +72,28 @@ describe("frontend static mount (build present)", () => {
     expect(appSurface.headers["location"]).toBe("/app");
   });
 
-  it("serves shared _app assets at their hashed path", async () => {
+  it("redirects the trailing-slash form preserving the query string", async () => {
+    const res = await app.inject({ method: "GET", url: "/admin/?tab=users" });
+    expect(res.statusCode).toBe(308);
+    expect(res.headers["location"]).toBe("/admin?tab=users");
+  });
+
+  it("serves shared _app assets with a JS content-type", async () => {
     const res = await app.inject({ method: "GET", url: "/_app/immutable/chunk.js" });
     expect(res.statusCode).toBe(200);
     expect(res.body).toBe(CHUNK_JS);
+    expect(res.headers["content-type"]).toContain("javascript");
+  });
+
+  it("answers HEAD on a surface URL", async () => {
+    const res = await app.inject({ method: "HEAD", url: "/admin" });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-type"]).toContain("text/html");
+  });
+
+  it("404s a non-GET method on a surface URL", async () => {
+    const res = await app.inject({ method: "POST", url: "/admin" });
+    expect(res.statusCode).toBe(404);
   });
 
   it("serves root-level static files (e.g. favicon.png)", async () => {
@@ -130,8 +148,10 @@ describe("frontend static mount (build absent)", () => {
     expect(landing.statusCode).toBe(200);
     expect(landing.body).toBe("hello, no policy yet");
 
-    const warning = lines.find((l) => l.component === "web/frontend" && typeof l.msg === "string");
+    const warning = lines.find((l) => l.component === "web/frontend");
     expect(warning).toBeDefined();
+    expect(warning?.level).toBe(40); // pino "warn"
     expect(warning?.frontendRoot).toBe(missingRoot);
+    expect(warning?.msg).toContain("not found");
   });
 });
