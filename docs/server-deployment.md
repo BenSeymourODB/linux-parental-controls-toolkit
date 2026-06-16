@@ -233,8 +233,26 @@ behind authentication.
 
 - The dashboard ships with single-admin local password auth (Argon2
   hash) suitable for a home deployment behind a LAN.
+- **Scope boundary (deliberate).** This is *one* admin login, not a user
+  system. The policy-model `User` is a supervised person, not an auth
+  principal (see [`architecture.md`](architecture.md) → "Policy model"
+  and [`adr/0002-client-dashboard-shell.md`](adr/0002-client-dashboard-shell.md)).
+  Phase 2 auth is intentionally minimal — verify a single Argon2id hash,
+  set a signed session cookie keyed on `PCT_SECRET_KEY`, guard the
+  routes — implemented with `argon2` plus a Fastify session plugin (see
+  issue #52). Do not pull in a multi-user auth framework for this;
+  accounts, roles, MFA, federation, and self-registration are explicitly
+  out of scope until the identity work below.
 - Future: optional OIDC integration so a household identity provider
-  (FreeIPA, Authentik) can be used.
+  (FreeIPA, Authentik) can be used. When that (Phase 11 multi-admin/OIDC)
+  or the larger centralised-identity work (stretch epic #24 → #26:
+  accounts, per-family roles, TOTP MFA, OIDC-as-RP, invite-co-parent)
+  is picked up, **evaluate a managed TypeScript auth library such as
+  [Better-auth](https://www.better-auth.com/) before hand-rolling** —
+  it is Fastify-compatible and has a Drizzle adapter, and that feature
+  set is exactly what such a library exists to provide. Reconcile its
+  managed tables with this repo's committed drizzle-kit migrations as
+  part of that evaluation.
 - Client SSH access uses a single dedicated key generated on first run;
   rotation is a one-click action in the dashboard that pushes a new key
   via the existing connection.

@@ -228,7 +228,12 @@ so chore/calendar completions can grant screen-time rewards.
 ## Phase 11 — Hardening and polish
 
 - Reverse-proxy + TLS instructions for non-LAN deployments.
-- Multi-admin / OIDC option.
+- Multi-admin / OIDC option. This is the first step beyond the
+  single-admin Argon2 model of Phase 2; evaluate a managed TypeScript
+  auth library (e.g. [Better-auth](https://www.better-auth.com/),
+  Fastify-compatible, Drizzle adapter) here rather than extending the
+  hand-rolled single-admin login. See `docs/server-deployment.md` →
+  "Authentication" and stretch epic #24 → #26.
 - Backup/restore utility script.
 - Documentation pass: per-feature how-tos.
 - Optional: tamper-resistance review and AppArmor hardening pass.
