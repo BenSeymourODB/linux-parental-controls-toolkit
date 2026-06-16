@@ -196,7 +196,7 @@ server. See [`docs/client-install.md`](docs/client-install.md).
 | [`docs/client-install.md`](docs/client-install.md) | Client enrollment script design and Linux Mint specifics. |
 | [`docs/client-notifications.md`](docs/client-notifications.md) | Client-side toast/sound notifications, time-remaining cadence, grace period, and end-of-budget enforcement (`pct-client` agent design). |
 | [`docs/roadmap.md`](docs/roadmap.md) | Phased milestone plan; the basis for GitHub issues. |
-| [`docs/adr/`](docs/adr/) | Architecture decision records. ADR 0001 fixes the timezone strategy (UTC internally, server-default TZ with per-user overrides). |
+| [`docs/adr/`](docs/adr/) | Architecture decision records. ADR 0001 fixes the timezone strategy (UTC internally, server-default TZ with per-user overrides). ADR 0002 fixes the client "My Time" dashboard's data model (hybrid, agent-first) and rendering shell (installed-browser app mode, with Tauri v2 as the upgrade path). |
 | [`CLAUDE.md`](CLAUDE.md) | Guidance for AI coding agents working in this repo. |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | Local dev loop: setup, pre-commit hooks, the quality gate, tests, the frontend loop, and branch/PR conventions. |
 
