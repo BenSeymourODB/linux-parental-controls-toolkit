@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Admin · Policy editor</title>
+<link rel="stylesheet" href="../assets/styles.css" />
+<style>
+  .editor { display:grid; grid-template-columns: 1fr 1fr; gap:16px; align-items:start; }
+  .field { display:flex; flex-direction:column; gap:5px; }
+  .field label { font-size:11.5px; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; color:var(--faint); }
+  .input, select.input { font:inherit; font-size:13.5px; padding:8px 11px; border:1px solid var(--border-strong); border-radius:8px; background:var(--surface); color:var(--text); }
+  .time { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--border-strong); border-radius:8px; padding:5px 8px; font-weight:600; }
+  .time button { border:none; background:var(--surface-3); width:24px; height:24px; border-radius:6px; cursor:pointer; font-size:15px; line-height:1; }
+  .rule { display:grid; grid-template-columns: 22px 1fr auto; gap:11px; align-items:center; padding:11px; border:1px solid var(--border); border-radius:10px; background:var(--surface); }
+  .rule + .rule { margin-top:8px; }
+  .handle { cursor:grab; color:var(--faint); font-size:16px; text-align:center; }
+  .rule.dragging { box-shadow:var(--shadow-lg); border-color:var(--primary); opacity:0.95; }
+  .chip { display:inline-flex; align-items:center; gap:6px; padding:4px 9px; border-radius:7px; background:var(--surface-3); font-size:12px; font-weight:600; }
+  .chip .x { color:var(--faint); cursor:pointer; }
+  .pushbar { position:sticky; bottom:0; display:flex; align-items:center; justify-content:space-between; gap:14px; padding:13px 26px; background:#15182a; color:#dfe2f2; border-radius:12px; box-shadow:var(--shadow-lg); }
+  @media (max-width:1000px){ .editor{grid-template-columns:1fr;} }
+</style>
+</head>
+<body>
+<div class="mock-bar"><span class="tag">MOCK-UP</span><span>Admin · Policy editor &nbsp;·&nbsp; <a href="../index.html">↑ all mock-ups</a></span></div>
+<div class="admin">
+  <nav class="admin-nav">
+    <div class="brand"><span class="logo">🛡️</span> ParentCtl</div>
+    <a href="dashboard.html"><span class="ic">▦</span> Overview</a>
+    <a href="user-detail.html"><span class="ic">👤</span> Users</a>
+    <a class="active" href="policy-editor.html"><span class="ic">⚖︎</span> Policies</a>
+    <a href="grants-ledger.html"><span class="ic">🎁</span> Grants</a>
+    <a href="clients.html"><span class="ic">🖥️</span> Clients</a>
+    <div class="nav-sec">Configure</div>
+    <a href="integrations.html"><span class="ic">🔌</span> Integrations</a>
+    <a href="integrations.html"><span class="ic">🔔</span> Notifications</a>
+    <a href="integrations.html"><span class="ic">🌐</span> DNS / AdGuard</a>
+  </nav>
+
+  <div class="admin-main">
+    <header class="admin-top">
+      <div>
+        <div class="crumb">Policies / Alice</div>
+        <h1>Edit policy · <span class="row ai-center" style="display:inline-flex;gap:7px;"><span class="avatar av-a" style="width:26px;height:26px;font-size:11px;">A</span>Alice</span></h1>
+      </div>
+      <div class="row ai-center">
+        <span class="pill warn"><span class="dot"></span>3 unsaved changes</span>
+        <button class="btn">Discard</button>
+        <button class="btn primary">Save &amp; push</button>
+      </div>
+    </header>
+
+    <div class="admin-content col gap-24">
+      <div class="editor">
+
+        <!-- Budgets -->
+        <div class="card">
+          <div class="card-head"><h3>⏱ Time budgets</h3><span class="sub">policy baseline · grants add on top</span></div>
+          <div class="card-body col">
+            <div class="field">
+              <label>Overall screen time</label>
+              <div class="row ai-center wrap gap-8">
+                <div class="time"><button>−</button> 2h 00m <button>＋</button></div>
+                <select class="input"><option>daily</option><option>weekly</option><option>monthly</option></select>
+                <span class="muted" style="font-size:12px;">→ Timekpr-nExT</span>
+              </div>
+            </div>
+            <div style="border-top:1px solid var(--border);"></div>
+            <div class="field">
+              <label>🎮 Games <span class="muted" style="text-transform:none;font-weight:400;">(group)</span></label>
+              <div class="row ai-center wrap gap-8"><div class="time"><button>−</button> 1h 00m <button>＋</button></div><select class="input"><option>daily</option></select><span class="muted" style="font-size:12px;">→ PlayTime + agent close</span></div>
+            </div>
+            <div class="field">
+              <label>▶️ YouTube <span class="muted" style="text-transform:none;font-weight:400;">(domain)</span></label>
+              <div class="row ai-center wrap gap-8"><div class="time"><button>−</button> 45m <button>＋</button></div><select class="input"><option>daily</option></select></div>
+            </div>
+            <button class="btn sm" style="align-self:flex-start;">＋ Add activity budget</button>
+          </div>
+        </div>
+
+        <!-- Activity groups -->
+        <div class="card">
+          <div class="card-head"><h3>🗂 Activity groups</h3><span class="sub">app / app-group / domain / domain-group matchers</span></div>
+          <div class="card-body col">
+            <div class="field">
+              <label>🎮 Games</label>
+              <div class="row wrap gap-8"><span class="chip">Minecraft <span class="x">×</span></span><span class="chip">steam <span class="x">×</span></span><span class="chip">lutris <span class="x">×</span></span><span class="chip" style="background:var(--surface);border:1px dashed var(--border-strong);">＋ add app/domain</span></div>
+            </div>
+            <div class="field">
+              <label>💬 Social</label>
+              <div class="row wrap gap-8"><span class="chip">discord <span class="x">×</span></span><span class="chip">messenger.com <span class="x">×</span></span><span class="chip">tiktok.com <span class="x">×</span></span></div>
+            </div>
+            <div class="field">
+              <label>💻 School</label>
+              <div class="row wrap gap-8"><span class="chip">soffice.bin <span class="x">×</span></span><span class="chip">zoom <span class="x">×</span></span><span class="chip">*.khanacademy.org <span class="x">×</span></span></div>
+            </div>
+            <button class="btn sm" style="align-self:flex-start;">＋ New group</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Schedule rules (drag to order) -->
+      <div class="card">
+        <div class="card-head">
+          <div><h3>📅 Schedule &amp; exception rules</h3><div class="sub">evaluated top-to-bottom — drag to reorder; first match wins</div></div>
+          <button class="btn sm">＋ Add rule</button>
+        </div>
+        <div class="card-body">
+          <div class="rule dragging">
+            <span class="handle">⠿</span>
+            <div class="row ai-center wrap gap-8">
+              <span class="pill bad">deny</span> <strong>💬 Social</strong>
+              <span class="muted">on</span> <span class="chip">Mon–Fri</span> <span class="chip">08:00–15:00</span>
+              <span class="muted">— “no Discord during school”</span>
+            </div>
+            <div class="row gap-8"><button class="btn ghost sm">edit</button><button class="btn ghost sm">⋯</button></div>
+          </div>
+          <div class="rule">
+            <span class="handle">⠿</span>
+            <div class="row ai-center wrap gap-8">
+              <span class="pill ok">allow</span> <strong>▶️ YouTube</strong>
+              <span class="muted">on</span> <span class="chip">Sat–Sun</span> <span class="chip">until 11:00</span>
+              <span class="muted">— “weekend morning cartoons”</span>
+            </div>
+            <div class="row gap-8"><button class="btn ghost sm">edit</button><button class="btn ghost sm">⋯</button></div>
+          </div>
+          <div class="rule">
+            <span class="handle">⠿</span>
+            <div class="row ai-center wrap gap-8">
+              <span class="pill info">extend</span> <strong>Overall +30m</strong>
+              <span class="muted">on</span> <span class="chip">Fri</span> <span class="chip">17:00–20:00</span>
+              <span class="muted">— “movie night”</span>
+            </div>
+            <div class="row gap-8"><button class="btn ghost sm">edit</button><button class="btn ghost sm">⋯</button></div>
+          </div>
+          <div class="rule">
+            <span class="handle">⠿</span>
+            <div class="row ai-center wrap gap-8">
+              <span class="pill" style="background:#5b6480;color:#fff;">lock</span> <strong>Whole device</strong>
+              <span class="muted">at</span> <span class="chip">every day 21:00</span>
+              <span class="muted">— “bedtime” · expires never</span>
+            </div>
+            <div class="row gap-8"><button class="btn ghost sm">edit</button><button class="btn ghost sm">⋯</button></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Notification policy (Phase 8b) -->
+      <div class="editor">
+        <div class="card">
+          <div class="card-head"><h3>🔔 Notifications</h3><span class="sub">NotificationPolicy · pushed to pct-client-agent</span></div>
+          <div class="card-body col">
+            <div class="row between ai-center"><span>Toast notifications</span><span class="pill ok"><span class="dot"></span>enabled</span></div>
+            <div class="field"><label>Sound profile</label><select class="input"><option>subtle (default)</option><option>off</option><option>prominent</option></select></div>
+            <div class="field"><label>Grace period before lock / close</label><div class="time"><button>−</button> 15s <button>＋</button></div></div>
+            <div class="muted" style="font-size:12px;">Cadence: 15-min warnings &gt; 15m left, 5-min ≤15m, 1-min ≤5m, “time's up” at 0:00. <a href="policy-editor.html">Override per-budget…</a></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h3>🌐 Web filtering</h3><span class="sub">e2guardian filter group for this UID</span></div>
+          <div class="card-body col">
+            <div class="field"><label>Filter level</label><select class="input"><option>Children (strict)</option><option>Teen (moderate)</option><option>Custom list</option></select></div>
+            <div class="field"><label>Always-blocked domains</label><div class="row wrap gap-8"><span class="chip">adult-*<span class="x">×</span></span><span class="chip">gambling<span class="x">×</span></span></div></div>
+            <div class="row between ai-center"><span>DNS-level block (AdGuard)</span><span class="pill info"><span class="dot"></span>external mode</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- sticky push bar -->
+    <div style="padding:0 26px 22px;">
+      <div class="pushbar">
+        <div style="font-size:13px;">Changes affect <strong>Alice</strong> on <span class="mono">mint-livingroom</span>. Session limits push via <strong>SSH + timekpra</strong>; filter/group changes via <strong>Ansible</strong>.</div>
+        <div class="row gap-8"><button class="btn ghost" style="color:#cdd2e6;border-color:#3a4063;">Preview diff</button><button class="btn primary">Save &amp; push now</button></div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>App · Grant time</title>
+<link rel="stylesheet" href="../assets/styles.css" />
+<style>
+  .pick { display:flex; gap:10px; }
+  .pick .p { flex:1; border:1px solid var(--border); border-radius:14px; padding:12px; text-align:center; }
+  .pick .p.sel { border-color:var(--primary); box-shadow:0 0 0 2px var(--primary-soft); }
+  .opts { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .opt { border:1px solid var(--border); border-radius:12px; padding:12px 14px; font-weight:600; font-size:14px; }
+  .opt.sel { border-color:var(--primary); background:var(--primary-soft); color:var(--primary-600); }
+  .amt { display:flex; gap:10px; }
+  .amt .a { flex:1; border:1px solid var(--border); border-radius:14px; padding:16px 0; text-align:center; font-size:18px; font-weight:700; }
+  .amt .a.sel { border-color:var(--primary); background:var(--primary); color:#fff; }
+  .lbl2 { font-size:11.5px; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; color:var(--faint); margin-bottom:8px; }
+  .grp { margin-top:18px; }
+</style>
+</head>
+<body>
+<div class="mock-bar"><span class="tag">MOCK-UP</span><span>App (PWA) · Grant time &nbsp;·&nbsp; <a href="../index.html">↑ all mock-ups</a> &nbsp;·&nbsp; <a href="parent-home.html">← home</a></span></div>
+<div class="phone-stage">
+  <div class="phone">
+    <div class="notch"></div>
+    <div class="statusbar"><span>9:41</span><span>📶 🔋</span></div>
+    <div class="screen">
+      <div class="app-head row ai-center gap-8"><a href="parent-home.html" style="font-size:20px;">‹</a><h1>Grant time</h1></div>
+
+      <div class="grp">
+        <div class="lbl2">Who</div>
+        <div class="pick">
+          <div class="p sel"><div class="avatar av-a" style="margin:0 auto 6px;">A</div><div style="font-weight:600;font-size:13px;">Alice</div></div>
+          <div class="p"><div class="avatar av-b" style="margin:0 auto 6px;">B</div><div style="font-weight:600;font-size:13px;">Bob</div></div>
+          <div class="p"><div class="avatar" style="background:#9aa2bd;margin:0 auto 6px;">C</div><div style="font-weight:600;font-size:13px;">Chloe</div></div>
+        </div>
+      </div>
+
+      <div class="grp">
+        <div class="lbl2">What time</div>
+        <div class="opts">
+          <div class="opt sel">⏱ Overall screen time</div>
+          <div class="opt">🎮 Games</div>
+          <div class="opt">▶️ YouTube</div>
+          <div class="opt">💬 Social</div>
+        </div>
+      </div>
+
+      <div class="grp">
+        <div class="lbl2">How much</div>
+        <div class="amt"><div class="a">+15m</div><div class="a sel">+30m</div><div class="a">+1h</div></div>
+      </div>
+
+      <div class="grp">
+        <div class="lbl2">Expires</div>
+        <div class="opts"><div class="opt sel">End of today</div><div class="opt">End of week</div></div>
+      </div>
+
+      <div class="grp">
+        <div class="lbl2">Reason (shows in Alice's toast)</div>
+        <div class="card" style="padding:12px;color:var(--muted);font-size:13.5px;">Helped with dinner 🍝</div>
+      </div>
+
+      <div class="card" style="margin-top:18px;padding:13px 15px;background:var(--green-soft);border-color:#b6e6c9;font-size:13px;">
+        ✓ Alice will have <strong>1h 05m</strong> overall today (35m + 30m). She'll get a toast: <em>“Mum granted you +30 minutes — Helped with dinner 🍝”</em>
+      </div>
+    </div>
+
+    <div style="padding:14px 18px calc(16px + env(safe-area-inset-bottom)); border-top:1px solid var(--border);">
+      <button class="btn primary" style="width:100%;justify-content:center;font-size:15px;padding:13px;">Grant +30m to Alice</button>
+    </div>
+  </div>
+</div>
+</body>
+</html>

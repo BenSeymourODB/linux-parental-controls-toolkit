@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Client · Toasts &amp; countdown</title>
+<link rel="stylesheet" href="../assets/styles.css" />
+<style>
+  .toast-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px; max-width:840px; margin:0 auto; }
+  .case { display:flex; flex-direction:column; gap:8px; }
+  .case .cap { color:#c7cce2; font-size:12.5px; }
+  .case .cap .mono { color:#9be7b6; }
+  /* a Cinnamon/libnotify-ish toast */
+  .toast { width:100%; background:#1c2030; color:#eef0f8; border:1px solid #2c3350; border-radius:13px; padding:13px 14px; box-shadow:var(--shadow-lg); display:flex; gap:12px; }
+  .toast .ic { width:40px;height:40px;border-radius:11px;display:grid;place-items:center;font-size:20px;flex:none; }
+  .toast .body { flex:1; min-width:0; }
+  .toast .t { font-weight:650; font-size:14px; }
+  .toast .d { font-size:12.5px; color:#aab2cf; margin-top:2px; }
+  .toast .app { font-size:11px; color:#7d86a8; margin-top:8px; display:flex; justify-content:space-between; }
+  .toast .actions { display:flex; gap:8px; margin-top:10px; }
+  .toast .tbtn { font:inherit; font-size:12px; font-weight:600; padding:5px 11px; border-radius:7px; border:1px solid #3a4063; background:#262c45; color:#dfe2f2; cursor:pointer; }
+  .toast .tbtn.go { background:var(--primary); border-color:var(--primary); color:#fff; }
+  .gauge { height:6px; border-radius:999px; background:#2c3350; overflow:hidden; margin-top:10px; }
+  .gauge span { display:block; height:100%; border-radius:999px; }
+  .big-count { font-size:30px; font-weight:800; letter-spacing:-0.02em; line-height:1; }
+  .header { max-width:840px; margin:0 auto 22px; color:#dfe2f2; }
+</style>
+</head>
+<body>
+<div class="mock-bar"><span class="tag">MOCK-UP</span><span>Client · notification states &nbsp;·&nbsp; <a href="../index.html">↑ all mock-ups</a> &nbsp;·&nbsp; <a href="dashboard.html">← My Time dashboard</a></span></div>
+
+<div class="desk-stage" style="display:block;padding:34px 18px 60px;">
+  <div class="header">
+    <span class="pill" style="background:#26405e;color:#9be7b6;">pct-client-agent</span>
+    <h1 style="margin-top:10px;font-size:22px;">Toast &amp; countdown states</h1>
+    <p style="color:#aab2cf;font-size:13.5px;max-width:70ch;margin-top:6px;">
+      Rendered through Cinnamon's own notification stack (<span class="mono" style="color:#9be7b6;">gdbus</span> / <span class="mono" style="color:#9be7b6;">notify-send</span>),
+      sound via <span class="mono" style="color:#9be7b6;">canberra-gtk-play</span>. The escalating cadence, grace countdown, and force-close behaviour are specified in
+      <span class="mono" style="color:#9be7b6;">docs/client-notifications.md</span>. These are the exact moments the supervised user actually sees.
+    </p>
+  </div>
+
+  <div class="toast-grid">
+
+    <!-- routine 15-min -->
+    <div class="case">
+      <div class="cap">Routine warning · &gt;15m left · interval 15m · sound <span class="mono">subtle</span></div>
+      <div class="toast">
+        <div class="ic" style="background:#2b3550;">⏳</div>
+        <div class="body"><div class="t">30 minutes of screen time left</div><div class="d">Heads up — your time resets at midnight.</div><div class="app"><span>My Time</span><span>now</span></div></div>
+      </div>
+    </div>
+
+    <!-- 5-min -->
+    <div class="case">
+      <div class="cap">≤5m left · interval 1m · sound <span class="mono">dialog-warning</span></div>
+      <div class="toast">
+        <div class="ic" style="background:#4a3a1e;color:#ffd479;">⚠️</div>
+        <div class="body"><div class="t">5 minutes left — start wrapping up</div><div class="d">Save your work so nothing is lost.</div><div class="app"><span>My Time</span><span>now</span></div></div>
+      </div>
+    </div>
+
+    <!-- coalesced multi-budget -->
+    <div class="case">
+      <div class="cap">Coalesced — two budgets cross a boundary together</div>
+      <div class="toast">
+        <div class="ic" style="background:#4a3a1e;color:#ffd479;">⚠️</div>
+        <div class="body"><div class="t">YouTube and Games both have 5 minutes left</div><div class="d">One alert instead of two, to avoid spam.</div><div class="app"><span>My Time</span><span>now</span></div></div>
+      </div>
+    </div>
+
+    <!-- per-app time's up + grace countdown -->
+    <div class="case">
+      <div class="cap">Per-app budget hit 0:00 · grace countdown (updates each second) · <span class="mono">enforce.force_close</span> after grace</div>
+      <div class="toast">
+        <div class="ic" style="background:#4a2420;color:#ff9b91;">🎮</div>
+        <div class="body">
+          <div class="t">Time's up for Games — save and quit!</div>
+          <div class="d">Minecraft will close in</div>
+          <div class="big-count" style="color:#ff9b91;">0:11</div>
+          <div class="gauge"><span style="width:73%;background:var(--red);"></span></div>
+          <div class="actions"><button class="tbtn">Save &amp; quit now</button></div>
+          <div class="app"><span>My Time · keeps reappearing until done</span><span>now</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- overall time's up -> session lock -->
+    <div class="case">
+      <div class="cap">Overall screen-time hit 0:00 · <span class="mono">enforce.session_lock</span> via Timekpr-nExT after grace</div>
+      <div class="toast">
+        <div class="ic" style="background:#2b2f44;">🔒</div>
+        <div class="body">
+          <div class="t">Screen time is up for today</div>
+          <div class="d">Your session will lock in <strong>0:08</strong>. You can log back in when you have more time, or after midnight.</div>
+          <div class="gauge"><span style="width:53%;background:#8a93b8;"></span></div>
+          <div class="app"><span>Timekpr-nExT + My Time</span><span>now</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- grant arrived (happy path) -->
+    <div class="case">
+      <div class="cap">Server event <span class="mono">grant.applied</span> · sound <span class="mono">complete</span> · dismisses any countdown</div>
+      <div class="toast" style="border-color:#2f6b46;">
+        <div class="ic" style="background:#1f5236;color:#9be7b6;">🎁</div>
+        <div class="body"><div class="t">Mum granted you +30 minutes</div><div class="d">“Cleaned room (chore reward)” — keep going!</div><div class="app"><span>My Time</span><span>now</span></div></div>
+      </div>
+    </div>
+
+    <!-- policy changed -->
+    <div class="case">
+      <div class="cap">Server event <span class="mono">policy.changed</span></div>
+      <div class="toast">
+        <div class="ic" style="background:#1e3a52;color:#8ec5ff;">✏️</div>
+        <div class="body"><div class="t">Your YouTube limit is now 1 hour</div><div class="d">Updated by a parent.</div><div class="app"><span>My Time</span><span>now</span></div></div>
+      </div>
+    </div>
+
+    <!-- lockout cleared -->
+    <div class="case">
+      <div class="cap">Server event <span class="mono">lockout.cleared</span> · shown on any device you're logged into</div>
+      <div class="toast" style="border-color:#2f6b46;">
+        <div class="ic" style="background:#1f5236;color:#9be7b6;">🔓</div>
+        <div class="body"><div class="t">More time! You can log back in.</div><div class="d">A grant restored your screen time.</div><div class="app"><span>My Time</span><span>now</span></div></div>
+      </div>
+    </div>
+
+    <!-- offline indicator (failure mode) -->
+    <div class="case">
+      <div class="cap">Degraded mode · bridge offline · enforcement continues on cached budget</div>
+      <div class="toast" style="opacity:0.92;">
+        <div class="ic" style="background:#3a3320;color:#e6cf8a;">📡</div>
+        <div class="body"><div class="t">Working offline</div><div class="d">Can't reach the server right now. Your time limits still work using the last known settings.</div><div class="app"><span>My Time</span><span>persistent</span></div></div>
+      </div>
+    </div>
+
+    <!-- bedtime heads up -->
+    <div class="case">
+      <div class="cap">Schedule transition heads-up (from local schedule cache)</div>
+      <div class="toast">
+        <div class="ic" style="background:#2f244a;color:#d3b6ff;">🌙</div>
+        <div class="body"><div class="t">Bedtime lock in 10 minutes</div><div class="d">The computer will lock at 21:00. Time to wrap up!</div><div class="app"><span>My Time</span><span>20:50</span></div></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+</body>
+</html>
