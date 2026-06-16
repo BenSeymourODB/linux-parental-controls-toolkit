@@ -22,3 +22,13 @@ export {
 } from "./errors.js";
 export { metaResponseSchema, type MetaResponse } from "./meta.js";
 export type { ZodTypeProvider } from "./validation.js";
+
+// Auth DTOs (#52). Re-exported here so the frontend imports the auth contract
+// from the same `/api` surface as every other DTO; the schemas themselves live
+// in `../auth/dtos.ts` next to the routes that use them.
+export {
+  loginRequestSchema,
+  sessionResponseSchema,
+  type LoginRequest,
+  type SessionResponse,
+} from "../auth/dtos.js";
