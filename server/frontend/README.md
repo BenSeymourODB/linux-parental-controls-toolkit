@@ -27,8 +27,9 @@ for these assets and has **no Node frontend toolchain**. The Docker builder
 stage (#6) runs this build; the Fastify `web` module mounts `build/` and
 serves it at `/admin` and `/app` (the static mount lands with #6 / Phase 2).
 
-`build/` is git-ignored (repo-root `.gitignore`) — it is a build artefact,
-produced at image-build time, never committed.
+`build/` is git-ignored (by both the repo-root `.gitignore` and the local
+`server/frontend/.gitignore`) — it is a build artefact, produced at
+image-build time, never committed.
 
 ## Local development
 
