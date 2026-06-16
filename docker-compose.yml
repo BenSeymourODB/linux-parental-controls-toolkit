@@ -1,0 +1,45 @@
+# Local-development bring-up for the dashboard.
+#
+#   cp .env.example .env   # optional — defaults work without it
+#   docker compose up --build
+#
+# This builds the image from source (server/) so local changes are picked up
+# on the next `--build`. It is NOT the production deployment: the reference
+# compose files in docs/server-deployment.md pull the published GHCR image and
+# cover the AdGuard topologies. DNS filtering (AdGuard Home) is a Phase 7
+# concern and intentionally absent here.
+services:
+  dashboard:
+    # Build context is server/, matching server/Dockerfile's expectations and
+    # the CI docker-build job (.github/workflows/ci.yml).
+    build:
+      context: ./server
+    image: linux-parental-controls-toolkit:dev
+    container_name: pct-dashboard
+    restart: unless-stopped
+    ports:
+      # Dashboard HTTP surface (docs/server-deployment.md → first-run step 5).
+      - "8000:8000"
+    # Canonical state tree (policy.sqlite, secrets/, ansible/, logs/) lives on
+    # the host under ./data so it survives container rebuilds. ./data is
+    # gitignored (/data/). docs/server-deployment.md → "Volume layout".
+    volumes:
+      - ./data:/data
+    # Config is parsed/validated by server/src/config.ts. The loader has safe
+    # defaults (AdGuard disabled, DATABASE_URL=/data/policy.sqlite), so .env is
+    # optional; copy .env.example → .env to override.
+    env_file:
+      - path: .env
+        required: false
+    # Liveness probe hits the /healthz route (#5). node:22-slim has no curl, so
+    # use Node's global fetch.
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://localhost:8000/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

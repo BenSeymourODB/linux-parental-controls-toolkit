@@ -7,11 +7,38 @@ clients (initial target: **Linux Mint with Cinnamon**) enforce the policy
 locally using established open-source tools (Timekpr-nExT, ActivityWatch,
 e2guardian, AdGuard Home).
 
-> **Status:** Design phase. No implementation has landed yet. This repository
-> currently contains the architecture and licensing analyses that the
-> implementation will follow. See [`docs/roadmap.md`](docs/roadmap.md) for the
-> work breakdown and the [roadmap project](https://github.com/users/BenSeymourODB/projects/2)
-> for issue-level tracking.
+> **Status:** Early implementation (Phase 1). The architecture and licensing
+> analyses are complete and the dashboard skeleton is taking shape — a Fastify
+> app, settings loader, Docker image, and CI. Most features in
+> [`docs/roadmap.md`](docs/roadmap.md) are not built yet. See the roadmap for
+> the work breakdown and the
+> [roadmap project](https://github.com/users/BenSeymourODB/projects/2) for
+> issue-level tracking.
+
+## Quick start (local development)
+
+Run the dashboard from source with Docker Compose:
+
+```bash
+# (optional) override defaults — the dashboard runs without this file
+cp .env.example .env
+
+# build the image from ./server and start the dashboard
+docker compose up --build
+```
+
+The dashboard is then on <http://localhost:8000> (`GET /` serves a
+"hello, no policy yet" placeholder; `GET /healthz` is the liveness probe).
+Persistent state lives in a gitignored `./data` directory mounted at `/data`
+in the container (see [`docs/server-deployment.md`](docs/server-deployment.md)
+→ "Volume layout"). Configuration is read from `.env`; every setting and its
+default is documented in [`.env.example`](.env.example).
+
+This compose file builds from source for local development and deliberately
+omits DNS filtering (AdGuard Home is a Phase 7 concern). For production
+deployment on TrueNAS SCALE — using the published image and the AdGuard
+topologies — see the reference compose files in
+[`docs/server-deployment.md`](docs/server-deployment.md).
 
 ## What the product does
 
