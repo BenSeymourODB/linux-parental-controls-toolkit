@@ -12,11 +12,11 @@ jobs:
   activitywatch:
     name: ActivityWatch REST client
     runs-on: ubuntu-22.04
-    # Starts a real aw-server via docker run (not a service container) so the
-    # step can be skipped gracefully when the transport tests don't exist yet.
-    # NOTE (issue #20): activitywatch/activitywatch is not a published Docker
-    # Hub image; the bootstrap below must be fixed before the first real
-    # ActivityWatch integration tests land.
+    # ActivityWatch publishes no official Docker image (issue #20), so we
+    # download the pinned upstream release bundle, checksum-verify it, and run
+    # the headless aw-server-rust binary directly via scripts/start-aw-server.sh.
+    # The step is still guarded so it skips gracefully until the transport
+    # tests exist.
     steps:
       - uses: actions/checkout@v4
 
@@ -44,14 +44,10 @@ jobs:
 
       - name: Start ActivityWatch server
         if: steps.check.outputs.run == 'true'
-        run: |
-          docker run -d --name activitywatch \
-            -p 5600:5600 \
-            activitywatch/activitywatch:latest
-          for i in $(seq 1 20); do
-            curl -sf http://localhost:5600/api/0/info && break
-            sleep 3
-          done
+        run: scripts/start-aw-server.sh
+        env:
+          AW_HOST: 127.0.0.1
+          AW_PORT: 5600
 
       - name: Integration tests — ActivityWatch transport
         if: steps.check.outputs.run == 'true'
