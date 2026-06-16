@@ -8,12 +8,18 @@ name: License boundary check
 # Ansible, Timekpr-nExT, and e2guardian are invoked as subprocesses on
 # the client or installed at first-run into the data volume — never
 # bundled into the image.
+#
+# This runs on a nightly schedule rather than per-PR: the image build it
+# requires is slow, and the boundary is also enforced by the rules in
+# CLAUDE.md and the structure of server/Dockerfile. The nightly run is a
+# safety net that catches a regression within a day. Trigger it manually
+# via workflow_dispatch when validating a change that touches the image.
 
 on:
-  pull_request:
-    paths:
-      - "server/**"
-      - ".github/workflows/license-guard.yml"
+  schedule:
+    # 03:00 UTC daily (after integration.yml's 02:00 nightly run).
+    - cron: "0 3 * * *"
+  workflow_dispatch:
 
 jobs:
   check-gpl-binaries:

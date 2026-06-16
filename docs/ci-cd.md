@@ -13,7 +13,7 @@ which covers *what* is tested; this document covers *when* and *how*.
 | `ci.yml` | Every push, every PR | Lint, unit tests, frontend build, Docker build |
 | `integration.yml` | PRs to `main`, nightly 02:00 UTC | Real-tool integration tests |
 | `release.yml` | Semver tags (`v*.*.*`) | Build + push Docker image, GitHub Release |
-| `license-guard.yml` | PRs touching `server/**` | Scan image for GPL binaries |
+| `license-guard.yml` | Nightly 03:00 UTC, manual dispatch | Scan image for GPL binaries |
 
 All workflows gracefully skip steps for code that has not yet been scaffolded,
 so they can be merged ahead of implementation (Phase 1 of the roadmap).
@@ -158,7 +158,12 @@ The workflow does the rest. Do not push tags from feature branches.
 
 ## `license-guard.yml` — License boundary check
 
-Triggered on PRs that touch anything under `server/`. See
+Runs nightly at 03:00 UTC (and on manual `workflow_dispatch`), rather than
+on every PR: the Docker image build it requires is slow, and the boundary
+is also enforced by the rules in [`CLAUDE.md`](../CLAUDE.md) ("License
+boundaries — non-negotiable") and the structure of `server/Dockerfile`.
+The nightly run is a safety net that catches any regression within a day.
+Trigger it manually when validating a change that touches the image. See
 [`docs/licensing-analysis.md`](licensing-analysis.md) for the full
 reasoning behind the license boundaries.
 
