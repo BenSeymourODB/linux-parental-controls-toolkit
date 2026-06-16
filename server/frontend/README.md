@@ -24,8 +24,10 @@ server/frontend/build/
 `adapter-static` is configured with `strict: true`, so the build fails if any
 route is not prerenderable — the runtime image is a plain static file server
 for these assets and has **no Node frontend toolchain**. The Docker builder
-stage (#6) runs this build; the Fastify `web` module mounts `build/` and
-serves it at `/admin` and `/app` (the static mount lands with #6 / Phase 2).
+stage (#6) runs this build and copies the output into the runtime image
+(under `/app/frontend`); the Fastify `web` module will mount `build/` and
+serve it at `/admin` and `/app` (the live static mount lands in Phase 2 with
+the real UI).
 
 `build/` is git-ignored (by both the repo-root `.gitignore` and the local
 `server/frontend/.gitignore`) — it is a build artefact, produced at
@@ -38,7 +40,7 @@ prerenders everything to static HTML/JS/CSS, so there is nothing to "wire
 pino into" on the frontend itself. The only server that ever handles an
 `/admin` or `/app` request is Fastify.
 
-When the `web` module mounts `build/` via `@fastify/static` (#6 / Phase 2),
+When the `web` module mounts `build/` via `@fastify/static` (Phase 2),
 those static-asset requests flow through the **same** request logging the
 backend already configures (`server/src/web/logger.ts`, #11) — no
 frontend-specific logging setup is needed or wanted:
