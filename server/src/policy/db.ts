@@ -80,8 +80,14 @@ export function createDb(
   sqlite.pragma("journal_mode = WAL");
   sqlite.pragma("foreign_keys = ON");
 
-  const db = drizzle(sqlite, { schema });
-  migrate(db, { migrationsFolder: options.migrationsFolder ?? DEFAULT_MIGRATIONS_FOLDER });
+  const db: PolicyDb = drizzle(sqlite, { schema });
+  try {
+    migrate(db, { migrationsFolder: options.migrationsFolder ?? DEFAULT_MIGRATIONS_FOLDER });
+  } catch (err) {
+    // Don't leak the open handle if migration fails (corrupt/locked file).
+    sqlite.close();
+    throw err;
+  }
 
-  return db as PolicyDb;
+  return db;
 }

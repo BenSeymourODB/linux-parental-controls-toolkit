@@ -96,6 +96,14 @@ describe("createDb", () => {
     expect(rows[0]?.createdAt).toBeInstanceOf(Date);
   });
 
+  it("propagates a migration failure instead of returning a half-open handle", () => {
+    // Point at a folder with no migration journal so the migrator throws; the
+    // open sqlite handle is closed in createDb's catch rather than leaked.
+    expect(() =>
+      createDb({ databaseUrl: dbPath }, { migrationsFolder: join(dir, "no-such-migrations") }),
+    ).toThrow();
+  });
+
   it("is idempotent: reopening an existing file re-applies no migrations and keeps data", () => {
     const first = openDb();
     first.insert(users).values({ displayName: "Bob" }).run();

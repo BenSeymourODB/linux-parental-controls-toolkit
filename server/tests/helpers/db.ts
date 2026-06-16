@@ -44,8 +44,10 @@ export function testDb(): TestDb {
   const sqlite = new Database(":memory:");
   // Schema-typed (like createDb) so app.db and the injected test handle share
   // one type; in-memory ignores WAL, and foreign_keys is left at SQLite's
-  // default here since hermetic unit tests opt into FK checks when they need them.
-  const db = drizzle(sqlite, { schema });
+  // default here since hermetic unit tests opt into FK checks when they need
+  // them. Once CRUD routes land (#51), consider enabling foreign_keys here so
+  // route tests over app.db catch referential bugs the way runtime does.
+  const db: PolicyDb = drizzle(sqlite, { schema });
   migrate(db, { migrationsFolder });
-  return db as PolicyDb;
+  return db;
 }

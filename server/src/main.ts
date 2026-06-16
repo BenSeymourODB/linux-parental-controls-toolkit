@@ -8,7 +8,7 @@
  *
  * This file is excluded from the coverage gate (vitest.config.ts): it is a
  * thin bootstrap whose only job is to validate settings, build the app,
- * and listen.
+ * install shutdown signal handlers, and listen.
  */
 import { loadSettings } from "./config.js";
 import { buildApp } from "./web/app.js";
@@ -21,6 +21,22 @@ async function main(): Promise<void> {
   // settings feed the logger (#11) and transports in later phases.
   const settings = loadSettings();
   const app = buildApp({ settings });
+
+  // On `docker stop` (SIGTERM) or Ctrl-C (SIGINT), close the app so Fastify's
+  // onClose hooks run — notably closing the policy-store handle the app owns
+  // (#49), flushing the WAL cleanly rather than leaning on crash recovery.
+  for (const signal of ["SIGTERM", "SIGINT"] as const) {
+    process.once(signal, () => {
+      void app.close().then(
+        () => process.exit(0),
+        (err: unknown) => {
+          app.log.error(err);
+          process.exit(1);
+        },
+      );
+    });
+  }
+
   try {
     await app.listen({ host: HOST, port: PORT });
   } catch (err) {
