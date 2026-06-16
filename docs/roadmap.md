@@ -48,7 +48,10 @@ and, later, the PWA and external integrators).
 
 - Implement the SQLite schema for `User`, `Client`, `UserOnClient`,
   `Activity`, `ActivityGroup`, `Budget`, `Schedule`, `Exception`,
-  `Grant`, `IntegrationToken`.
+  `Grant`, `IntegrationToken`. `User` carries a nullable `tz` column
+  (timezone strategy decided in
+  [`docs/adr/0001-budget-timezone.md`](adr/0001-budget-timezone.md);
+  UTC internally, server-default TZ with per-user overrides).
 - drizzle-kit migrations.
 - Single-admin local password auth (Argon2) for the admin UI.
 - **`/api/*` JSON endpoints** for the full policy model (the admin UI

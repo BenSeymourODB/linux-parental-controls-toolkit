@@ -104,7 +104,11 @@ entities (final schema lives in `server/src/policy/schema.ts`
 once implementation begins):
 
 ```
-User          (id, display_name)
+User          (id, display_name, tz?)
+              --  tz is a nullable IANA timezone (e.g. America/New_York);
+              --  NULL means "inherit the server default" (PCT_DEFAULT_TZ).
+              --  The user's effective TZ defines daily/weekly/monthly
+              --  budget rollover. See docs/adr/0001-budget-timezone.md.
 Client        (id, hostname, ssh_user, enrolled_at, last_seen)
 UserOnClient  (user_id, client_id, linux_username, linux_uid)
 
@@ -141,6 +145,23 @@ NotificationPolicy (user_id, enabled, sound_profile,
                   experience; pushed to the client and cached there
                   (see docs/client-notifications.md)
 ```
+
+### Timezones and budget rollover
+
+All timestamps are stored, computed, logged, and transmitted in **UTC** —
+`UsageSample` times, `Grant` times, audit entries, `last_seen`, and the
+JSON API / event-stream payloads. Local time enters in exactly one place:
+deciding when a daily/weekly/monthly budget *rolls over*. That boundary is
+computed in the user's **effective timezone** — `User.tz` if set,
+otherwise the server default `PCT_DEFAULT_TZ` — so "how much does Alice
+have left today?" has a precise answer without ever storing local-time
+strings.
+
+The mid-window case (a user changing timezone partway through a day, e.g.
+moving house or on vacation) is deliberately out of scope; changing `tz`
+takes effect from the next window boundary. The full rationale, the
+options weighed, and this deferral are in
+[`docs/adr/0001-budget-timezone.md`](adr/0001-budget-timezone.md).
 
 Key derived views the dashboard renders:
 
@@ -263,6 +284,10 @@ webhook URL.
   means no consumption credited, not punitive deduction).
 - **Clock skew** — clients NTP-sync; budgets compute on the server clock
   but reconcile with `UsageSample` end-times reported by the client.
+  Both sides agree on UTC, so reconciliation is unambiguous; only the
+  budget *rollover* boundary is interpreted in the user's effective
+  timezone (see "Timezones and budget rollover" above and
+  [`docs/adr/0001-budget-timezone.md`](adr/0001-budget-timezone.md)).
 - **Tamper attempt on client** — periodic Ansible re-application of the
   desired state reverts unauthorised edits. Audit log records each
   reversion.
