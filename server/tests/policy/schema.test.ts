@@ -50,8 +50,9 @@ let db: TestDb;
 
 beforeEach(() => {
   db = testDb();
-  // FK enforcement is per-connection in SQLite and off by default; the
-  // runtime connection (#49) turns it on, so the tests do too.
+  // better-sqlite3 enables `foreign_keys` by default, so FK constraints are
+  // already enforced here; we set it explicitly to make the tests robust to
+  // that default and to mirror what the runtime connection (#49) should do.
   db.$client.pragma("foreign_keys = ON");
 });
 
@@ -108,6 +109,91 @@ describe("enum CHECK constraints", () => {
   });
 });
 
+describe("value & coherence constraints", () => {
+  it("rejects a negative budget allowance but accepts zero", () => {
+    const userId = insertUser();
+    expect(() =>
+      db
+        .insert(budgets)
+        .values({ userId, scope: "overall", window: "daily", secondsAllowed: -1 })
+        .run(),
+    ).toThrow(/CHECK constraint/i);
+    expect(() =>
+      db
+        .insert(budgets)
+        .values({ userId, scope: "overall", window: "daily", secondsAllowed: 0 })
+        .run(),
+    ).not.toThrow();
+  });
+
+  it("rejects a non-positive grant", () => {
+    const userId = insertUser();
+    expect(() =>
+      db.$client
+        .prepare(
+          "INSERT INTO grants (user_id, scope, seconds_granted, expires_at, source) VALUES (?,?,?,?,?)",
+        )
+        .run(userId, "overall", 0, 0, "admin"),
+    ).toThrow(/CHECK constraint/i);
+  });
+
+  it("rejects a negative grace period", () => {
+    const userId = insertUser();
+    expect(() =>
+      db.$client
+        .prepare("INSERT INTO notification_policies (user_id, grace_seconds) VALUES (?,?)")
+        .run(userId, -5),
+    ).toThrow(/CHECK constraint/i);
+  });
+
+  it("enforces the polymorphic target invariant on budgets", () => {
+    const userId = insertUser();
+    // overall must have no target_id...
+    expect(() =>
+      db.$client
+        .prepare(
+          "INSERT INTO budgets (user_id, scope, target_id, window, seconds_allowed) VALUES (?,?,?,?,?)",
+        )
+        .run(userId, "overall", 7, "daily", 60),
+    ).toThrow(/CHECK constraint/i);
+    // ...and activity/group must carry one.
+    expect(() =>
+      db.$client
+        .prepare("INSERT INTO budgets (user_id, scope, window, seconds_allowed) VALUES (?,?,?,?)")
+        .run(userId, "activity", "daily", 60),
+    ).toThrow(/CHECK constraint/i);
+  });
+
+  it("rejects a usage sample whose interval runs backwards", () => {
+    const userId = insertUser();
+    const clientId = db
+      .insert(clients)
+      .values({ hostname: "mint-9", sshUser: "pct-agent" })
+      .returning({ id: clients.id })
+      .get()?.id;
+    const activityId = db
+      .insert(activities)
+      .values({ kind: "app", matcher: "firefox" })
+      .returning({ id: activities.id })
+      .get()?.id;
+    if (clientId === undefined || activityId === undefined) {
+      throw new Error("insert returned no row");
+    }
+
+    const insertSample = (startedAt: number, endedAt: number): void => {
+      db.$client
+        .prepare(
+          "INSERT INTO usage_samples (user_id, client_id, activity_id, started_at, ended_at) VALUES (?,?,?,?,?)",
+        )
+        .run(userId, clientId, activityId, startedAt, endedAt);
+    };
+
+    expect(() => insertSample(2000, 1000)).toThrow(/CHECK constraint/i);
+    expect(() => insertSample(1000, 2000)).not.toThrow();
+    expect(() => insertSample(1000, 1000)).not.toThrow(); // zero-length is allowed
+  });
+});
+
 describe("foreign keys", () => {
   it("rejects a budget for a non-existent user", () => {
     expect(() =>
@@ -116,6 +202,24 @@ describe("foreign keys", () => {
         .values({ userId: 9999, scope: "overall", window: "daily", secondsAllowed: 1 })
         .run(),
     ).toThrow(/FOREIGN KEY constraint/i);
+  });
+
+  it("enforces foreign keys on better-sqlite3 by default (no manual pragma)", () => {
+    // better-sqlite3 turns `foreign_keys` ON by default, so the runtime
+    // connection (#49) inherits FK enforcement without extra setup. Prove it
+    // on a connection where we never touched the pragma.
+    const raw = testDb();
+    try {
+      expect(raw.$client.pragma("foreign_keys", { simple: true })).toBe(1);
+      expect(() =>
+        raw
+          .insert(budgets)
+          .values({ userId: 9999, scope: "overall", window: "daily", secondsAllowed: 1 })
+          .run(),
+      ).toThrow(/FOREIGN KEY constraint/i);
+    } finally {
+      raw.$client.close();
+    }
   });
 
   it("cascades a user delete to their per-user rows", () => {

@@ -50,6 +50,17 @@ function oneOf(column: AnySQLiteColumn, values: readonly string[]): SQL {
   return sql`${column} in (${literals})`;
 }
 
+/**
+ * `CHECK` enforcing the polymorphic-target invariant on Budget/Schedule/
+ * Exception/Grant: a row is scoped to the whole user (`overall`) exactly when
+ * it has no `target_id`, and to a specific activity/group (`activity` /
+ * `group`) exactly when it carries one. Keeps the storage layer from holding
+ * an "overall budget for activity 7" or an "activity budget for nothing".
+ */
+function targetCoherence(kind: AnySQLiteColumn, targetId: AnySQLiteColumn): SQL {
+  return sql`(${kind} = 'overall') = (${targetId} is null)`;
+}
+
 /** Epoch-seconds `created_at`-style column defaulting to the insert time. */
 function timestampNow(name: string) {
   return integer(name, { mode: "timestamp" })
@@ -162,6 +173,8 @@ export const budgets = sqliteTable(
     index("budgets_user_scope_window_idx").on(table.userId, table.scope, table.window),
     check("budgets_scope_check", oneOf(table.scope, scopeValues)),
     check("budgets_window_check", oneOf(table.window, budgetWindowValues)),
+    check("budgets_seconds_check", sql`${table.secondsAllowed} >= 0`),
+    check("budgets_target_coherence_check", targetCoherence(table.scope, table.targetId)),
   ],
 );
 
@@ -186,6 +199,7 @@ export const schedules = sqliteTable(
     index("schedules_user_idx").on(table.userId),
     check("schedules_target_kind_check", oneOf(table.targetKind, scopeValues)),
     check("schedules_action_check", oneOf(table.action, scheduleActionValues)),
+    check("schedules_target_coherence_check", targetCoherence(table.targetKind, table.targetId)),
   ],
 );
 
@@ -212,6 +226,7 @@ export const exceptions = sqliteTable(
     index("exceptions_user_expires_idx").on(table.userId, table.expiresAt),
     check("exceptions_target_kind_check", oneOf(table.targetKind, scopeValues)),
     check("exceptions_action_check", oneOf(table.action, scheduleActionValues)),
+    check("exceptions_target_coherence_check", targetCoherence(table.targetKind, table.targetId)),
   ],
 );
 
@@ -243,6 +258,9 @@ export const usageSamples = sqliteTable(
       table.activityId,
       table.startedAt,
     ),
+    // A sample's interval must be non-negative, so burndown rollups never
+    // credit negative time from an inverted or corrupt sample.
+    check("usage_samples_interval_check", sql`${table.endedAt} >= ${table.startedAt}`),
   ],
 );
 
@@ -284,6 +302,8 @@ export const grants = sqliteTable(
     index("grants_user_scope_target_idx").on(table.userId, table.scope, table.targetId),
     index("grants_user_expires_idx").on(table.userId, table.expiresAt),
     check("grants_scope_check", oneOf(table.scope, scopeValues)),
+    check("grants_seconds_check", sql`${table.secondsGranted} > 0`),
+    check("grants_target_coherence_check", targetCoherence(table.scope, table.targetId)),
     check(
       "grants_source_check",
       sql`${table.source} = 'admin' or ${table.source} like 'integration:%'`,
@@ -316,14 +336,18 @@ export const integrationTokens = sqliteTable(
  * `cadence_overrides_json` is an optional JSON blob of warning-cadence
  * overrides; NULL means "use the built-in 15/5/1-minute cadence".
  */
-export const notificationPolicies = sqliteTable("notification_policies", {
-  userId: integer("user_id")
-    .primaryKey()
-    .references(() => users.id, { onDelete: "cascade" }),
-  enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
-  soundProfile: text("sound_profile").notNull().default("default"),
-  graceSeconds: integer("grace_seconds").notNull().default(60),
-  cadenceOverridesJson: text("cadence_overrides_json", { mode: "json" }).$type<
-    Record<string, unknown>
-  >(),
-});
+export const notificationPolicies = sqliteTable(
+  "notification_policies",
+  {
+    userId: integer("user_id")
+      .primaryKey()
+      .references(() => users.id, { onDelete: "cascade" }),
+    enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+    soundProfile: text("sound_profile").notNull().default("default"),
+    graceSeconds: integer("grace_seconds").notNull().default(60),
+    cadenceOverridesJson: text("cadence_overrides_json", { mode: "json" }).$type<
+      Record<string, unknown>
+    >(),
+  },
+  (table) => [check("notification_policies_grace_check", sql`${table.graceSeconds} >= 0`)],
+);

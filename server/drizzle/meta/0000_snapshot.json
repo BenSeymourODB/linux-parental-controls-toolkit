@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "c043a68a-12d5-4476-814a-c113b685b6c6",
+  "id": "f3d5548f-d172-4223-92ce-ee19c786f714",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "activities": {
@@ -213,6 +213,14 @@
         "budgets_window_check": {
           "name": "budgets_window_check",
           "value": "\"budgets\".\"window\" in ('daily', 'weekly', 'monthly')"
+        },
+        "budgets_seconds_check": {
+          "name": "budgets_seconds_check",
+          "value": "\"budgets\".\"seconds_allowed\" >= 0"
+        },
+        "budgets_target_coherence_check": {
+          "name": "budgets_target_coherence_check",
+          "value": "(\"budgets\".\"scope\" = 'overall') = (\"budgets\".\"target_id\" is null)"
         }
       }
     },
@@ -366,6 +374,10 @@
         "exceptions_action_check": {
           "name": "exceptions_action_check",
           "value": "\"exceptions\".\"action\" in ('allow', 'deny', 'extend')"
+        },
+        "exceptions_target_coherence_check": {
+          "name": "exceptions_target_coherence_check",
+          "value": "(\"exceptions\".\"target_kind\" = 'overall') = (\"exceptions\".\"target_id\" is null)"
         }
       }
     },
@@ -498,6 +510,14 @@
         "grants_scope_check": {
           "name": "grants_scope_check",
           "value": "\"grants\".\"scope\" in ('overall', 'activity', 'group')"
+        },
+        "grants_seconds_check": {
+          "name": "grants_seconds_check",
+          "value": "\"grants\".\"seconds_granted\" > 0"
+        },
+        "grants_target_coherence_check": {
+          "name": "grants_target_coherence_check",
+          "value": "(\"grants\".\"scope\" = 'overall') = (\"grants\".\"target_id\" is null)"
         },
         "grants_source_check": {
           "name": "grants_source_check",
@@ -633,7 +653,12 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "checkConstraints": {}
+      "checkConstraints": {
+        "notification_policies_grace_check": {
+          "name": "notification_policies_grace_check",
+          "value": "\"notification_policies\".\"grace_seconds\" >= 0"
+        }
+      }
     },
     "schedules": {
       "name": "schedules",
@@ -715,6 +740,10 @@
         "schedules_action_check": {
           "name": "schedules_action_check",
           "value": "\"schedules\".\"action\" in ('allow', 'deny', 'extend')"
+        },
+        "schedules_target_coherence_check": {
+          "name": "schedules_target_coherence_check",
+          "value": "(\"schedules\".\"target_kind\" = 'overall') = (\"schedules\".\"target_id\" is null)"
         }
       }
     },
@@ -826,7 +855,12 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "checkConstraints": {}
+      "checkConstraints": {
+        "usage_samples_interval_check": {
+          "name": "usage_samples_interval_check",
+          "value": "\"usage_samples\".\"ended_at\" >= \"usage_samples\".\"started_at\""
+        }
+      }
     },
     "users": {
       "name": "users",

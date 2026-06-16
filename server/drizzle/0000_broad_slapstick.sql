@@ -28,7 +28,9 @@ CREATE TABLE `budgets` (
 	`seconds_allowed` integer NOT NULL,
 	FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE cascade,
 	CONSTRAINT "budgets_scope_check" CHECK("budgets"."scope" in ('overall', 'activity', 'group')),
-	CONSTRAINT "budgets_window_check" CHECK("budgets"."window" in ('daily', 'weekly', 'monthly'))
+	CONSTRAINT "budgets_window_check" CHECK("budgets"."window" in ('daily', 'weekly', 'monthly')),
+	CONSTRAINT "budgets_seconds_check" CHECK("budgets"."seconds_allowed" >= 0),
+	CONSTRAINT "budgets_target_coherence_check" CHECK(("budgets"."scope" = 'overall') = ("budgets"."target_id" is null))
 );
 --> statement-breakpoint
 CREATE INDEX `budgets_user_scope_window_idx` ON `budgets` (`user_id`,`scope`,`window`);--> statement-breakpoint
@@ -52,7 +54,8 @@ CREATE TABLE `exceptions` (
 	`created_at` integer DEFAULT (unixepoch()) NOT NULL,
 	FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE cascade,
 	CONSTRAINT "exceptions_target_kind_check" CHECK("exceptions"."target_kind" in ('overall', 'activity', 'group')),
-	CONSTRAINT "exceptions_action_check" CHECK("exceptions"."action" in ('allow', 'deny', 'extend'))
+	CONSTRAINT "exceptions_action_check" CHECK("exceptions"."action" in ('allow', 'deny', 'extend')),
+	CONSTRAINT "exceptions_target_coherence_check" CHECK(("exceptions"."target_kind" = 'overall') = ("exceptions"."target_id" is null))
 );
 --> statement-breakpoint
 CREATE INDEX `exceptions_user_expires_idx` ON `exceptions` (`user_id`,`expires_at`);--> statement-breakpoint
@@ -70,6 +73,8 @@ CREATE TABLE `grants` (
 	`revoked_at` integer,
 	FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE cascade,
 	CONSTRAINT "grants_scope_check" CHECK("grants"."scope" in ('overall', 'activity', 'group')),
+	CONSTRAINT "grants_seconds_check" CHECK("grants"."seconds_granted" > 0),
+	CONSTRAINT "grants_target_coherence_check" CHECK(("grants"."scope" = 'overall') = ("grants"."target_id" is null)),
 	CONSTRAINT "grants_source_check" CHECK("grants"."source" = 'admin' or "grants"."source" like 'integration:%')
 );
 --> statement-breakpoint
@@ -93,7 +98,8 @@ CREATE TABLE `notification_policies` (
 	`sound_profile` text DEFAULT 'default' NOT NULL,
 	`grace_seconds` integer DEFAULT 60 NOT NULL,
 	`cadence_overrides_json` text,
-	FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE cascade
+	FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE cascade,
+	CONSTRAINT "notification_policies_grace_check" CHECK("notification_policies"."grace_seconds" >= 0)
 );
 --> statement-breakpoint
 CREATE TABLE `schedules` (
@@ -105,7 +111,8 @@ CREATE TABLE `schedules` (
 	`action` text NOT NULL,
 	FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE cascade,
 	CONSTRAINT "schedules_target_kind_check" CHECK("schedules"."target_kind" in ('overall', 'activity', 'group')),
-	CONSTRAINT "schedules_action_check" CHECK("schedules"."action" in ('allow', 'deny', 'extend'))
+	CONSTRAINT "schedules_action_check" CHECK("schedules"."action" in ('allow', 'deny', 'extend')),
+	CONSTRAINT "schedules_target_coherence_check" CHECK(("schedules"."target_kind" = 'overall') = ("schedules"."target_id" is null))
 );
 --> statement-breakpoint
 CREATE INDEX `schedules_user_idx` ON `schedules` (`user_id`);--> statement-breakpoint
@@ -118,7 +125,8 @@ CREATE TABLE `usage_samples` (
 	`ended_at` integer NOT NULL,
 	FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE cascade,
 	FOREIGN KEY (`client_id`) REFERENCES `clients`(`id`) ON UPDATE no action ON DELETE cascade,
-	FOREIGN KEY (`activity_id`) REFERENCES `activities`(`id`) ON UPDATE no action ON DELETE cascade
+	FOREIGN KEY (`activity_id`) REFERENCES `activities`(`id`) ON UPDATE no action ON DELETE cascade,
+	CONSTRAINT "usage_samples_interval_check" CHECK("usage_samples"."ended_at" >= "usage_samples"."started_at")
 );
 --> statement-breakpoint
 CREATE INDEX `usage_samples_user_started_idx` ON `usage_samples` (`user_id`,`started_at`);--> statement-breakpoint
