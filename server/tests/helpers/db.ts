@@ -14,8 +14,11 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import Database from "better-sqlite3";
-import { drizzle, type BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
+import { drizzle } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
+
+import type { PolicyDb } from "../../src/policy/db.js";
+import * as schema from "../../src/policy/schema.js";
 
 // Resolve the committed migrations folder relative to this file rather than
 // the process cwd, so the helper works regardless of where the runner is
@@ -23,12 +26,12 @@ import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 const migrationsFolder = resolve(dirname(fileURLToPath(import.meta.url)), "../../drizzle");
 
 /**
- * A migrated in-memory Drizzle database. The underlying better-sqlite3 handle
- * is reachable via `.$client` (e.g. `db.$client.close()` to free it).
+ * A migrated in-memory Drizzle database. Typed identically to the runtime
+ * {@link PolicyDb} (same schema) so it can be injected into `buildApp` via
+ * `buildTestApp`; the underlying better-sqlite3 handle is reachable via
+ * `.$client` (e.g. `db.$client.close()` to free it).
  */
-export type TestDb = BetterSQLite3Database<Record<string, never>> & {
-  $client: Database.Database;
-};
+export type TestDb = PolicyDb;
 
 /**
  * Build a fresh in-memory policy database with all migrations applied.
@@ -39,7 +42,12 @@ export type TestDb = BetterSQLite3Database<Record<string, never>> & {
  */
 export function testDb(): TestDb {
   const sqlite = new Database(":memory:");
-  const db = drizzle(sqlite);
+  // Schema-typed (like createDb) so app.db and the injected test handle share
+  // one type; in-memory ignores WAL, and foreign_keys is left at SQLite's
+  // default here since hermetic unit tests opt into FK checks when they need
+  // them. Once CRUD routes land (#51), consider enabling foreign_keys here so
+  // route tests over app.db catch referential bugs the way runtime does.
+  const db: PolicyDb = drizzle(sqlite, { schema });
   migrate(db, { migrationsFolder });
   return db;
 }

@@ -76,10 +76,17 @@ the same file whichever form you set.
 
 ## First-run setup
 
-On container start, the entrypoint runs these steps idempotently:
+On container start, the entrypoint and the Node server run these steps
+idempotently:
 
-1. **Schema migration** — apply the committed drizzle-kit migrations
-   against `/data/policy.sqlite`.
+1. **Schema migration** — the Node server applies the committed migrations
+   **in-process on boot**, against `/data/policy.sqlite`, using drizzle-orm's
+   `better-sqlite3` migrator (not `drizzle-kit`, which stays a build-time-only
+   dev dependency and is never shipped in the runtime image). The migrator is
+   idempotent — it tracks applied migrations in its own journal — so the
+   entrypoint itself runs no migration step, and the runtime and migrations
+   always open the same `DATABASE_URL` file with no double-migration hazard
+   (issues #49, #39).
 2. **Ansible bootstrap** — if `/data/ansible/venv` is missing, create it
    and `pip install ansible-core` (downloaded from PyPI at runtime, not
    from the image). Sync `playbooks/` from the image.
@@ -267,7 +274,7 @@ the image.
 
 ## Upgrade path
 
-`docker pull` a newer image tag and restart. The entrypoint's migration
-step applies any new drizzle-kit migrations. The Ansible venv inside
+`docker pull` a newer image tag and restart. The server applies any new
+migrations in-process on boot (see "First-run setup" step 1). The Ansible venv inside
 `/data/ansible/venv` is pinned per image release; upgrades reconcile it
 on first start under the new tag.

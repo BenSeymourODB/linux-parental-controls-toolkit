@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../../src/web/app.js";
 import { loadSettings } from "../../src/config.js";
+import { testDb, type TestDb } from "../helpers/db.js";
 
 const ADMIN_HTML = "<!doctype html><title>admin</title><div id=admin-marker>";
 const APP_HTML = "<!doctype html><title>app</title><div id=app-marker>";
@@ -32,17 +33,21 @@ function makeFixtureBuild(): string {
 
 describe("frontend static mount (build present)", () => {
   let app: FastifyInstance;
+  let db: TestDb;
   let root: string;
 
   beforeEach(() => {
     root = makeFixtureBuild();
+    db = testDb();
     app = buildApp({
       settings: loadSettings({ PCT_LOG_LEVEL: "silent", PCT_FRONTEND_ROOT: root }),
+      db,
     });
   });
 
   afterEach(async () => {
     await app.close();
+    db.$client.close();
     rmSync(root, { recursive: true, force: true });
   });
 
@@ -121,10 +126,12 @@ describe("frontend static mount (build present)", () => {
 
 describe("frontend static mount (build absent)", () => {
   let app: FastifyInstance;
+  let db: TestDb;
   const missingRoot = join(tmpdir(), "pct-frontend-does-not-exist-40");
 
   afterEach(async () => {
     await app.close();
+    db.$client.close();
   });
 
   it("warns and skips the mount without blocking startup", async () => {
@@ -134,9 +141,11 @@ describe("frontend static mount (build absent)", () => {
         lines.push(JSON.parse(msg) as Record<string, unknown>);
       },
     };
+    db = testDb();
     app = buildApp({
       settings: loadSettings({ PCT_LOG_LEVEL: "warn", PCT_FRONTEND_ROOT: missingRoot }),
       loggerStream: stream,
+      db,
     });
 
     // The surfaces 404 because nothing is mounted...

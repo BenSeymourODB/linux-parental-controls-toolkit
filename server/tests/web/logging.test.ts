@@ -10,6 +10,7 @@ import type { FastifyInstance } from "fastify";
 import { buildApp } from "../../src/web/app.js";
 import { buildLoggerOptions, componentLogger, genRequestId } from "../../src/web/logger.js";
 import { loadSettings } from "../../src/config.js";
+import { testDb, type TestDb } from "../helpers/db.js";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -31,14 +32,21 @@ function collectStream(): {
 
 describe("request-id logging", () => {
   let app: FastifyInstance;
+  let db: TestDb;
 
   afterEach(async () => {
     await app.close();
+    db.$client.close();
   });
 
   it("honours an inbound X-Request-Id on request-scoped log lines", async () => {
     const { stream, lines } = collectStream();
-    app = buildApp({ settings: loadSettings({ PCT_LOG_LEVEL: "info" }), loggerStream: stream });
+    db = testDb();
+    app = buildApp({
+      settings: loadSettings({ PCT_LOG_LEVEL: "info" }),
+      loggerStream: stream,
+      db,
+    });
 
     await app.inject({
       method: "GET",
@@ -55,7 +63,12 @@ describe("request-id logging", () => {
 
   it("generates a UUID request id when no header is present", async () => {
     const { stream, lines } = collectStream();
-    app = buildApp({ settings: loadSettings({ PCT_LOG_LEVEL: "info" }), loggerStream: stream });
+    db = testDb();
+    app = buildApp({
+      settings: loadSettings({ PCT_LOG_LEVEL: "info" }),
+      loggerStream: stream,
+      db,
+    });
 
     await app.inject({ method: "GET", url: "/healthz" });
 
@@ -66,7 +79,12 @@ describe("request-id logging", () => {
 
   it("componentLogger binds a component field to non-request log lines", async () => {
     const { stream, lines } = collectStream();
-    app = buildApp({ settings: loadSettings({ PCT_LOG_LEVEL: "info" }), loggerStream: stream });
+    db = testDb();
+    app = buildApp({
+      settings: loadSettings({ PCT_LOG_LEVEL: "info" }),
+      loggerStream: stream,
+      db,
+    });
 
     componentLogger(app, "transport/ssh").info("ssh command issued");
 
