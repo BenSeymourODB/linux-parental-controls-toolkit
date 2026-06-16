@@ -19,8 +19,8 @@ const PORT = 8000;
 async function main(): Promise<void> {
   // Fail fast on a bad environment before binding a socket. The parsed
   // settings feed the logger (#11) and transports in later phases.
-  loadSettings();
-  const app = buildApp();
+  const settings = loadSettings();
+  const app = buildApp({ settings });
   try {
     await app.listen({ host: HOST, port: PORT });
   } catch (err) {

@@ -16,4 +16,12 @@ export default tseslint.config(
       ],
     },
   },
+  {
+    // #11: non-request log sources use a named child logger (componentLogger),
+    // never console.*. Scoped to src/ so tests/config keep their console use.
+    files: ["src/**/*.ts"],
+    rules: {
+      "no-console": "error",
+    },
+  },
 );

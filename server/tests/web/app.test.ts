@@ -7,12 +7,15 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../../src/web/app.js";
+import { loadSettings } from "../../src/config.js";
 
 describe("web app routes", () => {
   let app: FastifyInstance;
 
   beforeEach(() => {
-    app = buildApp();
+    // Silent logger keeps route-test output clean; logging behaviour itself
+    // is covered in logging.test.ts.
+    app = buildApp({ settings: loadSettings({ PCT_LOG_LEVEL: "silent" }) });
   });
 
   afterEach(async () => {

@@ -46,6 +46,13 @@ const settingsSchema = z
     databaseUrl: z.string().min(1).default("/data/policy.sqlite"),
     /** Drives pino's level (see #11). */
     logLevel: z.enum(LOG_LEVELS).default("info"),
+    /**
+     * Enable the human-readable `pino-pretty` transport for local dev (#11).
+     * `z.stringbool()` parses the usual env truthy/falsy strings
+     * (`true`/`false`, `1`/`0`, `yes`/`no`, …); defaults off so production
+     * stays JSON.
+     */
+    logPretty: z.stringbool().default(false),
     /** Signs sessions / integration tokens (consumed in later phases). */
     secretKey: z.string().min(1).optional(),
     adguard: adguardSchema,
@@ -98,6 +105,7 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
   const result = settingsSchema.safeParse({
     databaseUrl: env.DATABASE_URL,
     logLevel: env.PCT_LOG_LEVEL,
+    logPretty: env.PCT_LOG_PRETTY,
     secretKey: env.PCT_SECRET_KEY,
     adguard: {
       mode: env.PCT_ADGUARD_MODE ?? "disabled",
