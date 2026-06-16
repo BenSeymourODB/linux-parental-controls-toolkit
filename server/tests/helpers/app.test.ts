@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 
 import { buildTestApp } from "./app.js";
+import { testDb } from "./db.js";
 
 describe("buildTestApp helper", () => {
   it("builds an injectable app paired with a migrated db", async () => {
@@ -27,7 +28,7 @@ describe("buildTestApp helper", () => {
   });
 
   it("accepts a caller-supplied db", async () => {
-    const db = (await import("./db.js")).testDb();
+    const db = testDb();
     const { db: bundled, close } = buildTestApp({ db });
 
     expect(bundled).toBe(db);

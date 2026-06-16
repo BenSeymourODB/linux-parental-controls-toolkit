@@ -76,8 +76,9 @@ function toRecordedCalls(mock: Mock): RecordedCall[] {
 /**
  * Create a `node:child_process` mock that records `execFile`/`spawn` calls.
  *
- * Call this inside `vi.hoisted` and hand `module` to `vi.mock` — see the
- * module docstring for the canonical wiring.
+ * Assign the result to a `mock`-prefixed top-level binding and hand `module`
+ * to `vi.mock("node:child_process", …)` — see the module docstring for the
+ * canonical wiring (and why `vi.hoisted` can't be used here).
  */
 export function mockSubprocess(): SubprocessMock {
   const execFile = vi.fn();

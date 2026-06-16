@@ -173,34 +173,32 @@ Test the following error cases for every REST client:
 
 ### Policy model
 
-Use an in-memory SQLite database via a shared helper. better-sqlite3
-supports `:memory:` natively, and the Drizzle migrations run against it
-in milliseconds:
+Use an in-memory SQLite database via the shared `testDb()` helper
+(`tests/helpers/db.ts`). better-sqlite3 supports `:memory:` natively, and the
+Drizzle migrations run against it in milliseconds:
 
 ```ts
-import Database from "better-sqlite3";
-import { drizzle } from "drizzle-orm/better-sqlite3";
-import { migrate } from "drizzle-orm/better-sqlite3/migrator";
+import { testDb } from "../helpers/db.js";
 
-export function testDb() {
-  const sqlite = new Database(":memory:");
-  const db = drizzle(sqlite);
-  migrate(db, { migrationsFolder: "drizzle" });
-  return db;
-}
+const db = testDb(); // fresh :memory: database with all migrations applied
 ```
 
+The helper resolves the committed migrations folder relative to itself (not
+the process cwd), so it works regardless of where the runner is invoked from.
+The underlying handle is reachable via `db.$client` (e.g. `db.$client.close()`).
 This keeps policy tests hermetic and fast — no file I/O, no leftover state.
 
 ### HTTP routes
 
-Use Fastify's built-in injection — no sockets, no port binding:
+Use Fastify's built-in injection — no sockets, no port binding. The
+`buildTestApp()` helper (`tests/helpers/app.ts`) builds the app with a silent
+logger and bundles a `testDb()`:
 
 ```ts
-import { buildApp } from "../src/web/app.js";
+import { buildTestApp } from "../helpers/app.js";
 
 it("grant endpoint is idempotent by source_ref", async () => {
-  const app = await buildApp({ db: testDb() });
+  const { app, db, close } = buildTestApp();
   const payload = { user: "alice", seconds: 1800, source_ref: "chore-abc-001" };
 
   const r1 = await app.inject({ method: "POST", url: "/api/grants", headers: authHeaders, payload });
@@ -209,8 +207,16 @@ it("grant endpoint is idempotent by source_ref", async () => {
   expect(r1.statusCode).toBe(201);
   expect(r2.statusCode).toBe(200); // idempotent: same grant, not a new one
   expect(r1.json().id).toBe(r2.json().id);
+
+  await close(); // closes the app and the in-memory db
 });
 ```
+
+> **Phase-1 status:** `buildApp()` does not yet take a `db` option — the
+> runtime DB connection is wired in Phase 2 (the `DATABASE_URL` contract,
+> issue #34, and first-run schema migration, issue #39). Until then
+> `buildTestApp()` creates and returns the `db` alongside the app; the
+> pass-through into `buildApp` lands with that Phase-2 work.
 
 ---
 
