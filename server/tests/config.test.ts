@@ -91,6 +91,16 @@ describe("loadSettings", () => {
         }),
       ).toThrow(/PCT_ADGUARD_PASSWORD_FILE or PCT_ADGUARD_API_TOKEN_FILE/);
     });
+
+    it("requires a username when a password file is set (HTTP basic auth)", () => {
+      expect(() =>
+        loadSettings({
+          PCT_ADGUARD_MODE: "external",
+          PCT_ADGUARD_URL: "https://adguard.lan",
+          PCT_ADGUARD_PASSWORD_FILE: "/run/secrets/adguard_password",
+        }),
+      ).toThrow(/PCT_ADGUARD_PASSWORD_FILE requires PCT_ADGUARD_USERNAME/);
+    });
   });
 
   describe("managed mode", () => {

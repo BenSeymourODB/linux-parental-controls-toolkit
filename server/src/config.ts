@@ -51,8 +51,9 @@ const settingsSchema = z
     adguard: adguardSchema,
   })
   .superRefine((settings, ctx) => {
+    if (settings.adguard.mode !== "external") return;
+
     if (
-      settings.adguard.mode === "external" &&
       settings.adguard.passwordFile === undefined &&
       settings.adguard.apiTokenFile === undefined
     ) {
@@ -61,6 +62,17 @@ const settingsSchema = z
         path: ["adguard", "passwordFile"],
         message:
           "external AdGuard mode needs PCT_ADGUARD_PASSWORD_FILE or PCT_ADGUARD_API_TOKEN_FILE",
+      });
+    }
+
+    // AdGuard's REST API uses HTTP basic auth, so a password is only usable
+    // alongside a username. (Token-only auth needs no username.)
+    if (settings.adguard.passwordFile !== undefined && settings.adguard.username === undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["adguard", "username"],
+        message:
+          "PCT_ADGUARD_PASSWORD_FILE requires PCT_ADGUARD_USERNAME (AdGuard uses HTTP basic auth)",
       });
     }
   });
