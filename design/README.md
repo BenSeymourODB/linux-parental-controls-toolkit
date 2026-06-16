@@ -28,7 +28,7 @@ Open [`index.html`](index.html) for the gallery.
 | **App (PWA)** `/app` | [`app/parent-home.html`](app/parent-home.html) | All kids on one phone screen, quick-grant buttons, low-time alert | Phase 9 |
 | | [`app/grant.html`](app/grant.html) | Touch-first grant flow: who / what scope / how much / reason | Phase 9 + 10 |
 | | [`app/child-status.html`](app/child-status.html) | PIN-scoped per-child view: time left, limits, next transition, rewards | Phase 9 |
-| **Client** (supervised desktop) | [`client/dashboard.html`](client/dashboard.html) | **NEW** — the "My Time" desktop dashboard (see below) | *not yet on the roadmap — proposed here* |
+| **Client** (supervised desktop) | [`client/dashboard.html`](client/dashboard.html) | **NEW** — the "My Time" desktop dashboard (see below) | new phase · [#61] |
 | | [`client/notifications.html`](client/notifications.html) | Every toast / grace-countdown / lock / grant / offline state | Phase 8b · [`docs/client-notifications.md`](../docs/client-notifications.md) |
 
 [#53]: https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/53
@@ -112,25 +112,31 @@ interrupted — and without having to ask a parent.
   applet, or only-on-demand?
 - **How much history** to show a child (today only, this week, this month)?
 
-## Suggested roadmap / issue follow-ups
+## Roadmap / issue follow-ups (filed)
 
-These mock-ups surface work that isn't yet an issue. Candidates to file
-against the [roadmap project](https://github.com/users/BenSeymourODB/projects/2):
+These mock-ups surfaced work that is now tracked as issues against the
+[roadmap project](https://github.com/users/BenSeymourODB/projects/2):
 
-- **New — Phase 8d (proposed): supervised-user "My Time" dashboard.** Decide
-  the delivery vehicle (PWA-reuse vs. agent-hosted), then build the read-only
-  status view. Depends on Phase 5 (usage data) and Phase 8b (cached budget).
-- **Admin burndown & usage-timeline components** (Phase 5): the chart pieces in
-  `admin/user-detail.html` are their own deliverable once `UsageSample`
-  aggregation lands.
-- **Drag-to-order rule editor** (Phase 2, refines [#53]): the schedule/exception
-  list in `admin/policy-editor.html` needs ordering semantics ("first match
-  wins") nailed down in the policy model.
-- **Save-and-push diff preview** (Phase 4): the "preview diff" affordance in the
-  policy editor maps to the offline-queue / per-client diff in
-  `docs/architecture.md`.
-- **Parent low-time push notifications** (Phase 9): the alert banner in
+- **[#61] — New phase: supervised-user "My Time" dashboard.** Decide the
+  delivery vehicle (PWA-reuse vs. agent-hosted), then build the read-only
+  status view. Filed as its own phase; depends on Phase 5 (usage data),
+  Phase 8b (cached budget), and Phase 9 (the PWA child-status view it reuses).
+- **[#62] — Admin burndown & usage-timeline components** (Phase 5): the chart
+  pieces in `admin/user-detail.html`, once `UsageSample` aggregation lands.
+- **[#63] — Drag-to-order rule editor** (Phase 2, refines [#53]): the
+  schedule/exception list in `admin/policy-editor.html` needs ordering
+  semantics ("first match wins") nailed down in the policy model.
+- **[#64] — Save-and-push diff preview** (Phase 4): the "preview diff"
+  affordance in the policy editor maps to the offline-queue / per-client diff
+  in `docs/architecture.md`.
+- **[#65] — Parent low-time push notifications** (Phase 9): the alert banner in
   `app/parent-home.html` is the UI for the Web Push item already in the roadmap.
+
+[#61]: https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/61
+[#62]: https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/62
+[#63]: https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/63
+[#64]: https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/64
+[#65]: https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/65
 
 ## Conventions used in these files
 
