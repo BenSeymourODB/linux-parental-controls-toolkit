@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Admin · Overview</title>
+<link rel="stylesheet" href="../assets/styles.css" />
+<style>
+  .kpis { display:grid; grid-template-columns: repeat(4,1fr); gap:16px; }
+  .users-grid { display:grid; grid-template-columns: repeat(2,1fr); gap:16px; }
+  .user-card { display:flex; flex-direction:column; gap:14px; }
+  .user-card .top { display:flex; align-items:center; gap:12px; }
+  .mini-budgets { display:flex; flex-direction:column; gap:9px; }
+  .mb-row { display:grid; grid-template-columns: 92px 1fr 58px; align-items:center; gap:10px; font-size:12.5px; }
+  .feed-item { display:flex; gap:11px; padding:11px 0; border-bottom:1px solid var(--border); font-size:13px; }
+  .feed-item:last-child { border-bottom:none; }
+  .feed-ic { width:30px; height:30px; border-radius:8px; display:grid; place-items:center; flex:none; font-size:14px; }
+  @media (max-width:1080px){ .kpis{grid-template-columns:repeat(2,1fr);} .users-grid{grid-template-columns:1fr;} }
+</style>
+</head>
+<body>
+<div class="mock-bar"><span class="tag">MOCK-UP</span><span>Admin · Overview &nbsp;·&nbsp; <a href="../index.html">↑ all mock-ups</a></span></div>
+<div class="admin">
+
+  <!-- ============ left nav ============ -->
+  <nav class="admin-nav">
+    <div class="brand"><span class="logo">🛡️</span> ParentCtl</div>
+    <a class="active" href="dashboard.html"><span class="ic">▦</span> Overview</a>
+    <a href="user-detail.html"><span class="ic">👤</span> Users</a>
+    <a href="policy-editor.html"><span class="ic">⚖︎</span> Policies</a>
+    <a href="grants-ledger.html"><span class="ic">🎁</span> Grants</a>
+    <a href="clients.html"><span class="ic">🖥️</span> Clients</a>
+    <div class="nav-sec">Configure</div>
+    <a href="integrations.html"><span class="ic">🔌</span> Integrations</a>
+    <a href="integrations.html"><span class="ic">🔔</span> Notifications</a>
+    <a href="integrations.html"><span class="ic">🌐</span> DNS / AdGuard</a>
+    <div class="spacer"></div>
+    <a href="#"><span class="ic">⚙︎</span> Settings</a>
+  </nav>
+
+  <!-- ============ main ============ -->
+  <div class="admin-main">
+    <header class="admin-top">
+      <div>
+        <div class="crumb">Household</div>
+        <h1>Overview</h1>
+      </div>
+      <div class="row ai-center">
+        <div class="search">🔍 <input placeholder="Search users, apps, domains…" /></div>
+        <button class="btn primary">＋ Grant time</button>
+        <div class="avatar av-c" title="Admin">P</div>
+      </div>
+    </header>
+
+    <div class="admin-content col gap-24">
+
+      <!-- KPIs -->
+      <div class="kpis">
+        <div class="card pad stat">
+          <div class="lbl">Supervised users</div>
+          <div class="num">3 <span style="font-size:14px;" class="muted">· 2 online</span></div>
+          <div class="row ai-center gap-8" style="margin-top:6px;"><span class="pill ok"><span class="dot"></span>Alice</span><span class="pill ok"><span class="dot"></span>Bob</span><span class="pill"><span class="dot"></span>Chloe</span></div>
+        </div>
+        <div class="card pad stat">
+          <div class="lbl">Time granted today</div>
+          <div class="num">+1h 15m</div>
+          <div class="muted" style="font-size:12px;margin-top:6px;">3 grants · 2 from 📅 calendar chores</div>
+        </div>
+        <div class="card pad stat">
+          <div class="lbl">Clients &amp; agents</div>
+          <div class="num">2<span class="muted" style="font-size:15px;">/3</span></div>
+          <div class="muted" style="font-size:12px;margin-top:6px;"><span class="pill warn"><span class="dot"></span>1 client offline</span></div>
+        </div>
+        <div class="card pad stat">
+          <div class="lbl">Web filtering</div>
+          <div class="num">On</div>
+          <div class="muted" style="font-size:12px;margin-top:6px;">e2guardian · AdGuard <span class="mono">external</span></div>
+        </div>
+      </div>
+
+      <div class="row" style="align-items:flex-start;">
+        <!-- Users -->
+        <div class="grow col">
+          <div class="row between ai-center">
+            <div class="section-title">Today · live burndown</div>
+            <div class="muted" style="font-size:12px;">timezone <span class="mono">America/New_York</span> · resets 00:00 · last AW pull 2m ago</div>
+          </div>
+          <div class="users-grid">
+
+            <!-- Alice -->
+            <div class="card pad user-card">
+              <div class="top">
+                <div class="avatar av-a">A</div>
+                <div class="grow">
+                  <div style="font-weight:650;">Alice <span class="muted" style="font-weight:400;font-size:12.5px;">· 11</span></div>
+                  <div class="muted" style="font-size:12px;">alice@mint-livingroom · <span class="pill ok" style="padding:1px 8px;"><span class="dot"></span>online</span></div>
+                </div>
+                <a class="btn sm" href="user-detail.html">Open</a>
+              </div>
+              <div class="row ai-center gap-24">
+                <div class="ring-wrap">
+                  <svg width="92" height="92" viewBox="0 0 92 92">
+                    <circle class="track" cx="46" cy="46" r="38" stroke-width="9"/>
+                    <circle class="value warn" cx="46" cy="46" r="38" stroke-width="9"
+                      stroke-dasharray="238.8" stroke-dashoffset="65.7" transform="rotate(-90 46 46)"/>
+                  </svg>
+                  <div class="ring-center"><div style="font-size:17px;font-weight:700;">35m</div><div class="muted" style="font-size:10px;">left today</div></div>
+                </div>
+                <div class="mini-budgets grow">
+                  <div class="mb-row"><span class="muted">Overall</span><div class="bar warn"><span style="width:72%"></span></div><span class="nowrap">1h25/2h</span></div>
+                  <div class="mb-row"><span class="muted">🎮 Games</span><div class="bar bad"><span style="width:94%"></span></div><span class="nowrap">3m left</span></div>
+                  <div class="mb-row"><span class="muted">▶️ YouTube</span><div class="bar ok"><span style="width:40%"></span></div><span class="nowrap">27m left</span></div>
+                  <div class="mb-row"><span class="muted">💬 Social</span><div class="bar"><span style="width:0%"></span></div><span class="nowrap">off (school)</span></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Bob -->
+            <div class="card pad user-card">
+              <div class="top">
+                <div class="avatar av-b">B</div>
+                <div class="grow">
+                  <div style="font-weight:650;">Bob <span class="muted" style="font-weight:400;font-size:12.5px;">· 14</span></div>
+                  <div class="muted" style="font-size:12px;">bob@mint-livingroom · <span class="pill ok" style="padding:1px 8px;"><span class="dot"></span>online</span></div>
+                </div>
+                <a class="btn sm" href="user-detail.html">Open</a>
+              </div>
+              <div class="row ai-center gap-24">
+                <div class="ring-wrap">
+                  <svg width="92" height="92" viewBox="0 0 92 92">
+                    <circle class="track" cx="46" cy="46" r="38" stroke-width="9"/>
+                    <circle class="value ok" cx="46" cy="46" r="38" stroke-width="9"
+                      stroke-dasharray="238.8" stroke-dashoffset="143.3" transform="rotate(-90 46 46)"/>
+                  </svg>
+                  <div class="ring-center"><div style="font-size:17px;font-weight:700;">1h48</div><div class="muted" style="font-size:10px;">left today</div></div>
+                </div>
+                <div class="mini-budgets grow">
+                  <div class="mb-row"><span class="muted">Overall</span><div class="bar ok"><span style="width:40%"></span></div><span class="nowrap">1h12/3h</span></div>
+                  <div class="mb-row"><span class="muted">🎮 Games</span><div class="bar ok"><span style="width:30%"></span></div><span class="nowrap">1h05 left</span></div>
+                  <div class="mb-row"><span class="muted">▶️ YouTube</span><div class="bar warn"><span style="width:80%"></span></div><span class="nowrap">9m left</span></div>
+                  <div class="mb-row"><span class="muted">💻 School</span><div class="bar"><span style="width:25%;background:var(--sky)"></span></div><span class="nowrap">no limit</span></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Chloe (offline) -->
+            <div class="card pad user-card" style="opacity:0.92;">
+              <div class="top">
+                <div class="avatar" style="background:#9aa2bd;">C</div>
+                <div class="grow">
+                  <div style="font-weight:650;">Chloe <span class="muted" style="font-weight:400;font-size:12.5px;">· 9</span></div>
+                  <div class="muted" style="font-size:12px;">chloe@chloe-laptop · <span class="pill warn" style="padding:1px 8px;"><span class="dot"></span>offline 3h</span></div>
+                </div>
+                <a class="btn sm" href="user-detail.html">Open</a>
+              </div>
+              <div class="row ai-center gap-24">
+                <div class="ring-wrap">
+                  <svg width="92" height="92" viewBox="0 0 92 92">
+                    <circle class="track" cx="46" cy="46" r="38" stroke-width="9"/>
+                    <circle class="value" cx="46" cy="46" r="38" stroke-width="9" style="stroke:var(--faint);"
+                      stroke-dasharray="238.8" stroke-dashoffset="179.1" transform="rotate(-90 46 46)"/>
+                  </svg>
+                  <div class="ring-center"><div style="font-size:17px;font-weight:700;">45m</div><div class="muted" style="font-size:10px;">left today</div></div>
+                </div>
+                <div class="mini-budgets grow">
+                  <div class="mb-row"><span class="muted">Overall</span><div class="bar"><span style="width:25%"></span></div><span class="nowrap">15m/1h</span></div>
+                  <div class="mb-row" style="color:var(--faint);"><span>last sync</span><div class="bar"><span style="width:100%;background:var(--surface-3)"></span></div><span class="nowrap">3h ago</span></div>
+                  <div class="muted" style="font-size:11.5px;">⚠ 1 policy change queued — will apply on reconnect</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- add user -->
+            <a class="card pad user-card center" style="display:grid;place-items:center;color:var(--muted);text-decoration:none;border-style:dashed;" href="#">
+              <div><div style="font-size:24px;">＋</div><div style="font-weight:600;">Add supervised user</div><div style="font-size:12px;">create a User, link a Linux account on a client</div></div>
+            </a>
+
+          </div>
+        </div>
+
+        <!-- right rail -->
+        <div class="col" style="width:330px;flex:none;">
+          <div class="card">
+            <div class="card-head"><h3>Recent activity</h3><a class="sub" href="grants-ledger.html">View all</a></div>
+            <div class="card-body" style="padding-top:4px;padding-bottom:8px;">
+              <div class="feed-item"><div class="feed-ic" style="background:var(--green-soft)">🎁</div><div><strong>+30m overall</strong> → Alice<br><span class="muted">📅 chore "clean room" · via calendar · 4m ago</span></div></div>
+              <div class="feed-item"><div class="feed-ic" style="background:var(--amber-soft)">⏳</div><div><strong>Games budget low</strong> · Alice 3m left<br><span class="muted">per-app warning cadence · 6m ago</span></div></div>
+              <div class="feed-item"><div class="feed-ic" style="background:var(--sky-soft)">✏️</div><div><strong>Policy changed</strong> · Bob YouTube 45m→60m<br><span class="muted">by admin · pushed to client · 22m ago</span></div></div>
+              <div class="feed-item"><div class="feed-ic" style="background:var(--red-soft)">🔒</div><div><strong>Session locked</strong> · Chloe overall budget reached<br><span class="muted">Timekpr-nExT · 3h ago</span></div></div>
+              <div class="feed-item"><div class="feed-ic" style="background:var(--surface-3)">🔌</div><div><strong>Client offline</strong> · chloe-laptop<br><span class="muted">bridge disconnected · 3h ago</span></div></div>
+            </div>
+          </div>
+
+          <div class="card pad col" style="gap:10px;">
+            <div class="section-title">Needs attention</div>
+            <div class="row ai-center gap-8"><span class="pill warn"><span class="dot"></span>1</span><span style="font-size:13px;">chloe-laptop offline — change queued</span></div>
+            <div class="row ai-center gap-8"><span class="pill info"><span class="dot"></span>1</span><span style="font-size:13px;">Calendar token unused 14 days</span></div>
+            <div class="row ai-center gap-8"><span class="pill ok"><span class="dot"></span>✓</span><span style="font-size:13px;">All AppArmor profiles applied</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+</body>
+</html>

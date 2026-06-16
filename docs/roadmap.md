@@ -233,6 +233,31 @@ so chore/calendar completions can grant screen-time rewards.
 - Documentation pass: per-feature how-tos.
 - Optional: tamper-resistance review and AppArmor hardening pass.
 
+## Phase 12 — Supervised-user "My Time" client dashboard
+
+Goal: a read-only desktop surface the supervised user can open any time to
+see how much time they have left (overall + per app/category), what they
+did today, what's coming up, and what rewards they've earned — the
+complement to the toast/interrupt channel in
+[`client-notifications.md`](client-notifications.md).
+
+Depends on Phase 5 (usage data), Phase 8b (`pct-client-agent` + cached
+budget), and Phase 9 (reuses the `/app` child-status Svelte view); it can
+land alongside Phase 10/11 rather than strictly last. Tracked in
+[#61](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/61);
+data model and rendering-shell decisions are fixed in
+[`docs/adr/0002-client-dashboard-shell.md`](adr/0002-client-dashboard-shell.md).
+
+- Agent exposes a localhost-only, uid-scoped, **read-only** data endpoint
+  (cached budget + `localhost:5600` usage), so the view ticks live and
+  works offline; `/api/*` supplies week/month/rewards history when online.
+- Auth from the Linux session (`linux-uid → User`), not the Phase 9 PIN.
+- Rendering shell: installed-browser app mode for the MVP, with Tauri v2
+  as the upgrade path (per ADR 0002).
+- Read-only — all adjustment controls stay on `/admin` and `/app`; no new
+  enforcement, no new license surface. Designed in
+  [`design/client/dashboard.html`](../design/client/dashboard.html).
+
 ## Out of scope (for now)
 
 - Non-Linux **enforcement** clients (macOS, Windows, Chromebook). The

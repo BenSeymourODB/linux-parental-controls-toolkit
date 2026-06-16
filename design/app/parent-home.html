@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>App · Parent home</title>
+<link rel="stylesheet" href="../assets/styles.css" />
+<style>
+  .kid { border:1px solid var(--border); border-radius:16px; padding:14px; margin-bottom:12px; box-shadow:var(--shadow); background:var(--surface); }
+  .kid .top { display:flex; align-items:center; gap:12px; }
+  .quick { display:flex; gap:8px; margin-top:12px; }
+  .quick .btn { flex:1; justify-content:center; }
+  .mini { display:flex; gap:10px; margin-top:10px; font-size:11.5px; }
+  .mini .m { flex:1; background:var(--surface-2); border-radius:9px; padding:7px 9px; }
+  .alert { background:var(--amber-soft); border:1px solid #efd99a; border-radius:12px; padding:11px 13px; font-size:12.5px; margin-bottom:14px; }
+</style>
+</head>
+<body>
+<div class="mock-bar"><span class="tag">MOCK-UP</span><span>App (PWA) · Parent home &nbsp;·&nbsp; <a href="../index.html">↑ all mock-ups</a> &nbsp;·&nbsp; <a href="grant.html">grant →</a> <a href="child-status.html">child view →</a></span></div>
+<div class="phone-stage">
+  <div class="phone">
+    <div class="notch"></div>
+    <div class="statusbar"><span>9:41</span><span>📶 🔋</span></div>
+    <div class="screen">
+      <div class="app-head row between ai-center">
+        <div><div class="muted" style="font-size:12px;">Home screen · installed PWA</div><h1>Family</h1></div>
+        <div class="avatar av-c">P</div>
+      </div>
+
+      <div class="alert">⚠ <strong>Alice</strong> has <strong>3 min</strong> of Games left. <a href="grant.html">Add time?</a></div>
+
+      <!-- Alice -->
+      <div class="kid">
+        <div class="top">
+          <div class="avatar av-a lg">A</div>
+          <div class="grow"><div style="font-weight:650;">Alice</div><div class="muted" style="font-size:12px;"><span class="pill ok" style="padding:1px 8px;"><span class="dot"></span>online · living room</span></div></div>
+          <div class="ring-wrap">
+            <svg width="64" height="64" viewBox="0 0 64 64"><circle class="track" cx="32" cy="32" r="26" stroke-width="7"/><circle class="value warn" cx="32" cy="32" r="26" stroke-width="7" stroke-dasharray="163.4" stroke-dashoffset="45" transform="rotate(-90 32 32)"/></svg>
+            <div class="ring-center"><div style="font-size:14px;font-weight:700;">35m</div></div>
+          </div>
+        </div>
+        <div class="mini">
+          <div class="m"><div class="muted">🎮 Games</div><strong style="color:var(--red);">3m left</strong></div>
+          <div class="m"><div class="muted">▶️ YouTube</div><strong>27m left</strong></div>
+          <div class="m"><div class="muted">Overall</div><strong>35m left</strong></div>
+        </div>
+        <div class="quick"><a class="btn sm" href="grant.html">+15m</a><a class="btn sm primary" href="grant.html">+30m</a><a class="btn sm" href="grant.html">⋯</a></div>
+      </div>
+
+      <!-- Bob -->
+      <div class="kid">
+        <div class="top">
+          <div class="avatar av-b lg">B</div>
+          <div class="grow"><div style="font-weight:650;">Bob</div><div class="muted" style="font-size:12px;"><span class="pill ok" style="padding:1px 8px;"><span class="dot"></span>online · living room</span></div></div>
+          <div class="ring-wrap">
+            <svg width="64" height="64" viewBox="0 0 64 64"><circle class="track" cx="32" cy="32" r="26" stroke-width="7"/><circle class="value ok" cx="32" cy="32" r="26" stroke-width="7" stroke-dasharray="163.4" stroke-dashoffset="98" transform="rotate(-90 32 32)"/></svg>
+            <div class="ring-center"><div style="font-size:13px;font-weight:700;">1h48</div></div>
+          </div>
+        </div>
+        <div class="mini">
+          <div class="m"><div class="muted">🎮 Games</div><strong>1h05 left</strong></div>
+          <div class="m"><div class="muted">▶️ YouTube</div><strong style="color:var(--amber);">9m left</strong></div>
+          <div class="m"><div class="muted">Overall</div><strong>1h48 left</strong></div>
+        </div>
+        <div class="quick"><a class="btn sm" href="grant.html">+15m</a><a class="btn sm primary" href="grant.html">+30m</a><a class="btn sm" href="grant.html">⋯</a></div>
+      </div>
+
+      <!-- Chloe offline -->
+      <div class="kid" style="opacity:0.85;">
+        <div class="top">
+          <div class="avatar" style="background:#9aa2bd;width:46px;height:46px;font-size:16px;">C</div>
+          <div class="grow"><div style="font-weight:650;">Chloe</div><div class="muted" style="font-size:12px;"><span class="pill warn" style="padding:1px 8px;"><span class="dot"></span>offline · 45m left when locked</span></div></div>
+        </div>
+        <div class="quick"><a class="btn sm" href="grant.html">+15m</a><a class="btn sm" href="grant.html">+30m</a><a class="btn sm" href="child-status.html">View</a></div>
+      </div>
+
+      <p class="muted center" style="font-size:11px;margin-top:6px;">Pull to refresh · last synced 2m ago</p>
+    </div>
+
+    <div class="tabbar">
+      <a class="active"><span class="ti">🏠</span>Family</a>
+      <a href="grant.html"><span class="ti">🎁</span>Grant</a>
+      <a href="child-status.html"><span class="ti">📊</span>Activity</a>
+      <a><span class="ti">⚙️</span>Settings</a>
+    </div>
+  </div>
+</div>
+</body>
+</html>
