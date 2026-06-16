@@ -11,21 +11,30 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { z } from "zod";
 
 const composePath = fileURLToPath(new URL("../../docker-compose.yml", import.meta.url));
 
-interface ComposeService {
-  build?: { context?: string } | string;
-  ports?: string[];
-  volumes?: string[];
-  env_file?: ({ path?: string; required?: boolean } | string)[] | string;
-}
-interface ComposeFile {
-  services?: Record<string, ComposeService>;
-}
+// Validate the slice of the Compose schema this test asserts on, rather than
+// casting `parse()`'s `unknown` output — keeps the repo's "validate external
+// input with zod / no unchecked `as`" convention (CLAUDE.md → "Code conventions").
+const envFileEntrySchema = z.union([
+  z.string(),
+  z.object({ path: z.string().optional(), required: z.boolean().optional() }),
+]);
+const serviceSchema = z.object({
+  build: z.union([z.string(), z.object({ context: z.string().optional() })]).optional(),
+  ports: z.array(z.string()).optional(),
+  volumes: z.array(z.string()).optional(),
+  env_file: z.union([z.array(envFileEntrySchema), z.string()]).optional(),
+});
+const composeSchema = z.object({
+  services: z.record(z.string(), serviceSchema).optional(),
+});
+type ComposeService = z.infer<typeof serviceSchema>;
 
-function loadCompose(): ComposeFile {
-  return parse(readFileSync(composePath, "utf8")) as ComposeFile;
+function loadCompose(): z.infer<typeof composeSchema> {
+  return composeSchema.parse(parse(readFileSync(composePath, "utf8")));
 }
 
 /** The single `dashboard` service, with a clear failure if it is missing. */
