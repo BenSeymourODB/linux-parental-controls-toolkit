@@ -4,7 +4,7 @@
 #
 # Assigns "Start date" / "End date" on the GitHub Project
 # (users/BenSeymourODB/projects/2) for the Phase-1 roadmap issues,
-# spaced over 2026-06-12 .. 2026-07-08 in dependency order.
+# spaced over 2026-06-16 .. 2026-07-12 in dependency order.
 #
 # This exists because the Claude Code GitHub MCP tools cannot edit
 # Projects v2 fields; run it locally with the gh CLI instead.
@@ -18,6 +18,11 @@
 #
 set -euo pipefail
 
+# Preflight: required tooling must be on PATH (friendlier than a set -e abort).
+for bin in gh jq; do
+  command -v "$bin" >/dev/null 2>&1 || { echo "Required command '$bin' not found on PATH." >&2; exit 1; }
+done
+
 OWNER="BenSeymourODB"
 PROJECT_NUMBER=2
 
@@ -28,18 +33,18 @@ END_FIELD="End date"
 
 # issue-number <TAB> start-date <TAB> end-date  (YYYY-MM-DD)
 read -r -d '' SCHEDULE <<'EOF' || true
-17	2026-06-12	2026-06-13
-5	2026-06-12	2026-06-15
-10	2026-06-13	2026-06-16
-9	2026-06-16	2026-06-18
-13	2026-06-16	2026-06-20
-16	2026-06-18	2026-06-19
-20	2026-06-19	2026-06-21
-11	2026-06-20	2026-06-23
-12	2026-06-23	2026-06-26
-6	2026-06-25	2026-06-30
-15	2026-06-30	2026-07-03
-7	2026-07-03	2026-07-08
+17	2026-06-16	2026-06-17
+5	2026-06-16	2026-06-19
+10	2026-06-17	2026-06-20
+9	2026-06-20	2026-06-22
+13	2026-06-20	2026-06-24
+16	2026-06-22	2026-06-23
+20	2026-06-23	2026-06-25
+11	2026-06-24	2026-06-27
+12	2026-06-27	2026-06-30
+6	2026-06-29	2026-07-04
+15	2026-07-04	2026-07-07
+7	2026-07-07	2026-07-12
 EOF
 
 echo "Resolving project $OWNER/projects/$PROJECT_NUMBER ..."
