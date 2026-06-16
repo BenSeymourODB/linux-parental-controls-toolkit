@@ -31,6 +31,29 @@ serves it at `/admin` and `/app` (the static mount lands with #6 / Phase 2).
 `server/frontend/.gitignore`) — it is a build artefact, produced at
 image-build time, never committed.
 
+## Request logging
+
+This project ships **no SvelteKit server runtime** — `adapter-static`
+prerenders everything to static HTML/JS/CSS, so there is nothing to "wire
+pino into" on the frontend itself. The only server that ever handles an
+`/admin` or `/app` request is Fastify.
+
+When the `web` module mounts `build/` via `@fastify/static` (#6 / Phase 2),
+those static-asset requests flow through the **same** request logging the
+backend already configures (`server/src/web/logger.ts`, #11) — no
+frontend-specific logging setup is needed or wanted:
+
+- Each request carries a `reqId` (an inbound `X-Request-Id` header is
+  honoured, otherwise a UUID is generated), so a request for an `/admin`
+  asset is traceable end to end.
+- Any custom plugin or hook added around the static mount must log via
+  `request.log` (never `console.*`, which ESLint forbids in `src/`); any
+  non-request helper takes a child logger via `componentLogger(app, "...")`.
+
+Browser-side diagnostics (`console` inside a Svelte component) are a separate
+concern from server logs; if we ever want them captured server-side, that
+belongs behind a `/api` telemetry route, not a second logger.
+
 ## Local development
 
 ```bash
