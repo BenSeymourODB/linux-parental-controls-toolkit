@@ -7,11 +7,10 @@
  * holding the policy DB the routes will read — see `docs/testing.md` →
  * "HTTP routes".
  *
- * Forward-compat note: the Phase-1 {@link buildApp} does not yet accept a
- * `db` option — the runtime DB connection is wired in Phase 2 (see #34/#39).
- * Until then the db is created and returned alongside the app; once
- * `buildApp` gains a `db` option this helper passes it through. Bundling both
- * here means Phase 2 / Phase 4 tests don't each re-derive the wiring.
+ * The in-memory `db` is passed through to {@link buildApp} (#49), so
+ * `app.db` and the returned `db` are the same handle; `close()` closes the
+ * app and then the database. Bundling both here means policy / route tests
+ * don't each re-derive the wiring.
  */
 import type { FastifyInstance } from "fastify";
 
@@ -53,6 +52,9 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
   const app = buildApp({
     settings: loadSettings({ PCT_LOG_LEVEL: "silent" }),
     ...options.appOptions,
+    // Inject the bundled db last so app.db is the handle this helper returns,
+    // regardless of any db passed via appOptions.
+    db,
   });
 
   return {

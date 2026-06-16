@@ -212,11 +212,12 @@ it("grant endpoint is idempotent by source_ref", async () => {
 });
 ```
 
-> **Phase-1 status:** `buildApp()` does not yet take a `db` option — the
-> runtime DB connection is wired in Phase 2 (the `DATABASE_URL` contract,
-> issue #34, and first-run schema migration, issue #39). Until then
-> `buildTestApp()` creates and returns the `db` alongside the app; the
-> pass-through into `buildApp` lands with that Phase-2 work.
+`buildApp()` takes an optional `db` (#49): when omitted it opens and migrates
+one from `settings` via `createDb()` and closes it on `app.close()`; when
+injected (as `buildTestApp()` does with `testDb()`) the app uses that handle
+and leaves closing it to the provider. So `app.db`, the `db` returned by
+`buildTestApp()`, and the handle you passed in are all the same object, and
+`close()` tears down the app and then the database.
 
 ---
 

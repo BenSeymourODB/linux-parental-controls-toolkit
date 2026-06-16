@@ -27,11 +27,13 @@ describe("buildTestApp helper", () => {
     await close();
   });
 
-  it("accepts a caller-supplied db", async () => {
+  it("accepts a caller-supplied db and wires it through to app.db", async () => {
     const db = testDb();
-    const { db: bundled, close } = buildTestApp({ db });
+    const { app, db: bundled, close } = buildTestApp({ db });
 
+    // The returned db, the injected db, and app.db are all the same handle.
     expect(bundled).toBe(db);
+    expect(app.db).toBe(db);
 
     await close();
   });

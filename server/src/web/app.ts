@@ -12,8 +12,20 @@
  */
 import Fastify, { type FastifyInstance } from "fastify";
 import { loadSettings, type Settings } from "../config.js";
+import { createDb, type PolicyDb } from "../policy/db.js";
 import { registerFrontend } from "./frontend.js";
 import { REQUEST_ID_HEADER, buildLoggerOptions, genRequestId, type LogStream } from "./logger.js";
+
+declare module "fastify" {
+  interface FastifyInstance {
+    /**
+     * The shared policy-store connection (#49). Routes and the policy service
+     * read and write through this single Drizzle handle. Created from settings
+     * (migrated on boot) unless one is injected via {@link BuildAppOptions.db}.
+     */
+    db: PolicyDb;
+  }
+}
 
 /** Options for {@link buildApp}. */
 export interface BuildAppOptions {
@@ -24,6 +36,13 @@ export interface BuildAppOptions {
    * precedence over the `pino-pretty` transport.
    */
   loggerStream?: LogStream;
+  /**
+   * Inject a policy-store handle (tests pass the in-memory `testDb()`). When
+   * omitted, {@link buildApp} opens and migrates one from `settings` via
+   * {@link createDb} and owns its lifecycle — closing it on `app.close()`. An
+   * injected handle is left open; its owner closes it.
+   */
+  db?: PolicyDb;
 }
 
 /**
@@ -42,6 +61,16 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     // Either way the id is bound to every request-scoped log line as `reqId`.
     requestIdHeader: REQUEST_ID_HEADER,
     genReqId: genRequestId,
+  });
+
+  // Open (and migrate) the policy store unless a handle was injected. buildApp
+  // owns only the handle it creates: that one is closed on shutdown; an
+  // injected handle's lifecycle belongs to its provider (no double-close).
+  const db = options.db ?? createDb(settings);
+  const ownsDb = options.db === undefined;
+  app.decorate("db", db);
+  app.addHook("onClose", async () => {
+    if (ownsDb) db.$client.close();
   });
 
   app.get("/", async (_request, reply) => {
