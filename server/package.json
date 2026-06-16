@@ -16,6 +16,9 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "typecheck": "tsc --noEmit",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:check": "drizzle-kit check",
     "test": "vitest run --coverage",
     "test:integration": "vitest run --config vitest.integration.config.ts"
   },
