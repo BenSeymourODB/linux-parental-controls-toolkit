@@ -157,8 +157,35 @@ school-issued Chromebooks make screen-time a felt problem), proves families will
 pay for **unified cross-household management** that the free first-party tools
 don't offer, and only then widens.
 
-**This implies a strategic pivot that should be made consciously**, because two
-load-bearing assumptions in the current design would change:
+**The engineering shape of that pivot is already scoped in the issue tracker.**
+Epic [#24](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/24)
+("commercial multi-tenant SaaS edition") and its children decompose the hosted
+track and should be read alongside this section — they are the concrete "if we
+decide to do it" plan that point 3's framing argues *for* doing consciously:
+
+- [#25](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/25)
+  — multi-tenant data model & family-group isolation (the `Family` boundary).
+- [#26](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/26)
+  — centralised identity, accounts & per-family roles (replaces single-admin auth).
+- [#27](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/27)
+  — cloud hosting & the control-plane↔home **connectivity inversion** (a cloud
+  server can't SSH into a desktop behind home NAT). Flagged there as the
+  highest-risk, make-or-break item — spike before committing to the rest.
+- [#28](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/28)
+  — tenant lifecycle, billing & subscriptions.
+- [#29](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/29)
+  — children's-data privacy & compliance (COPPA/GDPR-K), flagged as a likely
+  *gating legal requirement*, not a nice-to-have.
+
+That epic is the SaaS/tenancy half of commercialization. Note that **points 1
+and 2 above (platform breadth and giving back to upstream) are not yet tracked
+by any issue** — if commercialization is pursued, they likely warrant their own
+issues (or children of #24), since a hosted product for mainstream parents
+implies the consumer-platform enforcement work in point 1, and monetizing the
+FOSS stack implies the upstream-contribution commitments in point 2.
+
+**This pivot should be made consciously**, because two load-bearing assumptions
+in the current design would change (both also called out across #24–#29):
 
 - The roadmap currently lists **cloud-hosted multi-tenant SaaS** as explicitly
   out of scope, and the whole product assumes a **single-admin, self-hosted
@@ -186,9 +213,17 @@ scoped product bet** rather than incremental scope creep on this repo.
 | Giving back | If we monetize FOSS we depend on, commit to money + developer time + (where the project allows) agent capacity, upstream to the components in the licensing analysis, and respect ActivityWatch's anti-supervised-monitoring stance. |
 | Willingness to pay | Our ideal *design* user (self-hosting homelab parent) is a poor *paying* user; the paying market is mainstream parents on consumer OSs and implies a conscious pivot to hosted, multi-tenant, consumer-platform product — out of scope today, and not to be drifted into. |
 
-If any of this moves from "notes" to "plan," update
+The SaaS/tenancy half of this already lives in the issue tracker as the
+stretch-goal epic
+[#24](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/24)
+(children
+[#25](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/25)–[#29](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/29)).
+The platform-breadth and give-back-to-upstream themes (points 1–2) are not yet
+tracked. If any of this moves from "notes" to "plan," update
 [`docs/roadmap.md`](roadmap.md) and
-[`docs/licensing-analysis.md`](licensing-analysis.md) first, and file it against
-the [roadmap project](https://github.com/users/BenSeymourODB/projects/2).
+[`docs/licensing-analysis.md`](licensing-analysis.md) first, file the new themes
+against the [roadmap project](https://github.com/users/BenSeymourODB/projects/2),
+and record the go/shelve decision in an ADR as #24's acceptance criteria already
+require.
 </content>
 </invoke>

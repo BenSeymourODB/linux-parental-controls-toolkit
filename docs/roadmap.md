@@ -242,13 +242,18 @@ so chore/calendar completions can grant screen-time rewards.
   household / single-admin scenario.
 
 > Each of these out-of-scope items is exactly what a *commercial* version
-> of the product would have to take on. The reasoning for why they are
-> deferred, and what a deliberate commercialization bet would involve
-> (platform breadth, contributing back to the upstream projects,
-> targeting platforms whose users will actually pay), is captured in
-> [`commercialization.md`](commercialization.md). That document is
-> forward-looking notes, not committed scope — these items stay out of
-> scope until a deliberate decision to pursue commercialization is taken.
+> of the product would have to take on. The SaaS/tenancy half is scoped in
+> the stretch-goal epic
+> [#24](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/24)
+> and its children
+> ([#25](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/25)–[#29](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/29):
+> tenant isolation, identity, cloud connectivity inversion, billing,
+> children's-data compliance). The broader framing — platform breadth,
+> contributing back to the upstream projects, and targeting platforms whose
+> users will actually pay — is captured in
+> [`commercialization.md`](commercialization.md). Both are forward-looking,
+> not committed scope; these items stay out of scope until a deliberate
+> decision to pursue commercialization is taken.
 
 ## How to file issues against this roadmap
 
