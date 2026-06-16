@@ -7,10 +7,12 @@
  *
  * Beyond the Phase 1 slice — a "hello, no policy yet" landing route and a
  * `/healthz` probe, plus the shared pino logging configuration (#11) — this
- * now also mounts the prerendered SvelteKit build at `/admin` and `/app`
- * (#40). The policy/api/integrations mounts land in later phases.
+ * now also mounts the JSON API at `/api` (#50) and the prerendered SvelteKit
+ * build at `/admin` and `/app` (#40). The policy/integrations routes land on
+ * top of the `/api` conventions in later phases.
  */
 import Fastify, { type FastifyInstance } from "fastify";
+import { registerApi } from "../api/index.js";
 import { loadSettings, type Settings } from "../config.js";
 import { registerFrontend } from "./frontend.js";
 import { REQUEST_ID_HEADER, buildLoggerOptions, genRequestId, type LogStream } from "./logger.js";
@@ -51,6 +53,11 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   app.get("/healthz", async () => {
     return { status: "ok" };
   });
+
+  // Mount the JSON API at /api (#50). Encapsulated: the zod validation hook,
+  // the shared error envelope, and the /api not-found envelope apply only
+  // within this prefix, leaving /, /healthz, /admin and /app untouched.
+  registerApi(app);
 
   // Serve the prerendered SvelteKit build at /admin and /app (#40). Skipped
   // (with a warning) when the build directory is absent, so /, /healthz, and

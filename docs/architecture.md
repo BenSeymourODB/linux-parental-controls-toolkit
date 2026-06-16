@@ -276,6 +276,37 @@ calendar that a budget was exceeded) is out of scope for now but stays
 open: same pattern, the dashboard would hold a per-integration outbound
 webhook URL.
 
+## API conventions
+
+The `/api/*` surface is the single contract for both built-in frontends
+and external integrators, so its conventions are fixed once (issue #50)
+and every later route — policy CRUD, auth, integrations — builds on them.
+
+- **DTOs live in `server/src/api/`** as zod schemas; consumers import the
+  **inferred** types (`z.infer`) re-exported from `server/src/api/index.ts`.
+  This is the documented import surface for the SvelteKit frontend — there
+  are no hand-maintained interfaces and no runtime coupling between
+  frontend and backend.
+- **Request validation** is a zod-aware Fastify validator compiler: a route
+  declares `schema: { body, querystring, params, headers }` as zod schemas,
+  and a custom `ZodTypeProvider` infers the handler's `request.*` types from
+  them. Invalid input never reaches a handler.
+- **One error envelope.** Every `/api/*` error is serialized as
+  `{ "error": { "code", "message", "details"? } }`. `code` is a stable
+  machine-readable string (`validation_error`, `not_found`, …); `details`
+  carries one structured entry per rejected field for validation failures.
+  Unexpected errors collapse to a generic `internal_error` 500 — the real
+  error is logged, never leaked to the client. (We chose this small shape
+  over RFC 9457 `problem+json` for ease of typing and frontend consumption;
+  the envelope is itself a zod schema, `errorEnvelopeSchema`.)
+- **Encapsulation.** The validation hook, error handler, and not-found
+  handler are installed inside the `/api` plugin scope only, so `/`,
+  `/healthz`, and the static `/admin`·`/app` mounts keep their own
+  behaviour.
+
+`GET /api/meta` (`{ name, apiVersion }`) is the trivial route that proves
+the prefix and conventions are mounted.
+
 ## Failure modes the design must handle
 
 - **Client offline at policy-change time** — queue the change; replay on
