@@ -39,6 +39,11 @@ const probePlugin: FastifyPluginAsync = async (scope) => {
   scope.get("/boom-api", async () => {
     throw new ApiError(403, "forbidden", "no entry");
   });
+  scope.get("/boom-4xx", async () => {
+    // A framework-style 4xx error with no `.code` — exercises the
+    // `?? "bad_request"` fallback in the error handler.
+    throw Object.assign(new Error("teapot"), { statusCode: 418 });
+  });
   scope.get("/boom-500", async () => {
     throw new Error("kaboom");
   });
@@ -98,6 +103,12 @@ describe("/api conventions", () => {
     expect(res.json()).toEqual({ error: { code: "forbidden", message: "no entry" } });
   });
 
+  it("passes a code-less 4xx error through as bad_request", async () => {
+    const res = await app.inject({ method: "GET", url: "/api/boom-4xx" });
+    expect(res.statusCode).toBe(418);
+    expect(res.json()).toEqual({ error: { code: "bad_request", message: "teapot" } });
+  });
+
   it("collapses an unexpected throw to a generic 500 with no leak", async () => {
     const res = await app.inject({ method: "GET", url: "/api/boom-500" });
     expect(res.statusCode).toBe(500);
@@ -140,7 +151,9 @@ describe("GET /api/meta (via buildApp)", () => {
   it("leaves the non-api 404 behaviour unchanged", async () => {
     const res = await app.inject({ method: "GET", url: "/nope" });
     expect(res.statusCode).toBe(404);
-    // Not the api envelope — the default Fastify 404 shape.
-    expect(res.json().error).not.toBe("not_found");
+    // The default Fastify 404 has `error` as the string "Not Found"; the /api
+    // envelope would make it the object `{ code, message }`. Asserting the
+    // string proves the /api conventions did not leak outside the prefix.
+    expect(res.json().error).toBe("Not Found");
   });
 });
