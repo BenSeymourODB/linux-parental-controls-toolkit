@@ -137,6 +137,42 @@ describe("windowContaining", () => {
       expect(iso(w.end)).toBe("2025-01-01T05:00:00.000Z");
     });
   });
+
+  // America/Havana transitions DST *at* midnight (00:00 ↔ 01:00), so local
+  // midnight is the nonexistent (spring) / repeated (fall) instant. This
+  // exercises the two-pass offset reconciliation in wallTimeToUtc that the
+  // away-from-midnight zones above never reach, and pins the boundary the
+  // helper chooses for a nonexistent local midnight (see ADR 0003).
+  describe("daily (America/Havana, midnight DST transition)", () => {
+    const tz = "America/Havana";
+
+    it("absorbs the spring-forward gap into the prior day (23h) and tiles into the next", () => {
+      // 2024-03-10 00:00 local is skipped (→ 01:00); the gap shortens Mar 9.
+      const mar9 = windowContaining("daily", new Date("2024-03-09T12:00:00Z"), tz);
+      const mar10 = windowContaining("daily", new Date("2024-03-10T12:00:00Z"), tz);
+
+      expect(iso(mar9.start)).toBe("2024-03-09T05:00:00.000Z");
+      expect(iso(mar9.end)).toBe("2024-03-10T04:00:00.000Z");
+      expect(mar9.end.getTime() - mar9.start.getTime()).toBe(23 * 60 * 60 * 1000);
+
+      expect(iso(mar10.start)).toBe("2024-03-10T04:00:00.000Z");
+      expect(iso(mar10.end)).toBe("2024-03-11T04:00:00.000Z");
+
+      // Adjacent days tile exactly across the nonexistent-midnight boundary.
+      expect(iso(mar9.end)).toBe(iso(mar10.start));
+    });
+
+    it("makes the fall-back day 25h and tiles into the next", () => {
+      const nov3 = windowContaining("daily", new Date("2024-11-03T12:00:00Z"), tz);
+      const nov4 = windowContaining("daily", new Date("2024-11-04T12:00:00Z"), tz);
+
+      expect(iso(nov3.start)).toBe("2024-11-03T04:00:00.000Z");
+      expect(iso(nov3.end)).toBe("2024-11-04T05:00:00.000Z");
+      expect(nov3.end.getTime() - nov3.start.getTime()).toBe(25 * 60 * 60 * 1000);
+
+      expect(iso(nov3.end)).toBe(iso(nov4.start));
+    });
+  });
 });
 
 describe("effectiveWindow (mid-window timezone-change pin rule)", () => {
@@ -206,6 +242,36 @@ describe("effectiveWindow (mid-window timezone-change pin rule)", () => {
     expect(effectiveWindow("daily", later, "America/Los_Angeles", change)).toEqual(
       windowContaining("daily", later, "America/Los_Angeles"),
     );
+  });
+
+  it("tiles the seam for an eastward move and returns a plain new-zone window later", () => {
+    // New_York → Tokyo. Just after the pinned NY day closes, the first Tokyo
+    // window is a stub starting exactly at the pinned end; once a full Tokyo
+    // day has begun, no clamping applies.
+    const change = { at: new Date("2024-01-15T18:00:00Z"), previousTz: "America/New_York" };
+    const pinned = windowContaining("daily", change.at, "America/New_York");
+
+    const justAfter = new Date(pinned.end.getTime() + 60 * 60 * 1000); // +1h
+    const seam = effectiveWindow("daily", justAfter, "Asia/Tokyo", change);
+    expect(seam.tz).toBe("Asia/Tokyo");
+    expect(iso(seam.start)).toBe(iso(pinned.end)); // tiles exactly, no overlap
+    expect(seam.start.getTime()).toBeLessThan(seam.end.getTime());
+
+    // Past the next Tokyo midnight: the natural Tokyo window, unclamped.
+    const later = new Date("2024-01-16T18:00:00Z");
+    expect(effectiveWindow("daily", later, "Asia/Tokyo", change)).toEqual(
+      windowContaining("daily", later, "Asia/Tokyo"),
+    );
+  });
+
+  it("applies the pin to monthly windows too", () => {
+    // Change mid-February; the open month stays pinned to its opening zone.
+    const change = { at: new Date("2024-02-15T18:00:00Z"), previousTz: "America/New_York" };
+    const now = new Date("2024-02-20T12:00:00Z"); // same calendar month
+    const w = effectiveWindow("monthly", now, "America/Los_Angeles", change);
+    expect(w.tz).toBe("America/New_York");
+    expect(iso(w.start)).toBe("2024-02-01T05:00:00.000Z");
+    expect(iso(w.end)).toBe("2024-03-01T05:00:00.000Z");
   });
 
   it("applies the pin to weekly windows too", () => {

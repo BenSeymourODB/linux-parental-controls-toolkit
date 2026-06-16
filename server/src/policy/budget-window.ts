@@ -175,6 +175,14 @@ function zonedParts(instant: Date, tz: string): ZonedParts {
  * Two-pass offset reconciliation: guess by treating the wall time as UTC,
  * correct by the offset at that guess, then re-check once so a wall time that
  * lands near a DST transition resolves to the offset actually in force.
+ *
+ * For a *nonexistent* wall time — the gap a spring-forward skips, which in a
+ * zone that transitions at midnight makes local 00:00 itself nonexistent —
+ * the second pass resolves to the **pre-transition** offset, so the instant
+ * lands at the transition boundary. This is internally consistent: the
+ * previous window's `end` and the next window's `start` are computed from the
+ * same boundary and so still tile exactly (no gap, overlap, or
+ * double-counted usage), which is the invariant the budget rule relies on.
  */
 function wallTimeToUtc(
   year: number,
