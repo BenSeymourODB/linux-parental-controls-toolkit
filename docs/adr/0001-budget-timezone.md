@@ -58,15 +58,20 @@ the default source for B**:
    offset) plus the user's effective timezone, and render local time
    client-side. The server does not store local-time strings.
 
-### Explicitly deferred
+### Mid-window timezone change
+
+> **Resolved by [ADR 0003](0003-mid-window-timezone-change.md)
+> (2026-06-16).** This clause originally deferred the case below; the
+> decision recorded here for history.
 
 A user **changing timezone mid-window** — e.g. moving house or going on
-vacation partway through a day of usage — is out of scope for this
+vacation partway through a day of usage — was out of scope for *this*
 decision. Changing `User.tz` (or `PCT_DEFAULT_TZ`) takes effect from the
-next window boundary; the behaviour of the in-flight day is unspecified
-and may shift a budget boundary under the user. This edge case is tracked
-in [#56](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/56)
-and is acceptable for the target single-household deployment.
+next window boundary; the behaviour of the in-flight day was left
+unspecified. [ADR 0003](0003-mid-window-timezone-change.md) makes that rule
+explicit (**pin the in-flight window to the timezone in effect when it
+opened**) and implements it in the shared budget-window helper. Tracked in
+[#56](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/56).
 
 ## Consequences
 
