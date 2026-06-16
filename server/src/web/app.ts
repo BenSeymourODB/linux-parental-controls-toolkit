@@ -5,12 +5,14 @@
  * construct isolated instances and exercise routes via `app.inject()`
  * without binding a socket — see docs/testing.md → "HTTP routes".
  *
- * This is the minimal Phase 1 slice: a "hello, no policy yet" landing
- * route and a `/healthz` probe, plus the shared pino logging configuration
- * (#11). The policy/api/integrations mounts land in later phases.
+ * Beyond the Phase 1 slice — a "hello, no policy yet" landing route and a
+ * `/healthz` probe, plus the shared pino logging configuration (#11) — this
+ * now also mounts the prerendered SvelteKit build at `/admin` and `/app`
+ * (#40). The policy/api/integrations mounts land in later phases.
  */
 import Fastify, { type FastifyInstance } from "fastify";
 import { loadSettings, type Settings } from "../config.js";
+import { registerFrontend } from "./frontend.js";
 import { REQUEST_ID_HEADER, buildLoggerOptions, genRequestId, type LogStream } from "./logger.js";
 
 /** Options for {@link buildApp}. */
@@ -49,6 +51,11 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   app.get("/healthz", async () => {
     return { status: "ok" };
   });
+
+  // Serve the prerendered SvelteKit build at /admin and /app (#40). Skipped
+  // (with a warning) when the build directory is absent, so /, /healthz, and
+  // unknown routes are unaffected.
+  registerFrontend(app, settings);
 
   return app;
 }

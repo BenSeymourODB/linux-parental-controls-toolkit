@@ -65,6 +65,15 @@ const settingsSchema = z
      * so the default and any `file:`-prefixed value are both normalized.
      */
     databaseUrl: z.string().min(1).default("/data/policy.sqlite").transform(stripFileScheme),
+    /**
+     * Filesystem root of the prerendered SvelteKit build served at `/admin`
+     * and `/app` (#40). Defaults to the in-image path the Dockerfile copies
+     * the `adapter-static` output into (`COPY … ./frontend` under WORKDIR
+     * `/app`). Overridable via `PCT_FRONTEND_ROOT` so dev and tests can point
+     * the mount at a different directory; if the path is absent the mount is
+     * skipped (the surfaces 404) rather than failing startup.
+     */
+    frontendRoot: z.string().min(1).default("/app/frontend"),
     /** Drives pino's level (see #11). */
     logLevel: z.enum(LOG_LEVELS).default("info"),
     /**
@@ -125,6 +134,7 @@ export class SettingsError extends Error {
 export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
   const result = settingsSchema.safeParse({
     databaseUrl: env.DATABASE_URL,
+    frontendRoot: env.PCT_FRONTEND_ROOT,
     logLevel: env.PCT_LOG_LEVEL,
     logPretty: env.PCT_LOG_PRETTY,
     secretKey: env.PCT_SECRET_KEY,
