@@ -3,9 +3,9 @@
  * SQLite database — the runtime counterpart to the `drizzle-kit check` drift
  * gate that CI's `migrations` job runs (`.github/workflows/integration.yml`).
  *
- * Phase 1 ships an empty migration journal (no tables yet); these tests
- * pin the invariants the scaffold must keep as Phase 2 adds real tables:
- * applying all migrations to an empty DB succeeds, and re-applying is a
+ * Phase 2 (#48) lands the first real migration; these tests pin the
+ * invariants the pipeline must keep: applying all migrations to an empty DB
+ * succeeds, the full policy schema is materialised, and re-applying is a
  * no-op. See `docs/testing.md` → "Policy module — what to test".
  */
 import { fileURLToPath } from "node:url";
@@ -39,15 +39,55 @@ function appliedMigrationCount(sqlite: Database.Database): number {
   return value;
 }
 
+/** Names of every user-defined table in the database (excludes SQLite/Drizzle bookkeeping). */
+function userTableNames(sqlite: Database.Database): string[] {
+  return sqlite
+    .prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table' " +
+        "AND name NOT LIKE 'sqlite_%' AND name != '__drizzle_migrations' ORDER BY name",
+    )
+    .pluck()
+    .all() as string[];
+}
+
+/** The policy-model tables this migration must materialise (docs/architecture.md). */
+const EXPECTED_TABLES = [
+  "activities",
+  "activities_to_groups",
+  "activity_groups",
+  "budgets",
+  "clients",
+  "exceptions",
+  "grants",
+  "integration_tokens",
+  "notification_policies",
+  "schedules",
+  "usage_samples",
+  "users",
+  "users_on_clients",
+];
+
 describe("policy migrations", () => {
   it("applies all migrations to an empty database", () => {
     const sqlite = new Database(":memory:");
     const db = drizzle(sqlite);
 
     expect(() => migrate(db, { migrationsFolder })).not.toThrow();
-    // The migrator always provisions its bookkeeping table, even with an
-    // empty journal — proof the folder was read and the pipeline ran.
+    // The migrator always provisions its bookkeeping table — proof the
+    // folder was read and the pipeline ran.
     expect(migrationTableExists(sqlite)).toBe(true);
+
+    sqlite.close();
+  });
+
+  it("materialises the full policy schema", () => {
+    const sqlite = new Database(":memory:");
+    const db = drizzle(sqlite);
+
+    migrate(db, { migrationsFolder });
+
+    // Every policy-model table must exist, and no stray tables beyond them.
+    expect(userTableNames(sqlite)).toStrictEqual(EXPECTED_TABLES);
 
     sqlite.close();
   });
@@ -61,8 +101,7 @@ describe("policy migrations", () => {
 
     expect(() => migrate(db, { migrationsFolder })).not.toThrow();
     // Re-applying must not record any additional migrations — the journal's
-    // bookkeeping count is unchanged. (Phase-1 empty journal: stays 0; the
-    // assertion keeps holding once Phase 2 adds real migrations.)
+    // bookkeeping count is unchanged.
     expect(appliedMigrationCount(sqlite)).toBe(countAfterFirst);
 
     sqlite.close();
