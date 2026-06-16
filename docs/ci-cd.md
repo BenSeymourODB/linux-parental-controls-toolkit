@@ -13,6 +13,7 @@ which covers *what* is tested; this document covers *when* and *how*.
 | `ci.yml` | Every push, every PR | Lint, unit tests, frontend build, Docker build |
 | `integration.yml` | PRs to `main`, nightly 02:00 UTC | Real-tool integration tests |
 | `release.yml` | Semver tags (`v*.*.*`) | Build + push Docker image, GitHub Release |
+| `license-guard.yml` | Nightly 03:00 UTC, manual dispatch | Scan image for GPL binaries |
 
 All workflows gracefully skip steps for code that has not yet been scaffolded,
 so they can be merged ahead of implementation (Phase 1 of the roadmap).
@@ -155,21 +156,31 @@ The workflow does the rest. Do not push tags from feature branches.
 
 ---
 
-## License boundary
+## `license-guard.yml` — License boundary check
 
-The dashboard image must remain GPL-binary-free so it is not a derivative
-work of any GPL component. See
+Runs nightly at 03:00 UTC (and on manual `workflow_dispatch`), rather than
+on every PR: the Docker image build it requires is slow, and the boundary
+is also enforced by the rules in [`CLAUDE.md`](../CLAUDE.md) ("License
+boundaries — non-negotiable") and the structure of `server/Dockerfile`.
+The nightly run is a safety net that catches any regression within a day.
+Trigger it manually when validating a change that touches the image. See
 [`docs/licensing-analysis.md`](licensing-analysis.md) for the full
-reasoning, and [`CLAUDE.md`](../CLAUDE.md) ("License boundaries —
-non-negotiable") for the concrete rules every contributor must follow.
+reasoning behind the license boundaries.
 
-GPL components (Ansible, Timekpr-nExT, e2guardian, AdGuard Home) are
-installed at first-run into the data volume or kept on the client machine,
-never bundled into the image. This is enforced by review and by the
-build-time rules in the Dockerfile rather than a dedicated CI scan job.
+Builds the Docker image and runs `find` inside it, looking for the
+following GPL binary names:
+
+- `ansible`, `ansible-*`, `ansible_*`
+- `timekpr*`
+- `e2guardian*`
+- `adguardhome`
+
+If any match, the job fails. This is a hard invariant: the image must
+remain GPL-binary-free. GPL components are installed at first-run into the
+data volume or kept on the client machine, never bundled into the image.
 
 (The stock Python 3 interpreter the image carries for the first-run
-Ansible venv is PSF-licensed and deliberately fine to bundle; the venv
+Ansible venv is PSF-licensed and deliberately not on this list; the venv
 itself lives in the data volume, never in the image.)
 
 ---

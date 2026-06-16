@@ -1,0 +1,78 @@
+name: License boundary check
+
+# Verify that the Docker image contains no GPL binaries.
+# See docs/licensing-analysis.md for the full reasoning.
+#
+# This is an architectural invariant: the dashboard image must remain
+# GPL-binary-free so it is not a derivative work of any GPL component.
+# Ansible, Timekpr-nExT, and e2guardian are invoked as subprocesses on
+# the client or installed at first-run into the data volume — never
+# bundled into the image.
+#
+# This runs on a nightly schedule rather than per-PR: the image build it
+# requires is slow, and the boundary is also enforced by the rules in
+# CLAUDE.md and the structure of server/Dockerfile. The nightly run is a
+# safety net that catches a regression within a day. Trigger it manually
+# via workflow_dispatch when validating a change that touches the image.
+
+on:
+  schedule:
+    # 03:00 UTC daily (after integration.yml's 02:00 nightly run).
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  check-gpl-binaries:
+    name: No GPL binaries in Docker image
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image (load into daemon for scanning)
+        run: |
+          if [ -f server/Dockerfile ]; then
+            docker buildx build \
+              --load \
+              --tag pct-dashboard:license-check \
+              server/
+          else
+            echo "server/Dockerfile not yet present — skipping license guard"
+            exit 0
+          fi
+
+      - name: Scan for GPL binaries
+        run: |
+          if ! docker image inspect pct-dashboard:license-check > /dev/null 2>&1; then
+            echo "Image not built (Dockerfile absent) — nothing to scan."
+            exit 0
+          fi
+
+          echo "Scanning image for GPL binaries that must not be bundled..."
+
+          FOUND=$(docker run --rm pct-dashboard:license-check \
+            find /usr /bin /sbin /opt \
+              \( \
+                -name 'ansible' \
+                -o -name 'ansible-*' \
+                -o -name 'ansible_*' \
+                -o -name 'timekpr*' \
+                -o -name 'e2guardian*' \
+                -o -name 'adguardhome' \
+              \) \
+              -type f \
+            2>/dev/null || true)
+
+          if [ -n "$FOUND" ]; then
+            echo ""
+            echo "ERROR: GPL binaries found inside the Docker image:"
+            echo "$FOUND"
+            echo ""
+            echo "These tools must be kept out of the image."
+            echo "See docs/licensing-analysis.md for the rules and reasoning."
+            exit 1
+          fi
+
+          echo "OK: No GPL binaries found in image."
