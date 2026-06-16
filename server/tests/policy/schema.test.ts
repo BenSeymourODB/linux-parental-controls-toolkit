@@ -436,7 +436,7 @@ describe("table metadata", () => {
     expect(leadColumn(grants, "grants_user_expires_idx")).toBe("user_id");
     expect(leadColumn(usageSamples, "usage_samples_user_started_idx")).toBe("user_id");
     expect(leadColumn(exceptions, "exceptions_user_expires_idx")).toBe("user_id");
-    expect(leadColumn(schedules, "schedules_user_idx")).toBe("user_id");
+    expect(leadColumn(schedules, "schedules_user_ordinal_idx")).toBe("user_id");
   });
 
   it("uses composite primary keys on the join tables", () => {

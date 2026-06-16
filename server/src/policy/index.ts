@@ -11,3 +11,16 @@ export {
   windowContaining,
   effectiveWindow,
 } from "./budget-window.js";
+
+export {
+  type ScheduleRule,
+  type RuleActivePredicate,
+  type ShadowFinding,
+  ReorderMismatchError,
+  byOrdinal,
+  resolveEffectiveRule,
+  resolveEffectiveAction,
+  nextOrdinal,
+  reorder,
+  findShadowedRules,
+} from "./schedule-precedence.js";
