@@ -13,6 +13,7 @@
  * as a discriminated union so each mode only carries the fields it needs.
  */
 import { z } from "zod";
+import { isValidTimeZone } from "./policy/budget-window.js";
 
 /** pino log levels, in increasing severity, plus `silent`. */
 const LOG_LEVELS = ["trace", "debug", "info", "warn", "error", "fatal", "silent"] as const;
@@ -74,6 +75,20 @@ const settingsSchema = z
      * skipped (the surfaces 404) rather than failing startup.
      */
     frontendRoot: z.string().min(1).default("/app/frontend"),
+    /**
+     * Server-default IANA timezone for budget rollover (`PCT_DEFAULT_TZ`).
+     *
+     * A user's effective timezone is `User.tz ?? PCT_DEFAULT_TZ`; it defines
+     * when daily/weekly/monthly budgets roll over (see
+     * `docs/adr/0001-budget-timezone.md`). Validated against the runtime's
+     * IANA database here so a typo fails fast at startup rather than skewing
+     * every budget window. Defaults to `UTC` — always valid, and consistent
+     * with the "UTC everywhere" storage rule — so an operator who never
+     * crosses a timezone need not set it.
+     */
+    defaultTz: z.string().min(1).default("UTC").refine(isValidTimeZone, {
+      message: "must be a valid IANA timezone (e.g. America/New_York)",
+    }),
     /** Drives pino's level (see #11). */
     logLevel: z.enum(LOG_LEVELS).default("info"),
     /**
@@ -135,6 +150,7 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
   const result = settingsSchema.safeParse({
     databaseUrl: env.DATABASE_URL,
     frontendRoot: env.PCT_FRONTEND_ROOT,
+    defaultTz: env.PCT_DEFAULT_TZ,
     logLevel: env.PCT_LOG_LEVEL,
     logPretty: env.PCT_LOG_PRETTY,
     secretKey: env.PCT_SECRET_KEY,
