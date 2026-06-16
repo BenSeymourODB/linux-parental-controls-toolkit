@@ -344,17 +344,18 @@ For each public method of the SSH transport (e.g. `setDailyLimit`,
 
 ## Integration tests — local reproduction
 
-Each integration job can be reproduced locally with Docker Compose. Save the
-snippet below as `docker-compose.integration.yml` in the repo root (do not
-commit it; it is a local dev aid only):
+Each integration job can be reproduced locally. The AdGuard Home and SSH
+targets run as Docker containers; ActivityWatch does **not** (the project
+publishes no official image — see issue #20), so its server is started
+natively from the pinned upstream release by `scripts/start-aw-server.sh`,
+exactly as the CI job does.
+
+Save the snippet below as `docker-compose.integration.yml` in the repo root
+(do not commit it; it is a local dev aid only):
 
 ```yaml
 # docker-compose.integration.yml — local integration test environment
 services:
-  activitywatch:
-    image: activitywatch/aw-server:latest
-    ports: ["5600:5600"]
-
   adguardhome:
     image: adguard/adguardhome:latest
     ports: ["3000:3000", "53:53/udp"]
@@ -369,7 +370,11 @@ services:
 Start the services:
 
 ```bash
+# Containerised targets (AdGuard Home + SSH):
 docker compose -f docker-compose.integration.yml up -d
+
+# ActivityWatch aw-server (native, downloaded + checksum-verified):
+scripts/start-aw-server.sh
 ```
 
 Run the integration tests:

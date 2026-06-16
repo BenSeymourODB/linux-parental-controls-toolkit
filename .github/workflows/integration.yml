@@ -12,11 +12,20 @@ jobs:
   activitywatch:
     name: ActivityWatch REST client
     runs-on: ubuntu-22.04
-    # Starts a real aw-server via docker run (not a service container) so the
-    # step can be skipped gracefully when the transport tests don't exist yet.
-    # NOTE (issue #20): activitywatch/activitywatch is not a published Docker
-    # Hub image; the bootstrap below must be fixed before the first real
-    # ActivityWatch integration tests land.
+    # ActivityWatch publishes no official Docker image (issue #20), so we
+    # download the pinned upstream release bundle, checksum-verify it, and run
+    # the headless aw-server-rust binary directly via scripts/start-aw-server.sh.
+    # The ~200 MB archive is cached across runs (actions/cache, keyed on
+    # version + checksum) so only the first run on a given pin actually
+    # downloads; the script's own checksum guard then skips the fetch.
+    # The step is still guarded so it skips gracefully until the transport
+    # tests exist.
+    env:
+      AW_VERSION: v0.13.2
+      AW_SHA256: 8f62b10babf8a8f108cbdf7267c02fbc1ce2a970fa9535f230b3416b803e3360
+      AW_CACHE: ${{ github.workspace }}/.aw-cache
+      AW_HOST: 127.0.0.1
+      AW_PORT: 5600
     steps:
       - uses: actions/checkout@v4
 
@@ -42,16 +51,20 @@ jobs:
         if: steps.check.outputs.run == 'true'
         run: cd server && npm ci
 
+      # Persist the downloaded archive across runs. The key includes the
+      # checksum, so a version/pin bump misses the cache and re-downloads;
+      # an unchanged pin restores the zip and start-aw-server.sh skips the
+      # fetch via its own checksum guard.
+      - name: Cache aw-server release archive
+        if: steps.check.outputs.run == 'true'
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.AW_CACHE }}/activitywatch-${{ env.AW_VERSION }}-linux-x86_64.zip
+          key: aw-server-${{ runner.os }}-${{ env.AW_VERSION }}-${{ env.AW_SHA256 }}
+
       - name: Start ActivityWatch server
         if: steps.check.outputs.run == 'true'
-        run: |
-          docker run -d --name activitywatch \
-            -p 5600:5600 \
-            activitywatch/activitywatch:latest
-          for i in $(seq 1 20); do
-            curl -sf http://localhost:5600/api/0/info && break
-            sleep 3
-          done
+        run: scripts/start-aw-server.sh
 
       - name: Integration tests — ActivityWatch transport
         if: steps.check.outputs.run == 'true'
