@@ -13,7 +13,6 @@ which covers *what* is tested; this document covers *when* and *how*.
 | `ci.yml` | Every push, every PR | Lint, unit tests, frontend build, Docker build |
 | `integration.yml` | PRs to `main`, nightly 02:00 UTC | Real-tool integration tests |
 | `release.yml` | Semver tags (`v*.*.*`) | Build + push Docker image, GitHub Release |
-| `license-guard.yml` | PRs touching `server/**` | Scan image for GPL binaries |
 
 All workflows gracefully skip steps for code that has not yet been scaffolded,
 so they can be merged ahead of implementation (Phase 1 of the roadmap).
@@ -156,26 +155,21 @@ The workflow does the rest. Do not push tags from feature branches.
 
 ---
 
-## `license-guard.yml` — License boundary check
+## License boundary
 
-Triggered on PRs that touch anything under `server/`. See
+The dashboard image must remain GPL-binary-free so it is not a derivative
+work of any GPL component. See
 [`docs/licensing-analysis.md`](licensing-analysis.md) for the full
-reasoning behind the license boundaries.
+reasoning, and [`CLAUDE.md`](../CLAUDE.md) ("License boundaries —
+non-negotiable") for the concrete rules every contributor must follow.
 
-Builds the Docker image and runs `find` inside it, looking for the
-following GPL binary names:
-
-- `ansible`, `ansible-*`, `ansible_*`
-- `timekpr*`
-- `e2guardian*`
-- `adguardhome`
-
-If any match, the job fails. This is a hard invariant: the image must
-remain GPL-binary-free. GPL components are installed at first-run into the
-data volume or kept on the client machine, never bundled into the image.
+GPL components (Ansible, Timekpr-nExT, e2guardian, AdGuard Home) are
+installed at first-run into the data volume or kept on the client machine,
+never bundled into the image. This is enforced by review and by the
+build-time rules in the Dockerfile rather than a dedicated CI scan job.
 
 (The stock Python 3 interpreter the image carries for the first-run
-Ansible venv is PSF-licensed and deliberately not on this list; the venv
+Ansible venv is PSF-licensed and deliberately fine to bundle; the venv
 itself lives in the data volume, never in the image.)
 
 ---
