@@ -169,6 +169,7 @@ server. See [`docs/client-install.md`](docs/client-install.md).
 | [`docs/client-install.md`](docs/client-install.md) | Client enrollment script design and Linux Mint specifics. |
 | [`docs/client-notifications.md`](docs/client-notifications.md) | Client-side toast/sound notifications, time-remaining cadence, grace period, and end-of-budget enforcement (`pct-client` agent design). |
 | [`docs/roadmap.md`](docs/roadmap.md) | Phased milestone plan; the basis for GitHub issues. |
+| [`docs/commercialization.md`](docs/commercialization.md) | Forward-looking notes on what taking this from a homelab tool to a commercial product would require (platform breadth, giving back to upstream, willingness-to-pay). Not committed scope. |
 | [`CLAUDE.md`](CLAUDE.md) | Guidance for AI coding agents working in this repo. |
 
 ## License

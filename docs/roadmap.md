@@ -241,6 +241,15 @@ so chore/calendar completions can grant screen-time rewards.
 - Cloud-hosted SaaS multi-tenant model. The deployment target is the
   household / single-admin scenario.
 
+> Each of these out-of-scope items is exactly what a *commercial* version
+> of the product would have to take on. The reasoning for why they are
+> deferred, and what a deliberate commercialization bet would involve
+> (platform breadth, contributing back to the upstream projects,
+> targeting platforms whose users will actually pay), is captured in
+> [`commercialization.md`](commercialization.md). That document is
+> forward-looking notes, not committed scope — these items stay out of
+> scope until a deliberate decision to pursue commercialization is taken.
+
 ## How to file issues against this roadmap
 
 - One issue per discrete deliverable (a single PR's worth of work).
