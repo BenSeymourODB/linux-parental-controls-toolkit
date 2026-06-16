@@ -25,9 +25,16 @@ server/frontend/build/
 route is not prerenderable — the runtime image is a plain static file server
 for these assets and has **no Node frontend toolchain**. The Docker builder
 stage (#6) runs this build and copies the output into the runtime image
-(under `/app/frontend`); the Fastify `web` module will mount `build/` and
-serve it at `/admin` and `/app` (the live static mount lands in Phase 2 with
-the real UI).
+(under `/app/frontend`); the Fastify `web` module mounts that directory via
+`@fastify/static` and serves it at `/admin` and `/app` (the live static mount
+landed in Phase 2, #40 — see `server/src/web/frontend.ts`).
+
+The mount root is `PCT_FRONTEND_ROOT` (default `/app/frontend`), so local dev
+can point it at `server/frontend/build`. The slash-free surface URLs
+(`/admin`, `/app`) serve `admin.html` / `app.html`; the trailing-slash forms
+redirect to them so the pages' relative asset paths (`./_app/…`) resolve
+correctly. If the directory is absent the mount is skipped (the surfaces 404)
+rather than failing startup. `/` and `/api/*` stay owned by the backend.
 
 `build/` is git-ignored (by both the repo-root `.gitignore` and the local
 `server/frontend/.gitignore`) — it is a build artefact, produced at
@@ -40,10 +47,10 @@ prerenders everything to static HTML/JS/CSS, so there is nothing to "wire
 pino into" on the frontend itself. The only server that ever handles an
 `/admin` or `/app` request is Fastify.
 
-When the `web` module mounts `build/` via `@fastify/static` (Phase 2),
-those static-asset requests flow through the **same** request logging the
-backend already configures (`server/src/web/logger.ts`, #11) — no
-frontend-specific logging setup is needed or wanted:
+The `web` module mounts `build/` via `@fastify/static` (#40), so those
+static-asset requests flow through the **same** request logging the backend
+already configures (`server/src/web/logger.ts`, #11) — no frontend-specific
+logging setup is needed or wanted:
 
 - Each request carries a `reqId` (an inbound `X-Request-Id` header is
   honoured, otherwise a UUID is generated), so a request for an `/admin`
