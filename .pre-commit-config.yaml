@@ -47,7 +47,12 @@ repos:
       - id: trailing-whitespace
         # Allow the two-space hard line breaks that Markdown uses.
         args: [--markdown-linebreak-ext=md]
+        # drizzle-kit owns the generated migration/snapshot/journal output
+        # (it emits no trailing newline); excluded here to match how prettier
+        # (.prettierignore) and eslint already treat server/drizzle/.
+        exclude: ^server/drizzle/
       - id: end-of-file-fixer
+        exclude: ^server/drizzle/
       - id: check-yaml
       - id: check-json
       - id: check-merge-conflict
