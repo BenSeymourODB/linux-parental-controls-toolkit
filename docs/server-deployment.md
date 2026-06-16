@@ -65,6 +65,15 @@ The dashboard's database schema, the read-only copy of playbooks shipped
 inside the image, and the drizzle-kit SQL migrations all live in the
 image and are reconciled into `/data` on each start.
 
+`DATABASE_URL` points at the policy store and defaults to
+`/data/policy.sqlite`. It accepts two interchangeable forms: a bare
+filesystem path (`/data/policy.sqlite`) and the libsql `file:` URL form
+(`file:/data/policy.sqlite`, the form CI's migration job and
+`drizzle.config.ts` use). `better-sqlite3` only understands bare paths, so
+both the settings loader and `drizzle.config.ts` strip a leading `file:` —
+drizzle-kit (migrate/check) and the runtime connection therefore always open
+the same file whichever form you set.
+
 ## First-run setup
 
 On container start, the entrypoint runs these steps idempotently:

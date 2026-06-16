@@ -18,6 +18,22 @@ import { z } from "zod";
 const LOG_LEVELS = ["trace", "debug", "info", "warn", "error", "fatal", "silent"] as const;
 
 /**
+ * Normalize a `DATABASE_URL` value to a bare filesystem path.
+ *
+ * `DATABASE_URL` is accepted in two interchangeable forms: a bare path
+ * (`/data/policy.sqlite`, as `.env.example` and the deployment docs show)
+ * and the libsql `file:` URL form (`file:/data/policy.sqlite`, as CI's
+ * `migrations` job and `drizzle.config.ts` use). `better-sqlite3` only
+ * understands bare paths, so we strip a leading `file:` here exactly the way
+ * `drizzle.config.ts` does — keeping drizzle-kit (generate/migrate/check) and
+ * the runtime connection pointed at the same file regardless of which form an
+ * operator picked. See issue #34.
+ */
+function stripFileScheme(databaseUrl: string): string {
+  return databaseUrl.replace(/^file:/, "");
+}
+
+/**
  * AdGuard Home integration, keyed on `PCT_ADGUARD_MODE`.
  *
  * The loader assembles a nested object from the flat `PCT_ADGUARD_*` env
@@ -42,8 +58,13 @@ const adguardSchema = z.discriminatedUnion("mode", [
 
 const settingsSchema = z
   .object({
-    /** Path to the SQLite policy store (better-sqlite3 / Drizzle). */
-    databaseUrl: z.string().min(1).default("/data/policy.sqlite"),
+    /**
+     * Path to the SQLite policy store (better-sqlite3 / Drizzle). Accepts a
+     * bare path or a `file:` URL; both normalize to a bare filesystem path
+     * (see {@link stripFileScheme}). The `.transform` runs after `.default`,
+     * so the default and any `file:`-prefixed value are both normalized.
+     */
+    databaseUrl: z.string().min(1).default("/data/policy.sqlite").transform(stripFileScheme),
     /** Drives pino's level (see #11). */
     logLevel: z.enum(LOG_LEVELS).default("info"),
     /**

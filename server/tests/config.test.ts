@@ -30,6 +30,33 @@ describe("loadSettings", () => {
     expect(settings.secretKey).toBe("s3cret");
   });
 
+  // DATABASE_URL is accepted as a bare path or a libsql `file:` URL; both
+  // must resolve to the same bare better-sqlite3 path so drizzle-kit (CI /
+  // drizzle.config.ts) and the runtime connection never diverge. See #34.
+  describe("DATABASE_URL normalization", () => {
+    it("strips a file: scheme from an absolute path", () => {
+      expect(loadSettings({ DATABASE_URL: "file:/data/policy.sqlite" }).databaseUrl).toBe(
+        "/data/policy.sqlite",
+      );
+    });
+
+    it("strips a file: scheme from a relative path (the CI form)", () => {
+      expect(loadSettings({ DATABASE_URL: "file:./ci_migration_test.sqlite" }).databaseUrl).toBe(
+        "./ci_migration_test.sqlite",
+      );
+    });
+
+    it("leaves a bare path untouched", () => {
+      expect(loadSettings({ DATABASE_URL: "/srv/policy.sqlite" }).databaseUrl).toBe(
+        "/srv/policy.sqlite",
+      );
+    });
+
+    it("normalizes the default the same way (bare, no scheme to strip)", () => {
+      expect(loadSettings({}).databaseUrl).toBe("/data/policy.sqlite");
+    });
+  });
+
   it("rejects an invalid log level", () => {
     expect(() => loadSettings({ PCT_LOG_LEVEL: "verbose" })).toThrow(SettingsError);
   });
