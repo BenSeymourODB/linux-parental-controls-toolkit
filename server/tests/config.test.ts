@@ -12,6 +12,7 @@ describe("loadSettings", () => {
     const settings = loadSettings({});
 
     expect(settings.databaseUrl).toBe("/data/policy.sqlite");
+    expect(settings.defaultTz).toBe("UTC");
     expect(settings.logLevel).toBe("info");
     expect(settings.secretKey).toBeUndefined();
     expect(settings.adguard).toEqual({ mode: "disabled" });
@@ -59,6 +60,25 @@ describe("loadSettings", () => {
 
   it("rejects an invalid log level", () => {
     expect(() => loadSettings({ PCT_LOG_LEVEL: "verbose" })).toThrow(SettingsError);
+  });
+
+  describe("PCT_DEFAULT_TZ", () => {
+    it("defaults to UTC when unset", () => {
+      expect(loadSettings({}).defaultTz).toBe("UTC");
+    });
+
+    it("round-trips a valid IANA zone", () => {
+      expect(loadSettings({ PCT_DEFAULT_TZ: "America/New_York" }).defaultTz).toBe(
+        "America/New_York",
+      );
+    });
+
+    it("rejects an invalid IANA zone with a readable error", () => {
+      expect(() => loadSettings({ PCT_DEFAULT_TZ: "Mars/Olympus_Mons" })).toThrow(SettingsError);
+      expect(() => loadSettings({ PCT_DEFAULT_TZ: "Mars/Olympus_Mons" })).toThrow(
+        /valid IANA timezone/,
+      );
+    });
   });
 
   it("rejects an unknown AdGuard mode with a readable error", () => {

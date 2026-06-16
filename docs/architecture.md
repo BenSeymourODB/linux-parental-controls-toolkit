@@ -158,9 +158,13 @@ have left today?" has a precise answer without ever storing local-time
 strings.
 
 The mid-window case (a user changing timezone partway through a day, e.g.
-moving house or on vacation) is deliberately out of scope; changing `tz`
-takes effect from the next window boundary. The full rationale, the
-options weighed, and this deferral are in
+moving house or on vacation) is resolved by
+[`docs/adr/0003-mid-window-timezone-change.md`](adr/0003-mid-window-timezone-change.md):
+the in-flight window is **pinned to the timezone in effect when it opened**,
+so a `tz` change takes effect only from the next window boundary and a
+budget edge never shifts under the user mid-window. The shared budget-window
+helper (`server/src/policy/budget-window.ts`) applies this rule for every
+rollup. The original storage decision, with the options weighed, is in
 [`docs/adr/0001-budget-timezone.md`](adr/0001-budget-timezone.md).
 
 Key derived views the dashboard renders:
