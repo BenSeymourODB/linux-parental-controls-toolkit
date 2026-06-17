@@ -385,6 +385,19 @@ describe("error taxonomy", () => {
     expect((error as ActivityWatchRequestError).statusCode).toBe(503);
   });
 
+  it("maps a 404 (e.g. unknown bucket) to a request error preserving the status", async () => {
+    agent
+      .get(BASE_URL)
+      .intercept({ method: "GET", path: (p) => p.startsWith("/api/0/buckets/") })
+      .reply(404, "no such bucket");
+
+    const error = await makeClient()
+      .getEvents("missing", { start: START, end: END })
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ActivityWatchRequestError);
+    expect((error as ActivityWatchRequestError).statusCode).toBe(404);
+  });
+
   it("maps a connection failure to an unreachable error (not timed out)", async () => {
     agent
       .get(BASE_URL)
