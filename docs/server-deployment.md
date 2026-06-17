@@ -89,7 +89,12 @@ idempotently:
    (issues #49, #39).
 2. **Ansible bootstrap** — if `/data/ansible/venv` is missing, create it
    and `pip install ansible-core` (downloaded from PyPI at runtime, not
-   from the image). Sync `playbooks/` from the image.
+   from the image). Sync `playbooks/` from the image. The directory root is
+   `PCT_ANSIBLE_DIR` (default `/data/ansible`); the Phase-6 runner
+   (`transport/ansible`) execs `ansible-playbook` from
+   `<PCT_ANSIBLE_DIR>/venv/bin/` against playbooks in
+   `<PCT_ANSIBLE_DIR>/playbooks/` — always as a subprocess, never linked
+   in-process (`docs/licensing-analysis.md`).
 3. **AdGuard Home bootstrap** — driven by `PCT_ADGUARD_MODE` (see
    "AdGuard Home deployment modes" below). In `managed` mode, the
    first-time fetch downloads the latest stable release from

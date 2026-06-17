@@ -100,6 +100,14 @@ const settingsSchema = z
     logPretty: z.stringbool().default(false),
     /** Signs sessions / integration tokens (consumed in later phases). */
     secretKey: z.string().min(1).optional(),
+    /**
+     * Root of the data-volume Ansible directory (`PCT_ANSIBLE_DIR`). The
+     * Phase-6 runner resolves `ansible-playbook` at `<dir>/venv/bin/` and
+     * playbooks under `<dir>/playbooks/`; the venv itself is bootstrapped into
+     * this directory on first run (#39). Defaults to the documented
+     * `/data/ansible` layout (`docs/server-deployment.md` → "Volume layout").
+     */
+    ansibleDir: z.string().min(1).default("/data/ansible"),
     adguard: adguardSchema,
   })
   .superRefine((settings, ctx) => {
@@ -154,6 +162,7 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
     logLevel: env.PCT_LOG_LEVEL,
     logPretty: env.PCT_LOG_PRETTY,
     secretKey: env.PCT_SECRET_KEY,
+    ansibleDir: env.PCT_ANSIBLE_DIR,
     adguard: {
       mode: env.PCT_ADGUARD_MODE ?? "disabled",
       url: env.PCT_ADGUARD_URL,

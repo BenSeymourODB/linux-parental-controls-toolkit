@@ -15,7 +15,12 @@ describe("loadSettings", () => {
     expect(settings.defaultTz).toBe("UTC");
     expect(settings.logLevel).toBe("info");
     expect(settings.secretKey).toBeUndefined();
+    expect(settings.ansibleDir).toBe("/data/ansible");
     expect(settings.adguard).toEqual({ mode: "disabled" });
+  });
+
+  it("honours an explicit PCT_ANSIBLE_DIR", () => {
+    expect(loadSettings({ PCT_ANSIBLE_DIR: "/srv/ansible" }).ansibleDir).toBe("/srv/ansible");
   });
 
   it("round-trips explicit base values", () => {
