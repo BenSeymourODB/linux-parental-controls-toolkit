@@ -86,7 +86,12 @@ export function resolveEffectiveAction(
   return resolveEffectiveRule(rules, isActive)?.action ?? fallback;
 }
 
-/** The ordinal to give a newly appended rule so it sorts last: `max + 1`, or `0` when empty. */
+/**
+ * The ordinal to give a newly appended rule so it sorts last: `max + 1`, or
+ * `0` when empty. Never returns negative — a set of only-negative ordinals
+ * (not produced by {@link reorder}, which densifies to `0..n-1`) still yields
+ * `0`, which sorts after them.
+ */
 export function nextOrdinal(rules: readonly ScheduleRule[]): number {
   return rules.reduce((max, rule) => Math.max(max, rule.ordinal + 1), 0);
 }

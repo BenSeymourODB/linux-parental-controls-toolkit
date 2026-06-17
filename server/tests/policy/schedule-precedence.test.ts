@@ -104,6 +104,10 @@ describe("resolveEffectiveAction", () => {
     const rules = [rule({ id: 1, ordinal: 0, action: "deny" })];
     expect(resolveEffectiveAction(rules, () => false, "allow")).toBe("allow");
   });
+
+  it("yields the fallback for an empty rule set", () => {
+    expect(resolveEffectiveAction([], () => true, "deny")).toBe("deny");
+  });
 });
 
 describe("nextOrdinal", () => {
@@ -208,6 +212,16 @@ describe("findShadowedRules", () => {
     const rules = [
       rule({ id: 1, ordinal: 0, targetKind: "activity", targetId: 7, cronOrWindow: "@daily" }),
       rule({ id: 2, ordinal: 1, targetKind: "activity", targetId: 8, cronOrWindow: "@daily" }),
+    ];
+    expect(findShadowedRules(rules)).toStrictEqual([]);
+  });
+
+  it("treats targetKind as part of the match: same id, different kind is not shadowing", () => {
+    // A group rule and an activity rule that happen to share a target_id are
+    // different targets — the earlier one must not shadow the later.
+    const rules = [
+      rule({ id: 1, ordinal: 0, targetKind: "group", targetId: 7, cronOrWindow: "@daily" }),
+      rule({ id: 2, ordinal: 1, targetKind: "activity", targetId: 7, cronOrWindow: "@daily" }),
     ];
     expect(findShadowedRules(rules)).toStrictEqual([]);
   });
