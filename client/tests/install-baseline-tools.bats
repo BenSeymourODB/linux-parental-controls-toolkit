@@ -5,17 +5,24 @@
 
 setup() {
   SCRIPT="${BATS_TEST_DIRNAME}/../install-baseline-tools.sh"
+  # Self-managed temp dir: the apt `bats` on ubuntu-22.04 (1.2.x) predates
+  # BATS_TEST_TMPDIR, so create our own and clean it up in teardown.
+  TMP="$(mktemp -d)"
   # Force the supported-distro check to pass regardless of the host the tests
   # run on, and keep downloads/installs out of real system paths.
-  OSREL="${BATS_TEST_TMPDIR}/os-release"
+  OSREL="${TMP}/os-release"
   printf 'ID=ubuntu\nID_LIKE=debian\nVERSION_CODENAME=jammy\n' >"$OSREL"
   export PCT_OS_RELEASE="$OSREL"
   export PCT_DRY_RUN=1
-  export AW_PREFIX="${BATS_TEST_TMPDIR}/opt-aw"
-  export E2G_DIR="${BATS_TEST_TMPDIR}/etc-e2g"
+  export AW_PREFIX="${TMP}/opt-aw"
+  export E2G_DIR="${TMP}/etc-e2g"
   export E2G_PCT_DIR="${E2G_DIR}/pct.d"
   # A glob that matches nothing, so the "add PPA" branch runs by default.
-  export TIMEKPR_PPA_LIST_GLOB="${BATS_TEST_TMPDIR}/no-such-*.list"
+  export TIMEKPR_PPA_LIST_GLOB="${TMP}/no-such-*.list"
+}
+
+teardown() {
+  [ -n "${TMP:-}" ] && rm -rf "$TMP"
 }
 
 plan() { # run the script in dry-run with the given args, capture the plan
@@ -57,7 +64,7 @@ plan() { # run the script in dry-run with the given args, capture the plan
 }
 
 @test "aw-server config binds to loopback only (real write)" {
-  local home="${BATS_TEST_TMPDIR}/home"
+  local home="${TMP}/home"
   # Generate the config for real (dry-run suppresses file content), then
   # assert the written file pins aw-server to 127.0.0.1:5600.
   run env -u PCT_DRY_RUN bash -c '. "$1"; pct_aw_server_config "$2"' _ "$SCRIPT" "$home"
@@ -93,9 +100,9 @@ plan() { # run the script in dry-run with the given args, capture the plan
 }
 
 @test "PPA add is skipped when the list file already exists (idempotent)" {
-  local listfile="${BATS_TEST_TMPDIR}/existing-mjasnik.list"
+  local listfile="${TMP}/existing-mjasnik.list"
   : >"$listfile"
-  TIMEKPR_PPA_LIST_GLOB="${BATS_TEST_TMPDIR}/existing-*.list" \
+  TIMEKPR_PPA_LIST_GLOB="${TMP}/existing-*.list" \
     run env bash "$SCRIPT" --supervised-user alice
   [ "$status" -eq 0 ]
   [[ "$output" == *"Timekpr-nExT PPA already present"* ]]
