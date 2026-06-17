@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "12d906c3-b2d3-4bba-ad3c-4ae7cc7a56fc",
-  "prevId": "f3d5548f-d172-4223-92ce-ee19c786f714",
+  "id": "10ef7f27-452f-4519-9057-6860647066f7",
+  "prevId": "12d906c3-b2d3-4bba-ad3c-4ae7cc7a56fc",
   "tables": {
     "activities": {
       "name": "activities",
@@ -748,13 +748,22 @@
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
+        },
+        "ordinal": {
+          "name": "ordinal",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
         }
       },
       "indexes": {
-        "schedules_user_idx": {
-          "name": "schedules_user_idx",
+        "schedules_user_ordinal_idx": {
+          "name": "schedules_user_ordinal_idx",
           "columns": [
-            "user_id"
+            "user_id",
+            "ordinal"
           ],
           "isUnique": false
         }
