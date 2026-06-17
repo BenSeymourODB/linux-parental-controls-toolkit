@@ -2,14 +2,14 @@
 
 Client-side install scripts and templates for enrolling a supervised
 Linux desktop (initial target: **Linux Mint with Cinnamon**, Ubuntu/Debian
-family). This tree is intentionally a placeholder for now — real content
-lands in later roadmap phases. It is reserved here so the `shellcheck`,
-`ansible-lint`, and `client-install-dryrun` CI jobs have known paths to
-scan instead of guessing.
+family). This tree is filling in as the Phase 3 install components land; the
+top-level `install-client.sh` orchestrator (#76) and the remaining steps
+(`agent/`, `ansible/`) are still to come, and the `shellcheck`, `ansible-lint`,
+`shell-tests`, and `client-install-dryrun` CI jobs scan these paths.
 
 The authoritative design lives in
 [`docs/client-install.md`](../docs/client-install.md). Read that first; the
-summary below only maps the upcoming directory layout to it.
+summary below maps the directory layout to it.
 
 ## What enforcement uses
 

@@ -123,3 +123,11 @@ pct_write_file() {
   mkdir -p "$(dirname "$path")"
   cat >"$path"
 }
+
+# Recursively give a path to a Linux user (and their login group). Dry-run
+# aware. Used after writing into a supervised user's home as root, so the
+# files end up owned by the user rather than root.
+pct_chown_user() {
+  local user="$1" path="$2"
+  pct_run chown -R "${user}:" "$path"
+}

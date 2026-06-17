@@ -122,6 +122,15 @@ pct_baseline_install_activitywatch() {
     return 0
   fi
 
+  # The pinned upstream bundle is x86_64-only; fail loudly rather than 404 on a
+  # mismatched arch (an ARM Mint/RPi client is out of scope for this baseline).
+  local arch
+  arch="$(uname -m 2>/dev/null || echo unknown)"
+  if [ "$arch" != "x86_64" ]; then
+    pct_err "ActivityWatch baseline supports x86_64 only (this host is '${arch}')"
+    return 1
+  fi
+
   local archive="activitywatch-${AW_VERSION}-linux-x86_64.zip"
   local url="https://github.com/ActivityWatch/activitywatch/releases/download/${AW_VERSION}/${archive}"
   local tmp="${PCT_AW_CACHE:-/tmp/pct-aw}"
@@ -206,6 +215,8 @@ pct_baseline_configure_activitywatch() {
     pct_log "ActivityWatch units for ${user}"
     home="$(getent passwd "$user" | cut -d: -f6 || true)"
     [ -n "$home" ] || home="/home/${user}"
+    local uid
+    uid="$(id -u "$user" 2>/dev/null || true)"
 
     # aw-server bound to loopback only.
     pct_aw_server_config "$home"
@@ -220,15 +231,6 @@ pct_baseline_configure_activitywatch() {
       "${AW_PREFIX}/activitywatch/aw-watcher-window/aw-watcher-window" \
       "ActivityWatch window watcher"
 
-    # Let the user's units run without an active login session, then enable
-    # them. Run `systemctl --user` in the user's own bus.
-    pct_run loginctl enable-linger "$user"
-    local svc
-    for svc in aw-server aw-watcher-afk aw-watcher-window; do
-      pct_run sudo -u "$user" XDG_RUNTIME_DIR="/run/user/$(id -u "$user" 2>/dev/null || echo 0)" \
-        systemctl --user enable "${svc}.service"
-    done
-
     # The browser extension can't be installed unattended; leave a note.
     pct_write_file "${home}/Desktop/install-aw-browser-extension.md" <<'EOF'
 # Install the ActivityWatch browser extension
@@ -242,21 +244,31 @@ ActivityWatch tracks application/window time automatically, but accurate
 It talks only to your local ActivityWatch server (127.0.0.1:5600) — nothing
 leaves this machine until the dashboard pulls it over a secure tunnel.
 EOF
+
+    # We wrote those files as root; hand them back to the user so aw-server
+    # (and `systemctl --user`) can read/write its own config + DB.
+    pct_chown_user "$user" "${home}/.config"
+    pct_chown_user "$user" "${home}/Desktop/install-aw-browser-extension.md"
+
+    # Linger so the user manager runs without an active login; then enable the
+    # units. They start on the user's next graphical login (aw-watcher-window /
+    # -afk need a desktop session anyway), or immediately once that session is
+    # up — `enable` here just makes them persistent.
+    pct_run loginctl enable-linger "$user"
+    local svc
+    for svc in aw-server aw-watcher-afk aw-watcher-window; do
+      pct_run sudo -u "$user" XDG_RUNTIME_DIR="/run/user/${uid}" \
+        systemctl --user enable "${svc}.service"
+    done
   done
 }
 
 # --- step: e2guardian baseline ---------------------------------------------
 
-pct_baseline_configure_e2guardian() {
-  pct_step "Configure e2guardian (permissive baseline + per-user skeleton)"
-  # Let the service run. Real filter rules + the iptables OUTPUT redirect are
-  # Phase 6 Ansible's job (#90); this baseline must NOT block traffic.
-  printf '# Managed by pct install-baseline-tools.sh (Phase 3 baseline).\nRUN=yes\n' |
-    pct_write_file "${E2G_DIR}/e2guardianf1.conf.pct-note"
-
-  # A permissive default filter group: high naughtiness limit + no block
-  # lists, so installing e2guardian never silently breaks browsing before the
-  # admin configures real rules from the dashboard.
+# Write the permissive default filter group: high naughtiness limit + no block
+# lists, so installing e2guardian never silently breaks browsing before the
+# admin pushes real rules. Factored out so its content is unit-testable.
+pct_e2g_baseline_filtergroup() {
   pct_write_file "${E2G_DIR}/e2guardianf1.conf" <<'EOF'
 # Managed by pct install-baseline-tools.sh — PERMISSIVE Phase 3 baseline.
 #
@@ -268,6 +280,17 @@ groupmode = 1
 naughtynesslimit = 9999
 reportinglevel = 0
 EOF
+}
+
+pct_baseline_configure_e2guardian() {
+  pct_step "Configure e2guardian (permissive baseline + per-user skeleton)"
+  # Let the service run (some Debian packagings ship it gated off). Real filter
+  # rules + the iptables OUTPUT redirect are Phase 6 Ansible's job (#90); this
+  # baseline must NOT block traffic.
+  printf '# Managed by pct install-baseline-tools.sh (Phase 3 baseline).\nRUN=yes\n' |
+    pct_write_file "/etc/default/e2guardian"
+
+  pct_e2g_baseline_filtergroup
 
   # Per-supervised-user skeleton placeholders, namespaced under pct.d so a
   # household's existing e2guardian config is left untouched. Phase 6 reads

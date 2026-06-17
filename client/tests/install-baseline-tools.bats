@@ -75,6 +75,32 @@ plan() { # run the script in dry-run with the given args, capture the plan
   grep -q 'port = 5600' "$cfg"
 }
 
+@test "e2guardian baseline filter group is permissive (real write)" {
+  # Generate the filter group for real (dry-run suppresses file content) and
+  # assert it is allow-all so installing e2guardian never blocks browsing
+  # before the admin pushes real rules.
+  run env -u PCT_DRY_RUN E2G_DIR="${TMP}/etc-e2g" \
+    bash -c '. "$1"; pct_e2g_baseline_filtergroup' _ "$SCRIPT"
+  [ "$status" -eq 0 ]
+  local conf="${TMP}/etc-e2g/e2guardianf1.conf"
+  [ -f "$conf" ]
+  grep -q 'naughtynesslimit = 9999' "$conf"
+  grep -q 'PERMISSIVE' "$conf"
+}
+
+@test "e2guardian is enabled via /etc/default and the f1 filter group" {
+  plan --supervised-user alice
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"write /etc/default/e2guardian"* ]]
+  [[ "$output" == *"/e2guardianf1.conf"* ]]
+}
+
+@test "supervised user's written files are chowned back to the user" {
+  plan --supervised-user alice
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"chown -R alice: "*"/.config"* ]]
+}
+
 @test "configures every supervised user for ActivityWatch and e2guardian" {
   plan --supervised-user alice --supervised-user bob
   [ "$status" -eq 0 ]
