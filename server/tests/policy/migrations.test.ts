@@ -50,11 +50,17 @@ function userTableNames(sqlite: Database.Database): string[] {
     .all() as string[];
 }
 
-/** The policy-model tables this migration must materialise (docs/architecture.md). */
+/**
+ * Every table the committed migrations must materialise. These are the
+ * policy-model tables (docs/architecture.md) plus `admin_credentials`, the
+ * single-admin login row added in #52 (not part of the policy model — see the
+ * table comment in `schema.ts`). Sorted to match the `ORDER BY name` query.
+ */
 const EXPECTED_TABLES = [
   "activities",
   "activities_to_groups",
   "activity_groups",
+  "admin_credentials",
   "budgets",
   "clients",
   "exceptions",

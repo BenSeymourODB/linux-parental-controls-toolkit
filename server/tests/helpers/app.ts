@@ -50,7 +50,12 @@ export interface BuildTestAppOptions {
 export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
   const db = options.db ?? testDb();
   const app = buildApp({
-    settings: loadSettings({ PCT_LOG_LEVEL: "silent" }),
+    // A secret so auth (#52) is "configured" in the common path — guarded
+    // routes and the auth endpoints work without each test re-supplying one.
+    // Tests that need the unconfigured path pass their own settings via
+    // appOptions. No admin is seeded by default (no PCT_ADMIN_* here), so
+    // login tests opt in by supplying those.
+    settings: loadSettings({ PCT_LOG_LEVEL: "silent", PCT_SECRET_KEY: "test-secret-key" }),
     ...options.appOptions,
     // Inject the bundled db last so app.db is the handle this helper returns,
     // regardless of any db passed via appOptions.

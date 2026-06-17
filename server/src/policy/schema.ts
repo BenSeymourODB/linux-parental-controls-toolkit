@@ -331,6 +331,30 @@ export const integrationTokens = sqliteTable(
 );
 
 /**
+ * The single dashboard administrator's login credential (#52).
+ *
+ * This is **not** part of the policy model: a policy-model {@link users} row is
+ * a *supervised person*, never an auth principal (`docs/architecture.md` →
+ * "Policy model"). There is exactly one admin login for the whole dashboard,
+ * and that singleton invariant is encoded structurally — `CHECK (id = 1)` means
+ * the table can hold at most one row, so the schema itself rules out a second
+ * admin sneaking in. Only the Argon2id `password_hash` is stored; the plaintext
+ * (from `PCT_ADMIN_PASSWORD` on first run) is hashed immediately and never
+ * persisted. Accounts/roles/MFA are out of scope until the identity work
+ * (Phase 11 / stretch #24 → #26).
+ */
+export const adminCredentials = sqliteTable(
+  "admin_credentials",
+  {
+    id: integer("id").primaryKey(),
+    username: text("username").notNull(),
+    passwordHash: text("password_hash").notNull(),
+    createdAt: timestampNow("created_at"),
+  },
+  (table) => [check("admin_credentials_singleton_check", sql`${table.id} = 1`)],
+);
+
+/**
  * Per-user knobs for the client-side notification experience (Phase 8b).
  * 1:1 with {@link users} (the `user_id` is the primary key).
  * `cadence_overrides_json` is an optional JSON blob of warning-cadence
