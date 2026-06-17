@@ -47,6 +47,11 @@ export function testDb(): TestDb {
   // default here since hermetic unit tests opt into FK checks when they need
   // them. Once CRUD routes land (#51), consider enabling foreign_keys here so
   // route tests over app.db catch referential bugs the way runtime does.
+  // Enable foreign_keys (SQLite leaves it OFF per connection) so hermetic
+  // route/repository tests over app.db enforce referential integrity — and
+  // exercise ON DELETE CASCADE — exactly the way the runtime createDb() does.
+  // Landed with the CRUD routes (#51), as this helper's prior note anticipated.
+  sqlite.pragma("foreign_keys = ON");
   const db: PolicyDb = drizzle(sqlite, { schema });
   migrate(db, { migrationsFolder });
   return db;
