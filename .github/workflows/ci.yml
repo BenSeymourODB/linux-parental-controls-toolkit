@@ -110,6 +110,22 @@ jobs:
             echo "No shell scripts in client/ yet — skipping ShellCheck"
           fi
 
+  shell-tests:
+    name: Shell unit tests (bats)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run bats tests (client scripts)
+        run: |
+          if compgen -G "client/tests/*.bats" > /dev/null 2>&1; then
+            sudo apt-get update -q
+            sudo apt-get install -y -q bats
+            bats client/tests/*.bats
+          else
+            echo "No bats tests in client/ yet — skipping"
+          fi
+
   ansible-lint:
     name: ansible-lint
     runs-on: ubuntu-22.04

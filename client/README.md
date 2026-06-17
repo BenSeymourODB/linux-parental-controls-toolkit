@@ -42,6 +42,34 @@ distribution's package manager or upstream releases — **not** from this
 repository — preserving the license boundary documented in
 [`docs/licensing-analysis.md`](../docs/licensing-analysis.md).
 
+The orchestrator composes single-responsibility components, each its own
+roadmap item:
+
+- `lib/pct-common.sh` — shared helpers (logging, a dry-run-aware command
+  runner, `/etc/os-release` distro detection, file writing). Sourced by the
+  install components; set `PCT_DRY_RUN=1` to print the intended plan without
+  changing anything.
+- `install-baseline-tools.sh` (#79) — installs and writes a **safe baseline**
+  config for the three upstream tools: adds the Timekpr-nExT PPA, installs
+  `timekpr-next` / `e2guardian`, fetches the pinned ActivityWatch upstream
+  release (checksum-verified, binding `aw-server` to `127.0.0.1:5600` only),
+  and lays down per-supervised-user ActivityWatch `systemd --user` units plus
+  a permissive e2guardian baseline + per-UID filter-group skeleton. The
+  *managed* configuration — real e2guardian filter rules, the iptables OUTPUT
+  redirect, ActivityWatch upgrades, AppArmor — is owned by the Phase 6 Ansible
+  playbooks (`ansible/`); this step deliberately stops at the baseline and
+  leaves those as extension points (no iptables here).
+
+Run a component standalone, or dry-run it (no root/network needed):
+
+```bash
+sudo bash client/install-baseline-tools.sh --supervised-user alice
+PCT_DRY_RUN=1 bash client/install-baseline-tools.sh --supervised-user alice
+```
+
+Shell unit tests live in `client/tests/*.bats` (run with `bats
+client/tests/*.bats`); `shellcheck` and `bats` both run in CI.
+
 ### `agent/` (Phase 8b)
 
 The `pct-client` agent (TypeScript), shipped as a `.deb` that bundles its
