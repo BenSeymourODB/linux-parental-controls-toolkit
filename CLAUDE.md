@@ -45,7 +45,10 @@ existing tool we configure and orchestrate.
   consume the types inferred from them.
 - **Database:** SQLite for the policy store, via better-sqlite3 +
   Drizzle ORM. Migrations via drizzle-kit (generated SQL committed under
-  `server/drizzle/`).
+  `server/drizzle/`). Migrations are **timestamp-prefixed**
+  (`migrations: { prefix: "timestamp" }` in `drizzle.config.ts`) so
+  concurrent sessions don't collide on filenames — always generate with
+  `npm run db:generate`, never hand-number a migration (#133).
 - **Frontend:** Two surfaces, one SvelteKit project (`server/frontend/`,
   Svelte 5, `adapter-static`), served by the same Fastify process:
   - `/admin/*` — desktop admin experience (policy editors, live
