@@ -118,9 +118,24 @@ describe("createAnsibleRunner.runPlaybook — error taxonomy", () => {
     );
   });
 
+  it("maps a spawn EACCES (binary not executable) to AnsibleUnavailableError", async () => {
+    mockCp.execFile.mockImplementation((_cmd, _args, _opts, cb) => {
+      cb(Object.assign(new Error("spawn EACCES"), { code: "EACCES" }), "", "");
+    });
+
+    const runner = makeRunner();
+    await expect(runner.runPlaybook({ playbook: "site.yml", hosts: [] })).rejects.toBeInstanceOf(
+      AnsibleUnavailableError,
+    );
+  });
+
   it("maps an exit code with the unreachable bit (4) to AnsibleUnreachableError", async () => {
     mockCp.execFile.mockImplementation((_cmd, _args, _opts, cb) => {
-      cb(Object.assign(new Error("unreachable"), { code: 4 }), "", "host unreachable");
+      cb(
+        Object.assign(new Error("unreachable"), { code: 4 }),
+        "RECAP unreachable=1",
+        "ssh: timeout",
+      );
     });
 
     const runner = makeRunner();
@@ -131,7 +146,8 @@ describe("createAnsibleRunner.runPlaybook — error taxonomy", () => {
     expect(error).toBeInstanceOf(AnsibleUnreachableError);
     if (error instanceof AnsibleUnreachableError) {
       expect(error.exitCode).toBe(4);
-      expect(error.stderr).toBe("host unreachable");
+      expect(error.stdout).toContain("RECAP unreachable=1");
+      expect(error.stderr).toBe("ssh: timeout");
     }
   });
 
@@ -146,9 +162,9 @@ describe("createAnsibleRunner.runPlaybook — error taxonomy", () => {
     );
   });
 
-  it("maps a plain non-zero exit (2) to AnsiblePlaybookFailedError", async () => {
+  it("maps a plain non-zero exit (2) to AnsiblePlaybookFailedError, keeping stdout+stderr", async () => {
     mockCp.execFile.mockImplementation((_cmd, _args, _opts, cb) => {
-      cb(Object.assign(new Error("failed"), { code: 2 }), "", "a task failed");
+      cb(Object.assign(new Error("failed"), { code: 2 }), "PLAY RECAP failed=1", "a task failed");
     });
 
     const runner = makeRunner();
@@ -159,12 +175,19 @@ describe("createAnsibleRunner.runPlaybook — error taxonomy", () => {
     expect(error).toBeInstanceOf(AnsiblePlaybookFailedError);
     if (error instanceof AnsiblePlaybookFailedError) {
       expect(error.exitCode).toBe(2);
+      // The PLAY RECAP and task output live in stdout, not stderr.
+      expect(error.stdout).toContain("PLAY RECAP failed=1");
+      expect(error.stderr).toBe("a task failed");
     }
   });
 
-  it("treats a kill-by-signal (no numeric code) as a generic playbook failure", async () => {
+  it("treats a kill-by-signal (code null) as a failure with no numeric exit code", async () => {
     mockCp.execFile.mockImplementation((_cmd, _args, _opts, cb) => {
-      cb(Object.assign(new Error("killed"), { killed: true, signal: "SIGTERM" }), "", "");
+      cb(
+        Object.assign(new Error("killed"), { code: null, killed: true, signal: "SIGTERM" }),
+        "",
+        "",
+      );
     });
 
     const runner = makeRunner();
@@ -174,7 +197,48 @@ describe("createAnsibleRunner.runPlaybook — error taxonomy", () => {
 
     expect(error).toBeInstanceOf(AnsiblePlaybookFailedError);
     if (error instanceof AnsiblePlaybookFailedError) {
-      expect(error.exitCode).toBe(1);
+      expect(error.exitCode).toBeNull();
+      expect(error.message).toContain("SIGTERM");
+    }
+  });
+
+  it("treats a maxBuffer overflow (string code, no exit code) as a failure, not exit 1", async () => {
+    mockCp.execFile.mockImplementation((_cmd, _args, _opts, cb) => {
+      cb(
+        Object.assign(new Error("stdout maxBuffer exceeded"), {
+          code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER",
+        }),
+        "",
+        "",
+      );
+    });
+
+    const runner = makeRunner();
+    const error = await runner
+      .runPlaybook({ playbook: "site.yml", hosts: [] })
+      .catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(AnsiblePlaybookFailedError);
+    if (error instanceof AnsiblePlaybookFailedError) {
+      expect(error.exitCode).toBeNull();
+      expect(error.message).toContain("ERR_CHILD_PROCESS_STDIO_MAXBUFFER");
+    }
+  });
+
+  it("falls back to 'unknown error' when there is neither an exit code nor a signal", async () => {
+    mockCp.execFile.mockImplementation((_cmd, _args, _opts, cb) => {
+      cb(Object.assign(new Error("mystery"), { code: null }), "", "");
+    });
+
+    const runner = makeRunner();
+    const error = await runner
+      .runPlaybook({ playbook: "site.yml", hosts: [] })
+      .catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(AnsiblePlaybookFailedError);
+    if (error instanceof AnsiblePlaybookFailedError) {
+      expect(error.exitCode).toBeNull();
+      expect(error.message).toContain("unknown error");
     }
   });
 });

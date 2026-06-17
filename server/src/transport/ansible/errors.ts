@@ -55,29 +55,37 @@ export class AnsibleUnavailableError extends AnsibleError {
  */
 export class AnsibleUnreachableError extends AnsibleError {
   readonly exitCode: number;
+  readonly stdout: string;
   readonly stderr: string;
 
-  constructor(exitCode: number, stderr: string) {
+  constructor(exitCode: number, stdout: string, stderr: string) {
     super(`ansible-playbook reported unreachable host(s) (exit code ${exitCode})`);
     this.name = "AnsibleUnreachableError";
     this.exitCode = exitCode;
+    this.stdout = stdout;
     this.stderr = stderr;
   }
 }
 
 /**
- * The playbook ran but exited non-zero for a reason other than an unreachable
- * host (a failed task, a parse error, a bad invocation). Not automatically
- * retryable — the admin needs to see what failed.
+ * The playbook ran but did not succeed for a reason other than an unreachable
+ * host: a failed task or parse error (a numeric, non-zero `exitCode`), or a
+ * non-exit termination such as a kill-by-signal or the captured output
+ * exceeding `maxBuffer` (then `exitCode` is `null` and the message carries the
+ * raw reason). Not automatically retryable — the admin needs to see what
+ * failed, so both `stdout` (where Ansible writes the PLAY RECAP and most task
+ * output) and `stderr` are retained.
  */
 export class AnsiblePlaybookFailedError extends AnsibleError {
-  readonly exitCode: number;
+  readonly exitCode: number | null;
+  readonly stdout: string;
   readonly stderr: string;
 
-  constructor(exitCode: number, stderr: string) {
-    super(`ansible-playbook failed (exit code ${exitCode})`);
+  constructor(exitCode: number | null, stdout: string, stderr: string, detail?: string) {
+    super(`ansible-playbook failed (${detail ?? `exit code ${exitCode ?? "unknown"}`})`);
     this.name = "AnsiblePlaybookFailedError";
     this.exitCode = exitCode;
+    this.stdout = stdout;
     this.stderr = stderr;
   }
 }

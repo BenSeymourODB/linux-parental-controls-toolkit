@@ -134,24 +134,36 @@ function runProcess(
 }
 
 /**
- * Map an `execFile` failure onto the transport's error taxonomy. `ENOENT`
- * means the binary itself is missing (venv not bootstrapped); a numeric exit
- * code is interpreted via Ansible's bit set; anything else is a generic
- * failure.
+ * Map an `execFile` failure onto the transport's error taxonomy.
+ *
+ * `error.code` is either a spawn/exec-level string code (`ENOENT` if the
+ * binary is missing, `EACCES` if it is not executable,
+ * `ERR_CHILD_PROCESS_STDIO_MAXBUFFER` if the output overflowed), a numeric
+ * process exit code, or `null` when the process was killed by a signal. We
+ * never fabricate an exit code: a non-numeric failure carries
+ * `exitCode === null` and surfaces the raw reason in the message.
  */
 function classifyFailure(
   binaryPath: string,
   error: ExecFileException,
+  stdout: string,
   stderr: string,
 ): AnsibleError {
-  if (error.code === "ENOENT") {
+  const code = error.code;
+  // Spawn-level failures: the binary could not be executed at all.
+  if (code === "ENOENT" || code === "EACCES") {
     return new AnsibleUnavailableError(binaryPath, error);
   }
-  const exitCode = typeof error.code === "number" ? error.code : 1;
-  if ((exitCode & UNREACHABLE_BIT) !== 0) {
-    return new AnsibleUnreachableError(exitCode, stderr);
+  if (typeof code === "number") {
+    if ((code & UNREACHABLE_BIT) !== 0) {
+      return new AnsibleUnreachableError(code, stdout, stderr);
+    }
+    return new AnsiblePlaybookFailedError(code, stdout, stderr);
   }
-  return new AnsiblePlaybookFailedError(exitCode, stderr);
+  // No numeric exit code: a kill-by-signal (`code` null, `signal` set) or a
+  // non-spawn exec error such as the captured output exceeding `maxBuffer`.
+  const reason = typeof code === "string" ? code : (error.signal ?? "unknown error");
+  return new AnsiblePlaybookFailedError(null, stdout, stderr, `terminated: ${reason}`);
 }
 
 /**
@@ -178,6 +190,11 @@ export function createAnsibleRunner(options: AnsibleRunnerOptions): AnsibleRunne
         await writeFile(inventoryPath, inventory, "utf8");
 
         const args = ["-i", inventoryPath, playbookPath];
+        // `limit` is an Ansible host-pattern from the (trusted, server-side)
+        // caller and is passed through unvalidated — unlike hostnames/users,
+        // which come from `Client` rows and are charset-checked in
+        // `buildInventory`. It is still a single argv token (no shell), so it
+        // cannot inject anything beyond a `--limit` value.
         if (limit !== undefined) args.push("--limit", limit);
         if (extraVars !== undefined) args.push("--extra-vars", JSON.stringify(extraVars));
 
@@ -190,7 +207,7 @@ export function createAnsibleRunner(options: AnsibleRunnerOptions): AnsibleRunne
           return { playbook, exitCode: 0, stdout, stderr };
         }
 
-        const failure = classifyFailure(binaryPath, error, stderr);
+        const failure = classifyFailure(binaryPath, error, stdout, stderr);
         logger.warn(
           { playbook, error: failure.name, message: failure.message },
           "ansible-playbook run failed",
