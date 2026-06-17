@@ -129,7 +129,13 @@ describe("GET /api/meta (via buildApp)", () => {
   let app: FastifyInstance;
 
   beforeEach(() => {
-    app = buildApp({ settings: loadSettings({ PCT_LOG_LEVEL: "silent" }) });
+    // In-memory DB so buildApp's own createDb (we deliberately don't inject a
+    // handle here — the point is to exercise the real buildApp wiring) doesn't
+    // try to open the default /data/policy.sqlite, which doesn't exist on a CI
+    // runner or a dev box without the mounted data volume.
+    app = buildApp({
+      settings: loadSettings({ PCT_LOG_LEVEL: "silent", DATABASE_URL: ":memory:" }),
+    });
   });
 
   afterEach(async () => {
