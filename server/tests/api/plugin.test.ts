@@ -18,6 +18,7 @@ import { ApiError } from "../../src/api/errors.js";
 import { installApiConventions, type ZodTypeProvider } from "../../src/api/validation.js";
 import { buildApp } from "../../src/web/app.js";
 import { loadSettings } from "../../src/config.js";
+import { testDb, type TestDb } from "../helpers/db.js";
 
 const bodySchema = z.object({ seconds: z.number().int().positive() });
 const querySchema = z.object({ n: z.coerce.number().int() });
@@ -127,13 +128,20 @@ describe("/api conventions", () => {
 
 describe("GET /api/meta (via buildApp)", () => {
   let app: FastifyInstance;
+  let db: TestDb;
 
   beforeEach(() => {
-    app = buildApp({ settings: loadSettings({ PCT_LOG_LEVEL: "silent" }) });
+    // Inject an in-memory policy DB (as buildTestApp() does) so buildApp does
+    // not fall back to opening settings.databaseUrl — the `/data/policy.sqlite`
+    // default, whose directory is absent in CI and fresh checkouts. The route
+    // assertions below are unchanged; this only fixes the test's DB wiring.
+    db = testDb();
+    app = buildApp({ settings: loadSettings({ PCT_LOG_LEVEL: "silent" }), db });
   });
 
   afterEach(async () => {
     await app.close();
+    db.$client.close();
   });
 
   it("is mounted and returns the meta DTO", async () => {
