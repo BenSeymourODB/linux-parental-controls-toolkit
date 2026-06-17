@@ -15,6 +15,13 @@
       "when": 1781647561616,
       "tag": "0001_sparkling_talkback",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1781668720900,
+      "tag": "0002_hard_green_goblin",
+      "breakpoints": true
     }
   ]
 }
