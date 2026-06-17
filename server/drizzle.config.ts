@@ -24,6 +24,13 @@ export default defineConfig({
   dialect: "sqlite",
   schema: "./src/policy/schema.ts",
   out: "./drizzle",
+  // Timestamp-prefix new migrations (`<YYYYMMDDHHmmss>_<slug>`) instead of the
+  // default sequential `index` prefix (`0000_`, `0001_`, …). Two sessions that
+  // branch off the same `main` and each run `db:generate` would otherwise pick
+  // the *same* filename for both the SQL and the snapshot and collide on merge;
+  // timestamps make those filenames non-colliding. See issue #133. The naming
+  // convention is enforced by tests/policy/migration-naming.test.ts.
+  migrations: { prefix: "timestamp" },
   dbCredentials: {
     url: dbPath,
   },

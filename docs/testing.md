@@ -265,6 +265,26 @@ and leaves closing it to the provider. So `app.db`, the `db` returned by
 - The migrated schema matches the Drizzle schema definition
   (`drizzle-kit check` is also run in CI to catch drift).
 
+### `tests/policy/migration-naming.test.ts`
+
+Migrations are **timestamp-prefixed** (`<YYYYMMDDHHmmss>_<slug>`), not
+sequentially numbered — `drizzle.config.ts` sets `migrations: { prefix:
+"timestamp" }` so two sessions branching off the same `main` don't generate
+colliding filenames (issue #133). Always generate with `npm run db:generate`
+so the prefix is applied; never hand-name a migration.
+
+- Every migration tag in `drizzle/meta/_journal.json` is either one of the two
+  grandfathered index-prefixed migrations (`0000_*`, `0001_*`) or matches
+  `^[0-9]{14}_[a-z0-9_]+$`.
+- No two timestamp migrations share the same second.
+- Each journal tag has its `<tag>.sql` and `<prefix>_snapshot.json`, with no
+  stray SQL files.
+
+This runs in the unit-test job, so a migration generated without the timestamp
+prefix fails CI. It is the filename-collision guard; the `drizzle-kit check`
+drift gate above remains the backstop for *semantic* conflicts between two
+independent schema edits.
+
 ---
 
 ## API module — what to test
