@@ -14,6 +14,19 @@
  * committed `drizzle/` folder, so the check executes in CI's unit-test job
  * (`.github/workflows/ci.yml` → `test`) — no separate runner or dependency.
  *
+ * What it enforces:
+ *  - timestamp-style tags are well-formed (`^[0-9]{14}_[a-z0-9_]+$`);
+ *  - no two timestamp migrations share the same second (the one residual
+ *    collision the timestamp prefix can still produce);
+ *  - every tag matches *either* the legacy index prefix or the timestamp
+ *    prefix — anything else (a hand-named or malformed migration) is rejected.
+ *
+ * Legacy index-prefixed migrations are accepted structurally rather than via a
+ * hardcoded allowlist: the `prefix: "timestamp"` config is what prevents *new*
+ * index migrations from being generated, and a hardcoded list would re-break
+ * CI every time another pre-convention index migration merged to `main` while
+ * this guard's PR was open — exactly the coordination tax #133 removes.
+ *
  * It is intentionally a test-scoped helper (not `src/`): it never runs at
  * runtime and must not ship in the Docker image.
  */
@@ -25,29 +38,13 @@ const TIMESTAMP_TAG = /^[0-9]{14}_[a-z0-9_]+$/;
 const LEGACY_INDEX_TAG = /^[0-9]{4}_[a-z0-9_]+$/;
 
 /**
- * The index-prefixed migrations that predate the timestamp convention (#133).
- * They are grandfathered in; every migration generated afterwards must use the
- * timestamp prefix. Drizzle orders migrations by the journal's `idx`/`when`, so
- * the mixed prefixes coexist without any reordering.
- */
-export const GRANDFATHERED_INDEX_TAGS: readonly string[] = [
-  "0000_broad_slapstick",
-  "0001_sparkling_talkback",
-];
-
-/**
  * Validate the naming of every migration tag drawn from `_journal.json`.
  *
  * Returns a list of human-readable violation messages; an empty array means
- * the set is compliant. A tag is compliant when it is either grandfathered
- * (see {@link GRANDFATHERED_INDEX_TAGS}) or matches the timestamp convention
- * `^[0-9]{14}_[a-z0-9_]+$`. Two timestamp migrations that share the same
- * 14-digit second are also reported, since that is the one residual collision
- * the timestamp prefix can still produce.
+ * the set is compliant.
  */
 export function checkMigrationNaming(journalTags: readonly string[]): string[] {
   const violations: string[] = [];
-  const grandfathered = new Set(GRANDFATHERED_INDEX_TAGS);
   const timestampPrefixes = new Map<string, string[]>();
 
   for (const tag of journalTags) {
@@ -58,21 +55,17 @@ export function checkMigrationNaming(journalTags: readonly string[]): string[] {
       timestampPrefixes.set(prefix, collisions);
       continue;
     }
-    if (grandfathered.has(tag)) {
+    if (LEGACY_INDEX_TAG.test(tag)) {
+      // Grandfathered: an index-prefixed migration that predates the timestamp
+      // convention. New ones can't be generated once `prefix: "timestamp"` is
+      // set in drizzle.config.ts.
       continue;
     }
-    if (LEGACY_INDEX_TAG.test(tag)) {
-      violations.push(
-        `migration "${tag}" uses the legacy sequential index prefix; new ` +
-          `migrations must use the timestamp prefix — see drizzle.config.ts ` +
-          `(\`migrations: { prefix: "timestamp" }\`) and issue #133`,
-      );
-    } else {
-      violations.push(
-        `migration "${tag}" does not match the required ` +
-          `<YYYYMMDDHHmmss>_<slug> naming convention (issue #133)`,
-      );
-    }
+    violations.push(
+      `migration "${tag}" matches neither the legacy index prefix nor the ` +
+        `required <YYYYMMDDHHmmss>_<slug> timestamp convention — generate ` +
+        `migrations with \`npm run db:generate\`, never hand-name them (issue #133)`,
+    );
   }
 
   for (const [prefix, tags] of timestampPrefixes) {

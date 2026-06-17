@@ -22,10 +22,13 @@ regenerate by hand. This bit PR #123 twice in one session.
    (`tests/policy/migration-naming.ts`) plus a suite
    (`tests/policy/migration-naming.test.ts`) that runs in the existing unit
    CI job (`.github/workflows/ci.yml` → `test`). It validates that every
-   migration the journal references is **either** one of the two index-prefixed
-   migrations that predate the convention (grandfathered) **or** matches
-   `^[0-9]{14}_[a-z0-9_]+$`, and flags two timestamp migrations that share the
-   same second. Implemented as a vitest test rather than a standalone runner so
+   migration the journal references matches **either** the legacy index prefix
+   (`^[0-9]{4}_…`, grandfathered structurally — not via a hardcoded list, so
+   another pre-convention index migration merging to `main` mid-PR doesn't
+   re-break CI) **or** the timestamp convention `^[0-9]{14}_[a-z0-9_]+$`, and
+   flags two timestamp migrations that share the same second. The
+   `prefix: "timestamp"` config is what prevents *new* index migrations.
+   Implemented as a vitest test rather than a standalone runner so
    no new tooling/dependency (e.g. `tsx`) is added — the check runs wherever
    `npm test` runs, and the logic is unit-tested directly.
 

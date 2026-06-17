@@ -273,17 +273,19 @@ sequentially numbered — `drizzle.config.ts` sets `migrations: { prefix:
 colliding filenames (issue #133). Always generate with `npm run db:generate`
 so the prefix is applied; never hand-name a migration.
 
-- Every migration tag in `drizzle/meta/_journal.json` is either one of the two
-  grandfathered index-prefixed migrations (`0000_*`, `0001_*`) or matches
-  `^[0-9]{14}_[a-z0-9_]+$`.
+- Every migration tag in `drizzle/meta/_journal.json` matches *either* the
+  legacy index prefix (`^[0-9]{4}_…`, grandfathered) or the timestamp
+  convention `^[0-9]{14}_[a-z0-9_]+$`; a hand-named or malformed tag fails.
 - No two timestamp migrations share the same second.
 - Each journal tag has its `<tag>.sql` and `<prefix>_snapshot.json`, with no
   stray SQL files.
 
-This runs in the unit-test job, so a migration generated without the timestamp
-prefix fails CI. It is the filename-collision guard; the `drizzle-kit check`
-drift gate above remains the backstop for *semantic* conflicts between two
-independent schema edits.
+This runs in the unit-test job. Legacy index migrations are accepted
+structurally (not via a hardcoded list) — the `prefix: "timestamp"` config is
+what prevents *new* index migrations, so the guard backstops timestamp
+well-formedness and same-second collisions. The `drizzle-kit check` drift gate
+above remains the backstop for *semantic* conflicts between two independent
+schema edits.
 
 ---
 
