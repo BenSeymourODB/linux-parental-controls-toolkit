@@ -61,6 +61,19 @@ and, later, the PWA and external integrators).
   budgets, schedules. Talks only to `/api/*` — the same contract the
   PWA and integrators use (no privileged in-process shortcuts).
 - No transport integration yet; all "push" actions are stubbed to log.
+- **Recurrence + date-scoping decision (foundational).** Settle *how*
+  time-varying policy is represented before the schedule/budget CRUD and
+  editors are built against the uniform-only model — captured as
+  `docs/adr/0004-recurrence-and-date-scoping.md`
+  ([#139](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/139)).
+  Then **reserve the schema columns** it implies (recurrence representation
+  on `Schedule`; `effective_from`/`effective_to` on `Exception`), with
+  "no recurrence = always-on" as the degenerate default so there is no
+  later migration
+  ([#146](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/146)).
+  Only the *decision* and column reservation live here; the *implementation*
+  of recurring/date-specific behaviour is Phase 4 and Phase 13. (Pulled
+  forward from Phase 13 because it shapes the most central tables.)
 
 ## Phase 3 — Client install script (Linux Mint)
 
@@ -82,6 +95,18 @@ Goal: dashboard pushes overall session limits to clients.
 - Offline-queue: changes for offline clients persisted and replayed on
   next reachable probe.
 - Audit log of every command issued.
+- Recurring day-of-week time-windows on `Schedule` (allow/deny/extend on
+  chosen weekdays between start/end times), pushed as Timekpr-nExT
+  allowed-hours (and e2guardian window swaps in Phase 6)
+  ([#140](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/140)).
+- Effective-policy resolution engine + `GET /api/.../effective?date=…`
+  preview — the single "what applies for user U on day D" computation that
+  enforcement, the burndown views, and the save-and-push diff all read;
+  built here so time-window enforcement isn't coded against an interim
+  contract, and extended later by weekday budgets and date overrides
+  ([#143](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/143)).
+  (Both pulled forward from Phase 13; they depend only on the Phase 2
+  decision + column reservation.)
 
 ## Phase 5 — ActivityWatch telemetry pull
 
@@ -263,55 +288,58 @@ data model and rendering-shell decisions are fixed in
   enforcement, no new license surface. Designed in
   [`design/client/dashboard.html`](../design/client/dashboard.html).
 
-## Phase 13 — Recurring & calendar-based scheduling/budgeting
+## Phase 13 — Calendar-based scheduling/budgeting extensions
 
-Goal: express time policy that varies **by day of week** and **by
-specific calendar date** — recurring day-of-week windows, weekday-varying
-budgets, and one-off future-dated overrides — all resolved through a
-single effective-policy engine.
+Goal: round out the time-variation model with the remaining calendar-style
+capabilities, on top of the foundation decided in Phase 2 and built in
+Phase 4.
 
-Background: the Phase 2 policy store (#48) models only *uniform* policy —
-a flat `seconds_allowed` per rolling window, an undefined free-text
-`cron_or_window` on `Schedule`, and an `Exception` that is active
-immediately until `expires_at` (no future start). This phase adds the
-time-variation the admin/app/client mock-ups already imply ("wind-down at
-19:00", "YouTube on weekend mornings", "bedtime lock at 21:00").
+> **Sequencing note.** This area began life as a single late "Phase 13",
+> but its *foundational* parts were pulled earlier because the
+> schedule/budget schema, the editors, and the enforcement push all depend
+> on them:
+>
+> - The **recurrence + date-scoping decision** (ADR 0004) and the
+>   **schema column reservation** moved to **Phase 2**
+>   ([#139](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/139),
+>   [#146](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/146)) —
+>   a decision is cheap now and a migration is expensive later.
+> - **Recurring day-of-week windows** and the **effective-policy
+>   resolution engine** moved to **Phase 4**
+>   ([#140](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/140),
+>   [#143](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/143)),
+>   alongside the transport that enforces them, so enforcement isn't coded
+>   against an interim contract.
+>
+> What remains in Phase 13 is additive capability that *extends* that
+> foundation without reshaping it.
 
-The gating decision is whether time-varying policy is **resolved from
-rules on the fly** or **materialized per-day** — written up as
-`docs/adr/0004-recurrence-and-date-scoping.md`, which blocks the rest of
-the phase. (This is also what bounds how much the data-retention work in
-[`#135`](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/135)
-actually has to purge: rule-based resolution means retention targets only
-*dated* data — usage samples, grants, audit, and date-specific overrides —
-not the recurrence rules themselves.)
-
-- Recurrence + date-scoping ADR — rule-based vs. materialized; recurrence
-  grammar; date anchoring; retention interaction
-  ([#139](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/139)).
-- Recurring day-of-week time-windows on `Schedule` (allow/deny/extend on
-  chosen weekdays between start/end times), pushed to Timekpr-nExT
-  allowed-hours and e2guardian window swaps
-  ([#140](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/140)).
 - Day-of-week-varying budgets (e.g. weekday vs. weekend quotas), composing
-  with group-level budgets
+  with group-level budgets; plugs into the resolution engine as a layer
   ([#141](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/141)).
 - Date-specific / future-dated overrides (`effective_from` /
-  `effective_to`) for specific days or ranges
+  `effective_to`) for specific days or ranges; extends the resolution
+  engine and surfaces in the "coming up" views
   ([#142](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/142)).
-- Effective-policy resolution engine + `GET /api/.../effective?date=…`
-  preview — the single source of precedence feeding enforcement, the
-  save-and-push diff, and the "coming up" surfaces
-  ([#143](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/143)).
 
-Depends on the Phase 2 policy model
-([#51](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/51),
-[#63](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/63))
-and composes with grants (Phase 10) and the user-group / group-budget
-work. The recurring-windows capability is also the foundation the
-calendar-driven-schedules stretch goal
+Both build on the Phase 2 column reservation
+([#146](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/146))
+and the Phase 4 resolver
+([#143](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/143)) —
+they add composition layers, not new tables — and compose with grants
+(Phase 10) and the user-group / group-budget work. The Phase 4
+recurring-windows capability
+([#140](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/140))
+is also the foundation the calendar-driven-schedules stretch goal
 ([#125](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/125))
 builds on.
+
+The resolve-vs-materialize choice in ADR 0004 also bounds how much the
+data-retention work in
+[#135](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/135)
+has to purge: rule-based resolution means retention targets only *dated*
+data — usage samples, grants, audit, and date-specific overrides — not the
+recurrence rules themselves.
 
 ## Out of scope (for now)
 
