@@ -251,10 +251,31 @@ behind authentication.
   and [`adr/0002-client-dashboard-shell.md`](adr/0002-client-dashboard-shell.md)).
   Phase 2 auth is intentionally minimal — verify a single Argon2id hash,
   set a signed session cookie keyed on `PCT_SECRET_KEY`, guard the
-  routes — implemented with `argon2` plus a Fastify session plugin (see
+  routes — implemented with `argon2` plus `@fastify/cookie` (see
   issue #52). Do not pull in a multi-user auth framework for this;
   accounts, roles, MFA, federation, and self-registration are explicitly
   out of scope until the identity work below.
+- **First-admin bootstrap.** On first run, if no admin credential exists
+  yet and **both** `PCT_ADMIN_USERNAME` and `PCT_ADMIN_PASSWORD` are set,
+  the dashboard seeds the single admin row from them. The password is
+  Argon2id-hashed immediately on seeding and the plaintext is never
+  stored; only the hash is persisted (in the `admin_credentials` table,
+  a singleton enforced by a `CHECK (id = 1)` constraint). Seeding is
+  idempotent — once an admin exists it is never reseeded or overwritten,
+  so you can drop `PCT_ADMIN_PASSWORD` from the environment after the
+  first successful start. If the variables are absent and no admin
+  exists, the dashboard logs a warning and login stays disabled until an
+  admin is configured. Until `PCT_SECRET_KEY` is set the auth endpoints
+  and the admin guard fail closed with `503 auth_not_configured` (a
+  session cannot be signed without it), so set a long random
+  `PCT_SECRET_KEY` in any real deployment.
+- **Session cookie.** The session is a signed (`PCT_SECRET_KEY`),
+  `HttpOnly`, `SameSite=Strict` cookie carrying a small non-secret
+  payload; it expires after 7 days. `SameSite=Strict` closes off CSRF
+  against the cookie-authenticated mutating routes. The cookie is not
+  marked `Secure` (the default LAN deployment is plain HTTP on port
+  8000); when terminating TLS at a reverse proxy, that proxy is the
+  appropriate place to enforce HTTPS.
 - Future: optional OIDC integration so a household identity provider
   (FreeIPA, Authentik) can be used. When that (Phase 11 multi-admin/OIDC)
   or the larger centralised-identity work (stretch epic #24 → #26:
