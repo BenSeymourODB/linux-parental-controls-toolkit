@@ -86,7 +86,7 @@ export interface ExecOptions {
 export interface SshTransportOptions {
   /** SSH handshake/ready timeout in ms (→ {@link SshUnreachableError}). Default 10000. */
   readyTimeoutMs?: number;
-  /** Default per-exec timeout in ms; `0` disables. Default 0. */
+  /** Default per-exec timeout in ms; `0` disables. Default 30000. */
   execTimeoutMs?: number;
 }
 
@@ -128,6 +128,12 @@ interface ResolvedTarget {
 
 const DEFAULT_READY_TIMEOUT_MS = 10_000;
 
+// A facade orchestrating possibly-wedged remote clients should never let a
+// hung command block its caller forever, so exec is time-boxed by default.
+// readyTimeout only covers the handshake, not a command that connected and
+// then hung. Callers can override (or disable with 0) per invocation.
+const DEFAULT_EXEC_TIMEOUT_MS = 30_000;
+
 /**
  * Pooled SSH transport. One instance is shared across the dashboard; it keeps
  * at most one live connection per `user@host:port` and lazily (re)connects on
@@ -141,7 +147,7 @@ export class SshTransport {
 
   constructor(options: SshTransportOptions = {}) {
     this.#readyTimeoutMs = options.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS;
-    this.#execTimeoutMs = options.execTimeoutMs ?? 0;
+    this.#execTimeoutMs = options.execTimeoutMs ?? DEFAULT_EXEC_TIMEOUT_MS;
   }
 
   /**
@@ -155,7 +161,63 @@ export class SshTransport {
     argv: readonly string[],
     options: ExecOptions = {},
   ): Promise<ExecResult> {
+    return this.#exec(this.#resolve(target), argv, options);
+  }
+
+  /**
+   * Like {@link exec}, but reject with {@link SshCommandError} when the command
+   * exits non-zero (or is killed). Use this for commands whose success is
+   * required — the timekpra setters (#83), the health probe (#81), …
+   */
+  async execChecked(
+    target: SshTarget,
+    argv: readonly string[],
+    options: ExecOptions = {},
+  ): Promise<ExecResult> {
+    return this.#execChecked(this.#resolve(target), argv, options);
+  }
+
+  /**
+   * Run a command that must succeed, then validate its stdout against `schema`
+   * before the data crosses into typed code (`CLAUDE.md` → "Validate all
+   * external input … subprocess stdout"). The schema receives the raw stdout
+   * string, so callers supply tool-specific parsing via a zod `.transform`.
+   * Rejects with {@link SshParseError} when stdout doesn't match.
+   */
+  async execAndParse<T>(
+    target: SshTarget,
+    argv: readonly string[],
+    schema: ZodType<T>,
+    options: ExecOptions = {},
+  ): Promise<T> {
     const resolved = this.#resolve(target);
+    const result = await this.#execChecked(resolved, argv, options);
+    const parsed = schema.safeParse(result.stdout);
+    if (!parsed.success) {
+      throw new SshParseError(resolved.ref, argv, result.stdout, { cause: parsed.error });
+    }
+    return parsed.data;
+  }
+
+  /** {@link execChecked} against an already-resolved target (resolve once). */
+  async #execChecked(
+    resolved: ResolvedTarget,
+    argv: readonly string[],
+    options: ExecOptions,
+  ): Promise<ExecResult> {
+    const result = await this.#exec(resolved, argv, options);
+    if (result.code !== 0) {
+      throw new SshCommandError(resolved.ref, argv, result);
+    }
+    return result;
+  }
+
+  /** {@link exec} against an already-resolved target (resolve once per call). */
+  async #exec(
+    resolved: ResolvedTarget,
+    argv: readonly string[],
+    options: ExecOptions,
+  ): Promise<ExecResult> {
     const command = shellQuoteCommand(argv);
     const client = await this.#connect(resolved);
     const timeoutMs = options.timeoutMs ?? this.#execTimeoutMs;
@@ -182,16 +244,28 @@ export class SshTransport {
 
         const stdoutChunks: Buffer[] = [];
         const stderrChunks: Buffer[] = [];
+        let exited = false;
         let code: number | null = null;
         let signal: string | null = null;
 
         channel.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
         channel.stderr.on("data", (chunk: Buffer) => stderrChunks.push(chunk));
         channel.on("exit", (exitCode: number | null, exitSignal?: string) => {
+          exited = true;
           code = exitCode;
           signal = exitSignal ?? null;
         });
         channel.on("close", () => {
+          if (!exited) {
+            // The channel closed without the peer reporting an exit status —
+            // the session dropped mid-command rather than the command
+            // finishing. Surface it as unreachable (retriable) so it can't be
+            // mistaken for a clean signal-kill (`code: null`), and evict the
+            // (now-suspect) connection so the next call reconnects.
+            this.#connections.delete(resolved.key);
+            finish(() => reject(new SshUnreachableError(resolved.ref)));
+            return;
+          }
           finish(() =>
             resolve({
               stdout: Buffer.concat(stdoutChunks).toString("utf8"),
@@ -205,6 +279,8 @@ export class SshTransport {
         if (timeoutMs > 0) {
           timer = setTimeout(() => {
             finish(() => {
+              // Tear down only the hung channel; the connection stays pooled
+              // (the host is reachable — the command, not the session, hung).
               channel.destroy();
               reject(new SshExecTimeoutError(resolved.ref, argv, timeoutMs));
             });
@@ -213,46 +289,6 @@ export class SshTransport {
         }
       });
     });
-  }
-
-  /**
-   * Like {@link exec}, but reject with {@link SshCommandError} when the command
-   * exits non-zero (or is killed). Use this for commands whose success is
-   * required — the timekpra setters (#83), the health probe (#81), …
-   */
-  async execChecked(
-    target: SshTarget,
-    argv: readonly string[],
-    options: ExecOptions = {},
-  ): Promise<ExecResult> {
-    const result = await this.exec(target, argv, options);
-    if (result.code !== 0) {
-      throw new SshCommandError(this.#resolve(target).ref, argv, result);
-    }
-    return result;
-  }
-
-  /**
-   * Run a command that must succeed, then validate its stdout against `schema`
-   * before the data crosses into typed code (`CLAUDE.md` → "Validate all
-   * external input … subprocess stdout"). The schema receives the raw stdout
-   * string, so callers supply tool-specific parsing via a zod `.transform`.
-   * Rejects with {@link SshParseError} when stdout doesn't match.
-   */
-  async execAndParse<T>(
-    target: SshTarget,
-    argv: readonly string[],
-    schema: ZodType<T>,
-    options: ExecOptions = {},
-  ): Promise<T> {
-    const result = await this.execChecked(target, argv, options);
-    const parsed = schema.safeParse(result.stdout);
-    if (!parsed.success) {
-      throw new SshParseError(this.#resolve(target).ref, argv, result.stdout, {
-        cause: parsed.error,
-      });
-    }
-    return parsed.data;
   }
 
   /** Close and forget the pooled connection to `target`, if any. */
@@ -303,6 +339,11 @@ export class SshTransport {
       client.connect(resolved.connectConfig);
     });
 
+    // The caller awaits the returned promise, so a connect failure is handled
+    // there. Attach a no-op rejection handler to the pooled copy as well so a
+    // failure can never surface as an unhandledRejection if a future path
+    // touches the pooled entry without awaiting `ready`.
+    ready.catch(() => undefined);
     this.#connections.set(resolved.key, { client, ready });
     return ready;
   }

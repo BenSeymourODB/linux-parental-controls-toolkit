@@ -26,6 +26,8 @@ interface ExecBehavior {
   signal?: string;
   /** Never emit `exit`/`close` — used to exercise the per-exec timeout. */
   hang?: boolean;
+  /** Emit `close` with no preceding `exit` — a mid-command session drop. */
+  closeWithoutExit?: boolean;
 }
 
 interface MockState {
@@ -86,8 +88,10 @@ class FakeClient extends EventEmitter {
         if (behavior.stderr !== undefined)
           channel.stderr.emit("data", Buffer.from(behavior.stderr));
         if (behavior.hang === true) return;
-        if (behavior.signal !== undefined) channel.emit("exit", null, behavior.signal);
-        else channel.emit("exit", behavior.code ?? 0);
+        if (behavior.closeWithoutExit !== true) {
+          if (behavior.signal !== undefined) channel.emit("exit", null, behavior.signal);
+          else channel.emit("exit", behavior.code ?? 0);
+        }
         channel.emit("close");
       });
     });
@@ -187,6 +191,18 @@ describe("SshTransport.exec", () => {
     expect(transport.connectionCount).toBe(0);
   });
 
+  it("preserves the underlying connect error as the cause", async () => {
+    state.connect = "error";
+    const boom = new Error("ECONNREFUSED boom");
+    state.connectError = boom;
+    const transport = new SshTransport();
+
+    const error = await transport.exec(target, ["true"]).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(SshUnreachableError);
+    if (error instanceof SshUnreachableError) expect(error.cause).toBe(boom);
+  });
+
   it("treats an exec-request failure as unreachable and evicts the connection", async () => {
     state.exec = { err: new Error("channel open failure") };
     const transport = new SshTransport();
@@ -195,6 +211,42 @@ describe("SshTransport.exec", () => {
 
     expect(error).toBeInstanceOf(SshUnreachableError);
     expect(transport.connectionCount).toBe(0);
+  });
+
+  it("treats a channel that closes without an exit status as unreachable", async () => {
+    // A mid-command session drop: bytes arrive, then `close` with no `exit`.
+    // This must not be reported as a clean signal-kill (`code: null`).
+    state.exec = { stdout: "partial output", closeWithoutExit: true };
+    const transport = new SshTransport();
+
+    const error = await transport.exec(target, ["timekpra", "--get"]).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(SshUnreachableError);
+    expect(error).toMatchObject({ retriable: true });
+    expect(transport.connectionCount).toBe(0);
+  });
+
+  it("evicts the pooled connection on a post-ready error event", async () => {
+    const transport = new SshTransport();
+    await transport.exec(target, ["true"]);
+    expect(transport.connectionCount).toBe(1);
+
+    // The session errors out after it was established.
+    state.instances[0]?.emit("error", new Error("connection reset"));
+
+    expect(transport.connectionCount).toBe(0);
+    await transport.exec(target, ["true"]);
+    expect(state.connectCalls).toBe(2);
+  });
+
+  it("opens a single connection for calls issued before the first is ready", async () => {
+    const transport = new SshTransport();
+
+    // Both exec calls race the same pending connect; they must share it.
+    await Promise.all([transport.exec(target, ["true"]), transport.exec(target, ["true"])]);
+
+    expect(state.connectCalls).toBe(1);
+    expect(transport.connectionCount).toBe(1);
   });
 
   it("reuses one pooled connection across calls to the same target", async () => {
@@ -252,6 +304,18 @@ describe("SshTransport.execChecked", () => {
 
     expect(error).toBeInstanceOf(SshCommandError);
     expect(error).toMatchObject({ retriable: false, code: 2, stderr: "boom", argv });
+  });
+
+  it("throws SshCommandError naming the signal when the command is killed", async () => {
+    state.exec = { signal: "SIGKILL" };
+    const transport = new SshTransport();
+
+    const error = await transport.execChecked(target, ["timekpra"]).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(SshCommandError);
+    expect(error).toMatchObject({ code: null, signal: "SIGKILL" });
+    // The status string names the signal rather than rendering "signal null".
+    if (error instanceof SshCommandError) expect(error.message).toContain("signal SIGKILL");
   });
 });
 
