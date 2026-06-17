@@ -182,6 +182,16 @@ export const budgets = sqliteTable(
  * A recurring allow/deny/extend rule. `cron_or_window` carries the schedule
  * expression; `target_kind` reuses the scope vocabulary (overall/activity/
  * group) with the same polymorphic `target_id` semantics as {@link budgets}.
+ *
+ * `ordinal` makes evaluation order **explicit and stored**, not implied by
+ * insertion: a user's rules are evaluated ascending by `ordinal` and the
+ * first whose window is active wins (first-match-wins, see
+ * `docs/adr/0004-schedule-precedence.md`). The same `(user_id, ordinal)`
+ * order is what the admin drag-reorder editor persists and what the
+ * client/`/app` surfaces replay to show "what's allowed right now", so the
+ * column is the single source of precedence across every surface. The
+ * `(user_id, ordinal)` index serves both the ordered evaluation read and the
+ * plain per-user lookup (left-prefix), so no separate user-only index is kept.
  */
 export const schedules = sqliteTable(
   "schedules",
@@ -194,9 +204,10 @@ export const schedules = sqliteTable(
     targetId: integer("target_id"),
     cronOrWindow: text("cron_or_window").notNull(),
     action: text("action", { enum: scheduleActionValues }).notNull(),
+    ordinal: integer("ordinal").notNull().default(0),
   },
   (table) => [
-    index("schedules_user_idx").on(table.userId),
+    index("schedules_user_ordinal_idx").on(table.userId, table.ordinal),
     check("schedules_target_kind_check", oneOf(table.targetKind, scopeValues)),
     check("schedules_action_check", oneOf(table.action, scheduleActionValues)),
     check("schedules_target_coherence_check", targetCoherence(table.targetKind, table.targetId)),
@@ -328,6 +339,30 @@ export const integrationTokens = sqliteTable(
     revokedAt: integer("revoked_at", { mode: "timestamp" }),
   },
   (table) => [uniqueIndex("integration_tokens_name_unique").on(table.name)],
+);
+
+/**
+ * The single dashboard administrator's login credential (#52).
+ *
+ * This is **not** part of the policy model: a policy-model {@link users} row is
+ * a *supervised person*, never an auth principal (`docs/architecture.md` →
+ * "Policy model"). There is exactly one admin login for the whole dashboard,
+ * and that singleton invariant is encoded structurally — `CHECK (id = 1)` means
+ * the table can hold at most one row, so the schema itself rules out a second
+ * admin sneaking in. Only the Argon2id `password_hash` is stored; the plaintext
+ * (from `PCT_ADMIN_PASSWORD` on first run) is hashed immediately and never
+ * persisted. Accounts/roles/MFA are out of scope until the identity work
+ * (Phase 11 / stretch #24 → #26).
+ */
+export const adminCredentials = sqliteTable(
+  "admin_credentials",
+  {
+    id: integer("id").primaryKey(),
+    username: text("username").notNull(),
+    passwordHash: text("password_hash").notNull(),
+    createdAt: timestampNow("created_at"),
+  },
+  (table) => [check("admin_credentials_singleton_check", sql`${table.id} = 1`)],
 );
 
 /**
