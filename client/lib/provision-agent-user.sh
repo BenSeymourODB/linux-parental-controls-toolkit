@@ -19,14 +19,19 @@
 # and the functions below do the work. Also directly runnable for standalone
 # use and testing. Idempotent: re-running reconciles rather than duplicates.
 #
+# Because this file is meant to be sourced, it deliberately does NOT `set`
+# shell options at file scope (that would leak errexit/nounset/pipefail into
+# the orchestrator's shell) and never `exit`s from a function (that would kill
+# the orchestrator) — functions return non-zero instead. Strict mode is set
+# only on the direct-execution path at the bottom. Helpers are `pct_`-prefixed
+# so sourcing does not clobber the orchestrator's own `log`/`die`.
+#
 # Env overrides (defaults match a real Mint client; the test suite points them
 # at a tmpdir so the logic runs unprivileged):
 #   PCT_AGENT_USER     service account name              (default pct-agent)
 #   PCT_SUDOERS_DIR    sudoers.d directory               (default /etc/sudoers.d)
 #   PCT_TIMEKPRA_PATH  absolute path to the timekpra CLI (default /usr/bin/timekpra)
 #   PCT_VISUDO         visudo binary used for validation (default visudo)
-
-set -euo pipefail
 
 PCT_AGENT_USER="${PCT_AGENT_USER:-pct-agent}"
 PCT_SUDOERS_DIR="${PCT_SUDOERS_DIR:-/etc/sudoers.d}"
@@ -37,32 +42,34 @@ PCT_VISUDO="${PCT_VISUDO:-visudo}"
 # a plain token.
 readonly PCT_SUDOERS_FILE_BASENAME="pct-agent"
 
-log() { printf '[provision-agent-user] %s\n' "$*" >&2; }
-die() {
-  printf '[provision-agent-user] ERROR: %s\n' "$*" >&2
-  exit 1
-}
+pct_log() { printf '[provision-agent-user] %s\n' "$*" >&2; }
+# pct_die prints and RETURNS non-zero (never exits) so a sourcing orchestrator
+# stays in control; callers pair it with `return 1`.
+pct_die() { printf '[provision-agent-user] ERROR: %s\n' "$*" >&2; }
 
 # Whether the service account already exists.
 pct_agent_user_exists() {
   getent passwd "${PCT_AGENT_USER}" >/dev/null 2>&1
 }
 
-# pct-agent's home directory, per the passwd database.
+# pct-agent's home directory, per the passwd database (first match only).
 pct_agent_home() {
-  getent passwd "${PCT_AGENT_USER}" | cut -d: -f6
+  getent passwd "${PCT_AGENT_USER}" | head -n1 | cut -d: -f6
 }
 
 # Create the low-privilege system account (idempotent).
 pct_create_agent_user() {
   if pct_agent_user_exists; then
-    log "service account '${PCT_AGENT_USER}' already exists; leaving it unchanged"
+    pct_log "service account '${PCT_AGENT_USER}' already exists; leaving it unchanged"
     return 0
   fi
-  log "creating system account '${PCT_AGENT_USER}'"
+  pct_log "creating system account '${PCT_AGENT_USER}'"
   # --system: no login/UID-range churn; --create-home: pct-agent needs a home
   # for ~/.ssh/authorized_keys; /bin/bash so the SSH 'exec' channel works.
-  useradd --system --create-home --shell /bin/bash "${PCT_AGENT_USER}"
+  if ! useradd --system --create-home --shell /bin/bash "${PCT_AGENT_USER}"; then
+    pct_die "useradd failed for '${PCT_AGENT_USER}'"
+    return 1
+  fi
 }
 
 # Render the sudoers drop-in content to stdout.
@@ -90,48 +97,77 @@ pct_install_sudoers() {
   content="$(pct_render_sudoers)"
 
   if [[ -f "${target}" ]] && [[ "$(cat "${target}")" == "${content}" ]]; then
-    log "sudoers drop-in '${target}' already current"
+    pct_log "sudoers drop-in '${target}' already current"
     return 0
   fi
 
-  mkdir -p "${PCT_SUDOERS_DIR}"
-  tmp="$(mktemp)"
+  if ! mkdir -p "${PCT_SUDOERS_DIR}"; then
+    pct_die "could not create sudoers directory '${PCT_SUDOERS_DIR}'"
+    return 1
+  fi
+
+  # Stage the temp file IN the target directory so the final `mv` is a true
+  # same-filesystem rename (atomic). sudoers ignores dotfiles, so a leftover
+  # '.pct-agent.*' from an interrupted run is inert.
+  if ! tmp="$(mktemp "${PCT_SUDOERS_DIR}/.${PCT_SUDOERS_FILE_BASENAME}.XXXXXX")"; then
+    pct_die "could not create a temp file in '${PCT_SUDOERS_DIR}'"
+    return 1
+  fi
+
   printf '%s\n' "${content}" >"${tmp}"
+  # Lock down mode/owner BEFORE publishing, so the live file is correct the
+  # instant it appears at the target path. chown runs as root in production;
+  # the test suite stubs it.
   chmod 0440 "${tmp}"
+  chown root:root "${tmp}"
 
   # Never install syntactically invalid sudoers — a bad file can lock out sudo.
   if ! "${PCT_VISUDO}" -cf "${tmp}" >/dev/null 2>&1; then
     rm -f "${tmp}"
-    die "generated sudoers content failed '${PCT_VISUDO} -cf' validation; not installing"
+    pct_die "generated sudoers content failed '${PCT_VISUDO} -cf' validation; not installing"
+    return 1
   fi
 
-  # Atomic replace, then lock down ownership/mode as sudoers requires (0440,
-  # root:root). chown runs as root in production; the test suite stubs it.
-  mv "${tmp}" "${target}"
-  chmod 0440 "${target}"
-  chown root:root "${target}"
-  log "installed sudoers drop-in '${target}'"
+  if ! mv "${tmp}" "${target}"; then
+    rm -f "${tmp}"
+    pct_die "could not install sudoers drop-in '${target}'"
+    return 1
+  fi
+  pct_log "installed sudoers drop-in '${target}'"
 }
 
 # Authorize an SSH public key for pct-agent (idempotent, deduped).
 pct_authorize_ssh_key() {
   local key home ssh_dir auth
   key="$1"
+
+  # authorized_keys is one key per line; reject multi-line input so a stray
+  # newline can't silently inject extra authorized entries.
+  if [[ "${key}" == *$'\n'* ]]; then
+    pct_die "ssh public key must be a single line"
+    return 1
+  fi
+
   home="$(pct_agent_home)"
-  [[ -n "${home}" ]] || die "cannot determine home directory for '${PCT_AGENT_USER}'"
+  if [[ -z "${home}" ]]; then
+    pct_die "cannot determine home directory for '${PCT_AGENT_USER}'"
+    return 1
+  fi
 
   ssh_dir="${home}/.ssh"
   auth="${ssh_dir}/authorized_keys"
-  mkdir -p "${ssh_dir}"
+  # umask so the credential dir/file are never briefly group/world-readable
+  # between creation and chmod.
+  (umask 077 && mkdir -p "${ssh_dir}")
   chmod 0700 "${ssh_dir}"
   touch "${auth}"
   chmod 0600 "${auth}"
 
   if grep -qxF -- "${key}" "${auth}" 2>/dev/null; then
-    log "ssh key already authorized for '${PCT_AGENT_USER}'"
+    pct_log "ssh key already authorized for '${PCT_AGENT_USER}'"
   else
     printf '%s\n' "${key}" >>"${auth}"
-    log "authorized ssh key for '${PCT_AGENT_USER}'"
+    pct_log "authorized ssh key for '${PCT_AGENT_USER}'"
   fi
 
   # Own the tree as pct-agent; stubbed under test (can't chown unprivileged).
@@ -156,6 +192,7 @@ EOF
 }
 
 # Provision everything: account, sudoers, and optionally the SSH key.
+# Returns non-zero on any failure (never exits — see the header note).
 pct_provision_agent_user() {
   local ssh_key="" ssh_key_file=""
   while [[ $# -gt 0 ]]; do
@@ -173,27 +210,33 @@ pct_provision_agent_user() {
         return 0
         ;;
       *)
-        die "unknown argument: $1"
+        pct_die "unknown argument: $1"
+        return 1
         ;;
     esac
   done
 
-  pct_create_agent_user
-  pct_install_sudoers
+  pct_create_agent_user || return 1
+  pct_install_sudoers || return 1
 
   if [[ -n "${ssh_key_file}" ]]; then
-    [[ -r "${ssh_key_file}" ]] || die "ssh key file not readable: ${ssh_key_file}"
+    if [[ ! -r "${ssh_key_file}" ]]; then
+      pct_die "ssh key file not readable: ${ssh_key_file}"
+      return 1
+    fi
     ssh_key="$(cat "${ssh_key_file}")"
   fi
 
   if [[ -n "${ssh_key}" ]]; then
-    pct_authorize_ssh_key "${ssh_key}"
+    pct_authorize_ssh_key "${ssh_key}" || return 1
   else
-    log "no ssh public key provided; skipping authorized_keys"
+    pct_log "no ssh public key provided; skipping authorized_keys"
   fi
 }
 
 # Run when executed directly; do nothing extra when sourced by the orchestrator.
+# Strict mode lives here (not at file scope) so it never leaks into a caller.
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  set -euo pipefail
   pct_provision_agent_user "$@"
 fi

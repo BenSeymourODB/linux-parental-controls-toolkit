@@ -166,3 +166,46 @@ sudoers_file() {
   run bash "${SCRIPT}" --bogus
   [ "${status}" -ne 0 ]
 }
+
+@test "replaces stale sudoers content rather than leaving it" {
+  mkdir -p "${PCT_SUDOERS_DIR}"
+  printf 'pct-agent ALL=(root) NOPASSWD: /usr/bin/somethingelse\n' >"$(sudoers_file)"
+  run bash "${SCRIPT}"
+  [ "${status}" -eq 0 ]
+  grep -qx "${PCT_AGENT_USER} ALL=(root) NOPASSWD: ${PCT_TIMEKPRA_PATH}" "$(sudoers_file)"
+  ! grep -q "somethingelse" "$(sudoers_file)"
+}
+
+@test "preserves pre-existing authorized_keys entries (append, not overwrite)" {
+  touch "${STATE}/user_exists"
+  mkdir -p "${FAKE_HOME}/.ssh"
+  local other="ssh-rsa AAAApreexisting other@host"
+  printf '%s\n' "${other}" >"${FAKE_HOME}/.ssh/authorized_keys"
+  local key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5DDDD dashboard@pct"
+  run bash "${SCRIPT}" --ssh-key-string "${key}"
+  [ "${status}" -eq 0 ]
+  grep -qxF -- "${other}" "${FAKE_HOME}/.ssh/authorized_keys"
+  grep -qxF -- "${key}" "${FAKE_HOME}/.ssh/authorized_keys"
+}
+
+@test "rejects a multi-line ssh key" {
+  touch "${STATE}/user_exists"
+  mkdir -p "${FAKE_HOME}"
+  run bash "${SCRIPT}" --ssh-key-string $'ssh-ed25519 AAAA one\nssh-ed25519 BBBB two'
+  [ "${status}" -ne 0 ]
+}
+
+# --- sourceable-library contract (the module is sourced by the orchestrator #76) ---
+
+@test "sourcing the module does not change the caller's shell options" {
+  run bash -c 'before="$-"; source "'"${SCRIPT}"'"; after="$-"; [ "${before}" = "${after}" ]'
+  [ "${status}" -eq 0 ]
+}
+
+@test "a sourced error path returns non-zero without exiting the caller" {
+  # The caller has no errexit; an internal failure must `return`, not `exit`,
+  # so the line after the call still runs.
+  run bash -c 'source "'"${SCRIPT}"'"; pct_provision_agent_user --bogus; echo "after=$?"'
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"after=1"* ]]
+}
