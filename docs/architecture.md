@@ -120,7 +120,9 @@ Budget        (id, user_id, scope=overall|activity|group,
                 seconds_allowed)
 
 Schedule      (id, user_id, target_kind, target_id?,
-                cron_or_window, action=allow|deny|extend)
+                cron_or_window, action=allow|deny|extend, ordinal)
+              --  Evaluated ascending by ordinal; first active rule wins.
+              --  See docs/adr/0004-schedule-precedence.md.
 
 Exception     (id, user_id, ...,  expires_at)
 

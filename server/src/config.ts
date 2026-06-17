@@ -98,8 +98,24 @@ const settingsSchema = z
      * stays JSON.
      */
     logPretty: z.stringbool().default(false),
-    /** Signs sessions / integration tokens (consumed in later phases). */
+    /**
+     * Signs the admin session cookie (#52) and, later, integration tokens.
+     * Optional so dev/CI can build the app without it; auth endpoints and the
+     * admin guard return `503 auth_not_configured` until it is set, since a
+     * session cannot be signed without it.
+     */
     secretKey: z.string().min(1).optional(),
+    /**
+     * First-admin bootstrap (#52). On first run, if no admin row exists and
+     * **both** of these are set, the admin credential is seeded from them: the
+     * password is Argon2id-hashed immediately and the plaintext is never
+     * persisted (see `auth/credentials.ts` and `docs/server-deployment.md` →
+     * "Authentication"). Optional, and only read at bootstrap; once an admin
+     * exists they are ignored, so they can be dropped from the environment
+     * after the first successful start.
+     */
+    adminUsername: z.string().min(1).optional(),
+    adminPassword: z.string().min(1).optional(),
     adguard: adguardSchema,
   })
   .superRefine((settings, ctx) => {
@@ -154,6 +170,8 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
     logLevel: env.PCT_LOG_LEVEL,
     logPretty: env.PCT_LOG_PRETTY,
     secretKey: env.PCT_SECRET_KEY,
+    adminUsername: env.PCT_ADMIN_USERNAME,
+    adminPassword: env.PCT_ADMIN_PASSWORD,
     adguard: {
       mode: env.PCT_ADGUARD_MODE ?? "disabled",
       url: env.PCT_ADGUARD_URL,

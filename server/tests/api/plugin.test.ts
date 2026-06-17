@@ -16,8 +16,7 @@ import { z } from "zod";
 
 import { ApiError } from "../../src/api/errors.js";
 import { installApiConventions, type ZodTypeProvider } from "../../src/api/validation.js";
-import { buildApp } from "../../src/web/app.js";
-import { loadSettings } from "../../src/config.js";
+import { buildTestApp, type TestApp } from "../helpers/app.js";
 
 const bodySchema = z.object({ seconds: z.number().int().positive() });
 const querySchema = z.object({ n: z.coerce.number().int() });
@@ -126,20 +125,20 @@ describe("/api conventions", () => {
 });
 
 describe("GET /api/meta (via buildApp)", () => {
+  let harness: TestApp;
   let app: FastifyInstance;
 
+  // buildTestApp() builds the real buildApp() but injects an in-memory db, so
+  // the test exercises the actual /api mount without createDb() opening the
+  // default /data file (which doesn't exist in CI). Same pattern every other
+  // buildApp route test uses.
   beforeEach(() => {
-    // In-memory DB so buildApp's own createDb (we deliberately don't inject a
-    // handle here — the point is to exercise the real buildApp wiring) doesn't
-    // try to open the default /data/policy.sqlite, which doesn't exist on a CI
-    // runner or a dev box without the mounted data volume.
-    app = buildApp({
-      settings: loadSettings({ PCT_LOG_LEVEL: "silent", DATABASE_URL: ":memory:" }),
-    });
+    harness = buildTestApp();
+    app = harness.app;
   });
 
   afterEach(async () => {
-    await app.close();
+    await harness.close();
   });
 
   it("is mounted and returns the meta DTO", async () => {

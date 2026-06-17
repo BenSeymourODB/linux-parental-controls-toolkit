@@ -179,6 +179,9 @@ full reasoning.
     at `/admin` and `/app`, hosts `/integrations`
   - `api/` — zod DTOs, JSON routes used by both frontends and by
     external integrations
+  - `auth/` — single-admin authentication: Argon2id hashing, the signed
+    session cookie, the `requireAdmin` guard, and first-admin bootstrap
+    (wired into the `/api` scope; auth DTO types re-exported from `api/`)
   - `policy/` — Drizzle schema, policy model, DB access, grant ledger
   - `integrations/` — external-system inbound APIs (e.g. the
     family-calendar rewards endpoint; see `docs/architecture.md`)
