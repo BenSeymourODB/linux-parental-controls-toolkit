@@ -18,6 +18,7 @@ import {
   activityGroups,
   budgets,
   clients,
+  enrolmentTokens,
   exceptions,
   grants,
   integrationTokens,
@@ -44,6 +45,7 @@ const allTables: Record<string, SQLiteTable> = {
   grants,
   integrationTokens,
   notificationPolicies,
+  enrolmentTokens,
 };
 
 let db: TestDb;
@@ -346,6 +348,58 @@ describe("integration_tokens", () => {
 
     expect(row?.scopes).toStrictEqual(["grants:write", "policy:read"]);
     expect(row?.revokedAt).toBeNull();
+  });
+});
+
+describe("enrolment_tokens", () => {
+  it("stores only a hashed token, never the plaintext", () => {
+    const columns = db.$client
+      .prepare("SELECT name FROM pragma_table_info('enrolment_tokens')")
+      .pluck()
+      .all() as string[];
+
+    expect(columns).toContain("token_hash");
+    expect(columns).not.toContain("token");
+    expect(columns).not.toContain("secret");
+    expect(columns).not.toContain("plaintext");
+  });
+
+  it("round-trips the supervised-users JSON and defaults consumed_at to null", () => {
+    const userId = insertUser();
+    db.insert(enrolmentTokens)
+      .values({
+        tokenHash: "abc123",
+        supervisedUsers: [{ userId, linuxUsername: "alice" }],
+        expiresAt: new Date("2026-12-31T00:00:00Z"),
+      })
+      .run();
+    const row = db.select().from(enrolmentTokens).get();
+
+    expect(row?.supervisedUsers).toStrictEqual([{ userId, linuxUsername: "alice" }]);
+    expect(row?.consumedAt).toBeNull();
+    expect(row?.consumedClientId).toBeNull();
+  });
+
+  it("nulls consumed_client_id when the consuming client is deleted (ON DELETE set null)", () => {
+    const clientId = db
+      .insert(clients)
+      .values({ hostname: "mint-x", sshUser: "pct-agent" })
+      .returning({ id: clients.id })
+      .get()?.id;
+    if (clientId === undefined) throw new Error("client insert returned no row");
+    db.insert(enrolmentTokens)
+      .values({
+        tokenHash: "tok",
+        supervisedUsers: [],
+        expiresAt: new Date("2026-12-31T00:00:00Z"),
+        consumedAt: new Date("2026-06-18T00:00:00Z"),
+        consumedClientId: clientId,
+      })
+      .run();
+
+    db.delete(clients).where(eq(clients.id, clientId)).run();
+
+    expect(db.select().from(enrolmentTokens).get()?.consumedClientId).toBeNull();
   });
 });
 

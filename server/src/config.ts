@@ -124,6 +124,16 @@ const settingsSchema = z
      * `/data/ansible` layout (`docs/server-deployment.md` → "Volume layout").
      */
     ansibleDir: z.string().min(1).default("/data/ansible"),
+    /**
+     * Path to the dashboard's SSH **public** key (`PCT_SSH_PUBLIC_KEY_PATH`).
+     * The client-enrolment response (#77) returns this so the client can
+     * authorize the dashboard in `pct-agent`'s `authorized_keys`. The key pair
+     * is generated server-side as a Phase-4 first-run step (#39); until then
+     * the file is legitimately absent and the enrol response carries
+     * `sshPublicKey: null`. Defaults to the documented `/data/secrets/ssh`
+     * layout (`docs/server-deployment.md` → "Volume layout").
+     */
+    sshPublicKeyPath: z.string().min(1).default("/data/secrets/ssh/id_ed25519.pub"),
     adguard: adguardSchema,
   })
   .superRefine((settings, ctx) => {
@@ -181,6 +191,7 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
     adminUsername: env.PCT_ADMIN_USERNAME,
     adminPassword: env.PCT_ADMIN_PASSWORD,
     ansibleDir: env.PCT_ANSIBLE_DIR,
+    sshPublicKeyPath: env.PCT_SSH_PUBLIC_KEY_PATH,
     adguard: {
       mode: env.PCT_ADGUARD_MODE ?? "disabled",
       url: env.PCT_ADGUARD_URL,
