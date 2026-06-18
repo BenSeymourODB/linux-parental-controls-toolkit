@@ -194,6 +194,124 @@ describe("value & coherence constraints", () => {
   });
 });
 
+describe("recurrence + date-scoping reservation (#146 / ADR 0005)", () => {
+  /**
+   * Insert a `schedules` row through raw SQL so an invalid recurrence/date
+   * combination is representable (the typed columns would otherwise let the
+   * application layer be the only gate) — these prove the *storage* layer
+   * enforces the ADR-0005 coherence rules.
+   */
+  function insertSchedule(
+    userId: number,
+    cols: {
+      recurrenceDays?: number | null;
+      startMinute?: number | null;
+      endMinute?: number | null;
+      effectiveFrom?: number | null;
+      effectiveTo?: number | null;
+    },
+  ): void {
+    db.$client
+      .prepare(
+        "INSERT INTO schedules " +
+          "(user_id, target_kind, recurrence_days, recurrence_start_minute, recurrence_end_minute, effective_from, effective_to, action) " +
+          "VALUES (?,?,?,?,?,?,?,?)",
+      )
+      .run(
+        userId,
+        "overall",
+        cols.recurrenceDays ?? null,
+        cols.startMinute ?? null,
+        cols.endMinute ?? null,
+        cols.effectiveFrom ?? null,
+        cols.effectiveTo ?? null,
+        "allow",
+      );
+  }
+
+  it("accepts the all-null degenerate schedule (always-on)", () => {
+    const userId = insertUser();
+    expect(() => insertSchedule(userId, {})).not.toThrow();
+  });
+
+  it("accepts a fully-specified recurrence window", () => {
+    const userId = insertUser();
+    expect(() =>
+      insertSchedule(userId, {
+        recurrenceDays: 0b0011111,
+        startMinute: 960,
+        endMinute: 1080,
+        effectiveFrom: 1_800_000_000,
+        effectiveTo: 1_800_600_000,
+      }),
+    ).not.toThrow();
+  });
+
+  it("bounds the weekday mask to 1..127", () => {
+    const userId = insertUser();
+    expect(() => insertSchedule(userId, { recurrenceDays: 0 })).toThrow(/CHECK constraint/i);
+    expect(() => insertSchedule(userId, { recurrenceDays: 128 })).toThrow(/CHECK constraint/i);
+    expect(() => insertSchedule(userId, { recurrenceDays: 1 })).not.toThrow();
+    expect(() => insertSchedule(userId, { recurrenceDays: 127 })).not.toThrow();
+  });
+
+  it("requires the two intra-day minute bounds to be set together", () => {
+    const userId = insertUser();
+    expect(() => insertSchedule(userId, { startMinute: 600, endMinute: null })).toThrow(
+      /CHECK constraint/i,
+    );
+    expect(() => insertSchedule(userId, { startMinute: null, endMinute: 600 })).toThrow(
+      /CHECK constraint/i,
+    );
+  });
+
+  it("requires a non-empty intra-day window within [0, 1440]", () => {
+    const userId = insertUser();
+    expect(() => insertSchedule(userId, { startMinute: 600, endMinute: 600 })).toThrow(
+      /CHECK constraint/i,
+    );
+    expect(() => insertSchedule(userId, { startMinute: 700, endMinute: 600 })).toThrow(
+      /CHECK constraint/i,
+    );
+    expect(() => insertSchedule(userId, { startMinute: -1, endMinute: 600 })).toThrow(
+      /CHECK constraint/i,
+    );
+    expect(() => insertSchedule(userId, { startMinute: 600, endMinute: 1441 })).toThrow(
+      /CHECK constraint/i,
+    );
+    expect(() => insertSchedule(userId, { startMinute: 0, endMinute: 1440 })).not.toThrow();
+  });
+
+  it("requires a bounded effective window to be non-empty (from < to)", () => {
+    const userId = insertUser();
+    expect(() =>
+      insertSchedule(userId, { effectiveFrom: 1_800_000_000, effectiveTo: 1_800_000_000 }),
+    ).toThrow(/CHECK constraint/i);
+    expect(() =>
+      insertSchedule(userId, { effectiveFrom: 1_800_600_000, effectiveTo: 1_800_000_000 }),
+    ).toThrow(/CHECK constraint/i);
+    // An open-ended bound on either side is always fine.
+    expect(() => insertSchedule(userId, { effectiveFrom: 1_800_000_000 })).not.toThrow();
+    expect(() => insertSchedule(userId, { effectiveTo: 1_800_000_000 })).not.toThrow();
+  });
+
+  it("lets an exception pre-schedule with effective_from, but only before it expires", () => {
+    const userId = insertUser();
+    const insertException = (effectiveFrom: number | null, expiresAt: number): void => {
+      db.$client
+        .prepare(
+          "INSERT INTO exceptions (user_id, target_kind, action, effective_from, expires_at) VALUES (?,?,?,?,?)",
+        )
+        .run(userId, "overall", "allow", effectiveFrom, expiresAt);
+    };
+
+    expect(() => insertException(null, 1_800_600_000)).not.toThrow(); // active from creation
+    expect(() => insertException(1_800_000_000, 1_800_600_000)).not.toThrow(); // pre-scheduled
+    expect(() => insertException(1_800_600_000, 1_800_600_000)).toThrow(/CHECK constraint/i); // not before expiry
+    expect(() => insertException(1_800_600_000, 1_800_000_000)).toThrow(/CHECK constraint/i); // starts after expiry
+  });
+});
+
 describe("foreign keys", () => {
   it("rejects a budget for a non-existent user", () => {
     expect(() =>
