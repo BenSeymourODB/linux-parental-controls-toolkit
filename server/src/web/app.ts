@@ -85,8 +85,10 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
 
   // Mount the JSON API at /api (#50). Encapsulated: the zod validation hook,
   // the shared error envelope, and the /api not-found envelope apply only
-  // within this prefix, leaving /, /healthz, /admin and /app untouched.
-  registerApi(app);
+  // within this prefix, leaving /, /healthz, /admin and /app untouched. Auth
+  // (#52) is wired inside this scope and needs the settings (PCT_SECRET_KEY,
+  // first-admin bootstrap) threaded through.
+  registerApi(app, settings);
 
   // Serve the prerendered SvelteKit build at /admin and /app (#40). Skipped
   // (with a warning) when the build directory is absent, so /, /healthz, and

@@ -1,9 +1,22 @@
 name: CI
 
 on:
+  # Run on pushes to the default branch (post-merge CI) and on every pull
+  # request (pre-merge CI). Pushes to non-default branches are intentionally
+  # NOT triggered here: a branch with an open PR would otherwise run this
+  # workflow twice on the same commit — once for the push event and once for
+  # the pull_request event — which is the duplicate-concurrent-runs problem.
+  # Branches without a PR get CI as soon as a PR is opened.
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
+
+# Keep only one in-flight CI run per ref: a rapid re-push to a PR cancels the
+# now-superseded run instead of piling up. PR runs key on refs/pull/<n>/merge
+# (per-PR) and main runs on refs/heads/main.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   lint:
@@ -110,20 +123,21 @@ jobs:
             echo "No shell scripts in client/ yet — skipping ShellCheck"
           fi
 
-  shell-tests:
-    name: Shell unit tests (bats)
+  client-tests:
+    name: Client shell tests (bats)
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run bats tests (client scripts)
+      - name: Install bats
+        run: sudo apt-get update && sudo apt-get install -y bats
+
+      - name: bats (client/tests)
         run: |
           if compgen -G "client/tests/*.bats" > /dev/null 2>&1; then
-            sudo apt-get update -q
-            sudo apt-get install -y -q bats
-            bats client/tests/*.bats
+            bats client/tests/
           else
-            echo "No bats tests in client/ yet — skipping"
+            echo "No client bats tests yet — skipping"
           fi
 
   ansible-lint:
