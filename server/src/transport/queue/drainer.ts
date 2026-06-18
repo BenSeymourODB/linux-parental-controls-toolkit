@@ -9,7 +9,11 @@
  * - **retriable failure** (host unreachable / timed out) → record the attempt,
  *   leave the row `pending`, and **stop** draining this client — everything
  *   behind the head is for the same now-unreachable host, so there's no point
- *   hammering it. The deferred work waits for a later tick (never dropped).
+ *   hammering it. The deferred work waits for a later tick (never dropped). By
+ *   design there is **no attempt-count cap** on a retriable failure: a client
+ *   that stays offline for a long time keeps its queued pushes rather than
+ *   having them silently dead-lettered. `attempts` is observability only (how
+ *   many times we've tried), surfaced to the admin — not a retry budget.
  * - **non-retriable failure** (the command itself failed, or an unclassifiable
  *   rejection) → dead-letter the row ({@link markFailed}) and continue past it,
  *   so one poison action can't wedge the queue head.

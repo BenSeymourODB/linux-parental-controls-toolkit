@@ -93,6 +93,24 @@ describe("drainClient", () => {
     expect(all[0]?.attempts).toBe(1);
   });
 
+  it("reports both failed and deferred in one pass when a dead-letter precedes a defer", async () => {
+    enqueueN(["a", "b", "c"]);
+    const executor = vi.fn(async (action: QueuedAction) => {
+      if (action.coalesceKey === "a") throw commandFailed(); // dead-letter, continue
+      if (action.coalesceKey === "b") throw unreachable(); // defer, stop
+    });
+
+    const summary = await drainClient(db, clientId, executor);
+
+    // a dead-lettered; b deferred (+ c behind it); c never tried.
+    expect(executor).toHaveBeenCalledTimes(2);
+    expect(summary).toEqual({ drained: 0, failed: 1, deferred: 2 });
+    expect(queue.listForClient(db, clientId).find((r) => r.coalesceKey === "a")?.status).toBe(
+      "failed",
+    );
+    expect(queue.listPendingForClient(db, clientId).map((r) => r.coalesceKey)).toEqual(["b", "c"]);
+  });
+
   it("treats an unclassifiable rejection as non-retriable (dead-letter)", async () => {
     enqueueN(["a"]);
     const executor = vi.fn(async () => {

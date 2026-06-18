@@ -61,11 +61,13 @@ Synchronous Drizzle functions over `PolicyDb`, mirroring `policy/repository.ts`:
 `drainClient(db, clientId, executor, opts)`: walk pending rows ascending by id;
 for each, record an attempt and call the executor:
 - success → delete the row (drained)
-- retriable error (`SshError.retriable === true`, read structurally) → stop
-  draining this client, leave it + the rest pending (host went offline)
-- non-retriable error, or `attempts >= maxAttempts` backstop → dead-letter the
-  row (`failed` + `last_error`) and continue past it so one poison action
-  doesn't block the queue head.
+- retriable error (`SshError.retriable === true`, read structurally) → record
+  the attempt, stop draining this client, leave it + the rest pending (host
+  went offline). No attempt cap — a long-offline client keeps its pushes
+  rather than having them silently dropped; `attempts` is observability only.
+- non-retriable error (or an unclassifiable rejection) → dead-letter the row
+  (`failed` + `last_error`) and continue past it so one poison action doesn't
+  block the queue head.
 Returns `{ drained, failed, deferred }`.
 
 ### Facade + scheduler (`transport/queue/facade.ts`, `scheduler.ts`)

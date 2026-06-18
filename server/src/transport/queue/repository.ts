@@ -105,8 +105,9 @@ export function countPendingByClient(db: PolicyDb): PendingCount[] {
 }
 
 /**
- * Remove a successfully-drained action. Returns whether a row was deleted (it
- * won't be if a concurrent enqueue coalesced/replaced it first). Drained work
+ * Remove a successfully-drained action. Returns whether a row was deleted —
+ * `false` on a second call for the same id (the drain loop deletes once;
+ * better-sqlite3 is synchronous so there's no within-tick race). Drained work
  * is deleted rather than archived — the audit of *issued* commands is #85's
  * separate, append-only log.
  */
