@@ -1,9 +1,22 @@
 name: CI
 
 on:
+  # Run on pushes to the default branch (post-merge CI) and on every pull
+  # request (pre-merge CI). Pushes to non-default branches are intentionally
+  # NOT triggered here: a branch with an open PR would otherwise run this
+  # workflow twice on the same commit — once for the push event and once for
+  # the pull_request event — which is the duplicate-concurrent-runs problem.
+  # Branches without a PR get CI as soon as a PR is opened.
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
+
+# Keep only one in-flight CI run per ref: a rapid re-push to a PR cancels the
+# now-superseded run instead of piling up. PR runs key on refs/pull/<n>/merge
+# (per-PR) and main runs on refs/heads/main.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   lint:
