@@ -11,6 +11,7 @@ import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import { registerAuth } from "../auth/index.js";
 import type { Settings } from "../config.js";
 import { registerMetaRoute } from "./meta.js";
+import { registerPolicyRoutes } from "./policy/index.js";
 import { installApiConventions } from "./validation.js";
 
 /** Options the `/api` plugin needs from its host app. */
@@ -29,6 +30,8 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (scope, opt
   installApiConventions(scope);
   await registerAuth(scope, opts.settings);
   registerMetaRoute(scope);
+  // Policy CRUD (#51) — registered after auth so `scope.requireAdmin` exists.
+  registerPolicyRoutes(scope);
 };
 
 /** Mount the JSON API under `/api` on the given app. */
