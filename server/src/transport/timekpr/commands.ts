@@ -43,8 +43,14 @@ export type IsoWeekday = 1 | 2 | 3 | 4 | 5 | 6 | 7;
 /** Sentinel for "every day" in {@link buildSetAllowedHours}'s day position. */
 export const ALL_DAYS = "ALL";
 
-/** The day an allowed-hours rule applies to: one ISO weekday, or every day. */
-export type AllowedHoursDay = IsoWeekday | typeof ALL_DAYS;
+/**
+ * Which day(s) an allowed-hours rule applies to:
+ * - a single ISO weekday (`3`),
+ * - a non-empty list of ISO weekdays (`[1, 2, 3, 4, 5]`), which `timekpra`
+ *   accepts as a `;`-joined set in the day position, or
+ * - the {@link ALL_DAYS} sentinel for every day.
+ */
+export type AllowedHoursDay = IsoWeekday | readonly IsoWeekday[] | typeof ALL_DAYS;
 
 /**
  * One entry in a `timekpra` allowed-hours list.
@@ -134,15 +140,20 @@ function formatDays(days: readonly IsoWeekday[], label: string): string {
   return days.join(LIST_SEPARATOR);
 }
 
-/** Render the day position of an allowed-hours command: an ISO weekday or `ALL`. */
+/** Render the day position of an allowed-hours command: a weekday, list, or `ALL`. */
 function formatAllowedHoursDay(day: AllowedHoursDay): string {
   if (day === ALL_DAYS) return ALL_DAYS;
-  if (!Number.isInteger(day) || day < 1 || day > 7) {
-    throw new TimekprArgumentError(
-      `timekpra: allowed-hours day must be an ISO weekday 1..7 or "ALL", got ${day}`,
-    );
+  // `typeof === "number"` narrows the single-weekday case cleanly out of the
+  // union (unlike `Array.isArray`, which does not narrow a `readonly` array).
+  if (typeof day === "number") {
+    if (!Number.isInteger(day) || day < 1 || day > 7) {
+      throw new TimekprArgumentError(
+        `timekpra: allowed-hours day must be an ISO weekday 1..7, a weekday list, or "ALL", got ${day}`,
+      );
+    }
+    return String(day);
   }
-  return String(day);
+  return formatDays(day, "allowed-hours days");
 }
 
 /** Render one {@link AllowedHour} as `[!]H[(start)-(end)]`. */
@@ -198,7 +209,9 @@ function formatActivities(activities: readonly PlayTimeActivity[]): string {
           `timekpra: PlayTime activity mask ${JSON.stringify(mask)} must be non-empty and contain no ';', '[' or ']'`,
         );
       }
-      if (description === undefined) return mask;
+      // Treat an absent or empty description identically: emit the bare mask
+      // rather than an empty `mask[]` bracket.
+      if (description === undefined || description === "") return mask;
       if (/[;[\]]/.test(description)) {
         throw new TimekprArgumentError(
           `timekpra: PlayTime activity description ${JSON.stringify(description)} must contain no ';', '[' or ']'`,

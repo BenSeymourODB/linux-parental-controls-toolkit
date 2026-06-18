@@ -18,8 +18,9 @@
  */
 import { z } from "zod";
 
-/** A `KEY: VALUE` line: an uppercase/underscore/digit key, then the value. */
-const KEY_VALUE_LINE = /^([A-Z0-9_]+):[ \t]?(.*)$/;
+/** A `KEY: VALUE` line: an uppercase/underscore/digit key, then the value
+ * (any run of spaces/tabs after the colon is the separator, not part of the value). */
+const KEY_VALUE_LINE = /^([A-Z0-9_]+):[ \t]*(.*)$/;
 
 /**
  * The parsed result of `--userinfo`: the `KEY: VALUE` pairs `timekpra` printed.

@@ -87,6 +87,19 @@ describe("buildSetAllowedHours", () => {
     ).toEqual(["--setallowedhours", "alice", "ALL", "9;12[00-30];!15;!20[00-45]"]);
   });
 
+  it("renders a weekday list in the day position", () => {
+    expect(buildSetAllowedHours(USER, [1, 2, 3, 4, 5], [{ hour: 9 }])).toEqual([
+      "--setallowedhours",
+      "alice",
+      "1;2;3;4;5",
+      "9",
+    ]);
+  });
+
+  it("rejects an empty weekday list in the day position", () => {
+    expect(() => buildSetAllowedHours(USER, [], [{ hour: 9 }])).toThrow(/at least one weekday/);
+  });
+
   it("zero-pads minute bounds to two digits", () => {
     const [, , , hours] = buildSetAllowedHours(USER, 1, [
       { hour: 6, startMinute: 5, endMinute: 9 },
@@ -105,7 +118,7 @@ describe("buildSetAllowedHours", () => {
   it("rejects a day outside 1..7 and not ALL", () => {
     const bad = 9 as unknown as IsoWeekday;
     expect(() => buildSetAllowedHours(USER, bad, [{ hour: 1 }])).toThrow(
-      /ISO weekday 1\.\.7 or "ALL"/,
+      /ISO weekday 1\.\.7, a weekday list, or "ALL"/,
     );
   });
 
@@ -198,6 +211,14 @@ describe("PlayTime builders", () => {
         { mask: "dota2" },
       ]),
     ).toEqual(["--setplaytimeactivities", "alice", "minetest[Minetest];dota2"]);
+  });
+
+  it("emits a bare mask for an empty description (no empty bracket)", () => {
+    expect(buildSetPlayTimeActivities(USER, [{ mask: "dota2", description: "" }])).toEqual([
+      "--setplaytimeactivities",
+      "alice",
+      "dota2",
+    ]);
   });
 
   it("rejects an empty activity list", () => {

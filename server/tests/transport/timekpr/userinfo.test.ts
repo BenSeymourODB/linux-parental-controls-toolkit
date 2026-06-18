@@ -45,6 +45,12 @@ describe("timekprUserInfoSchema", () => {
     expect(info.keys()).toEqual(["A", "B"]);
   });
 
+  it("treats a run of spaces/tabs after the colon as the separator", () => {
+    const info = timekprUserInfoSchema.parse("K:   value\nT:\tvalue2");
+    expect(info.get("K")).toBe("value");
+    expect(info.get("T")).toBe("value2");
+  });
+
   it("keeps the last value when a key repeats", () => {
     const info = timekprUserInfoSchema.parse("K: first\nK: second");
     expect(info.get("K")).toBe("second");
