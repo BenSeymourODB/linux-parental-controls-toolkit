@@ -42,6 +42,14 @@ distribution's package manager or upstream releases — **not** from this
 repository — preserving the license boundary documented in
 [`docs/licensing-analysis.md`](../docs/licensing-analysis.md).
 
+The orchestrator is being built bottom-up from its sub-steps: each is a
+sourceable, idempotent module under `lib/` that `install-client.sh` will call.
+The first one, `lib/provision-agent-user.sh`, creates the low-privilege
+`pct-agent` service account and its narrowly-scoped `sudoers` rule. Shell
+modules are unit-tested with [bats](https://github.com/bats-core/bats-core)
+under `tests/` (`bats client/tests/`) and linted with `shellcheck`; both run in
+CI.
+
 ### `agent/` (Phase 8b)
 
 The `pct-client` agent (TypeScript), shipped as a `.deb` that bundles its
