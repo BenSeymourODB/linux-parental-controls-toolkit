@@ -1,9 +1,12 @@
 # Client install
 
-The client install script (`client/install-client.sh`, to be implemented)
-enrols a Linux Mint / Cinnamon machine as a managed client. This document
-describes its design — not the script itself, which will land per the
-roadmap.
+The client install script (`client/install-client.sh`) enrols a Linux Mint /
+Cinnamon machine as a managed client. This document describes its design; the
+orchestrator (#76) sequences the Phase-3 sub-steps below. Some steps are owned
+by later phases and are noted inline as they are reached — notably the
+`pct-client` agent `.deb` (Phase 8b), the iptables OUTPUT redirect and managed
+e2guardian rules (Phase 6 Ansible), and the standalone self-test script (#80),
+which the orchestrator runs if present.
 
 ## Goals
 
