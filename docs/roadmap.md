@@ -64,7 +64,7 @@ and, later, the PWA and external integrators).
 - **Recurrence + date-scoping decision (foundational).** Settle *how*
   time-varying policy is represented before the schedule/budget CRUD and
   editors are built against the uniform-only model — captured as
-  `docs/adr/0004-recurrence-and-date-scoping.md`
+  `docs/adr/0005-recurrence-and-date-scoping.md`
   ([#139](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/139)).
   Then **reserve the schema columns** it implies (recurrence representation
   on `Schedule`; `effective_from`/`effective_to` on `Exception`), with
@@ -299,7 +299,7 @@ Phase 4.
 > schedule/budget schema, the editors, and the enforcement push all depend
 > on them:
 >
-> - The **recurrence + date-scoping decision** (ADR 0004) and the
+> - The **recurrence + date-scoping decision** (ADR 0005) and the
 >   **schema column reservation** moved to **Phase 2**
 >   ([#139](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/139),
 >   [#146](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/146)) —
@@ -334,7 +334,7 @@ is also the foundation the calendar-driven-schedules stretch goal
 ([#125](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/125))
 builds on.
 
-The resolve-vs-materialize choice in ADR 0004 also bounds how much the
+The resolve-vs-materialize choice in ADR 0005 also bounds how much the
 data-retention work in
 [#135](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/135)
 has to purge: rule-based resolution means retention targets only *dated*
