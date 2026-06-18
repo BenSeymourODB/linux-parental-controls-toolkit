@@ -2,14 +2,14 @@
 
 Client-side install scripts and templates for enrolling a supervised
 Linux desktop (initial target: **Linux Mint with Cinnamon**, Ubuntu/Debian
-family). This tree is intentionally a placeholder for now — real content
-lands in later roadmap phases. It is reserved here so the `shellcheck`,
-`ansible-lint`, and `client-install-dryrun` CI jobs have known paths to
-scan instead of guessing.
+family). This tree is filling in as the Phase 3 install components land; the
+top-level `install-client.sh` orchestrator (#76) and the remaining steps
+(`agent/`, `ansible/`) are still to come, and the `shellcheck`, `ansible-lint`,
+`client-tests`, and `client-install-dryrun` CI jobs scan these paths.
 
 The authoritative design lives in
 [`docs/client-install.md`](../docs/client-install.md). Read that first; the
-summary below only maps the upcoming directory layout to it.
+summary below maps the directory layout to it.
 
 ## What enforcement uses
 
@@ -43,12 +43,35 @@ repository — preserving the license boundary documented in
 [`docs/licensing-analysis.md`](../docs/licensing-analysis.md).
 
 The orchestrator is being built bottom-up from its sub-steps: each is a
-sourceable, idempotent module under `lib/` that `install-client.sh` will call.
-The first one, `lib/provision-agent-user.sh`, creates the low-privilege
-`pct-agent` service account and its narrowly-scoped `sudoers` rule. Shell
-modules are unit-tested with [bats](https://github.com/bats-core/bats-core)
-under `tests/` (`bats client/tests/`) and linted with `shellcheck`; both run in
-CI.
+sourceable, idempotent, dry-run-aware module that `install-client.sh` (#76)
+will call (set `PCT_DRY_RUN=1` to print the intended plan without changing
+anything). Shell modules are unit-tested with
+[bats](https://github.com/bats-core/bats-core) under `tests/`
+(`bats client/tests/`) and linted with `shellcheck`; both run in CI.
+
+- `lib/pct-common.sh` — shared helpers (logging, a dry-run-aware command
+  runner, `/etc/os-release` distro detection, file writing), sourced by the
+  install components.
+- `lib/provision-agent-user.sh` (#78) — creates the low-privilege `pct-agent`
+  service account and its narrowly-scoped `sudoers` rule (the SSH principal the
+  dashboard connects as).
+- `install-baseline-tools.sh` (#79) — installs and writes a **safe baseline**
+  config for the three upstream tools: adds the Timekpr-nExT PPA, installs
+  `timekpr-next` / `e2guardian`, fetches the pinned ActivityWatch upstream
+  release (checksum-verified, binding `aw-server` to `127.0.0.1:5600` only),
+  and lays down per-supervised-user ActivityWatch `systemd --user` units plus
+  a permissive e2guardian baseline + per-UID filter-group skeleton. The
+  *managed* configuration — real e2guardian filter rules, the iptables OUTPUT
+  redirect, ActivityWatch upgrades, AppArmor — is owned by the Phase 6 Ansible
+  playbooks (`ansible/`); this step deliberately stops at the baseline (no
+  iptables here).
+
+Run a component standalone, or dry-run it (no root/network needed):
+
+```bash
+sudo bash client/install-baseline-tools.sh --supervised-user alice
+PCT_DRY_RUN=1 bash client/install-baseline-tools.sh --supervised-user alice
+```
 
 ### `agent/` (Phase 8b)
 
