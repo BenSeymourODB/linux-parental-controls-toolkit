@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "6ede6b6f-0e66-4b75-bd64-c0d79c12c95d",
+  "id": "99bc27bd-178a-4cff-8349-f8e6d2faa75d",
   "prevId": "10ef7f27-452f-4519-9057-6860647066f7",
   "tables": {
     "activities": {
@@ -320,6 +320,13 @@
           "name": "clients_hostname_unique",
           "columns": [
             "hostname"
+          ],
+          "isUnique": true
+        },
+        "clients_bearer_token_hash_unique": {
+          "name": "clients_bearer_token_hash_unique",
+          "columns": [
+            "bearer_token_hash"
           ],
           "isUnique": true
         }

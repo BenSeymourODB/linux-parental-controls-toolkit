@@ -299,6 +299,108 @@ describe("client enrolment routes", () => {
     expect(res.json().error.code).toBe("user_no_longer_exists");
   });
 
+  it("400s a mint whose ttlSeconds exceeds the maximum", async () => {
+    const userId = await createUser("Alice");
+    const res = await admin({
+      method: "POST",
+      url: "/api/clients/enrolment-tokens",
+      payload: {
+        supervisedUsers: [{ userId, linuxUsername: "alice" }],
+        ttlSeconds: 24 * 60 * 60 + 1,
+      },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.code).toBe("validation_error");
+  });
+
+  it("applies the default 1h TTL when ttlSeconds is omitted", async () => {
+    const userId = await createUser("Alice");
+    const before = Date.now();
+    const res = await admin({
+      method: "POST",
+      url: "/api/clients/enrolment-tokens",
+      payload: { supervisedUsers: [{ userId, linuxUsername: "alice" }] },
+    });
+    const expiresAt = new Date(res.json().expiresAt as string).getTime();
+    // ~1h out (allow a generous window for execution + second-granularity).
+    expect(expiresAt).toBeGreaterThanOrEqual(before + 3600_000 - 5_000);
+    expect(expiresAt).toBeLessThanOrEqual(Date.now() + 3600_000 + 5_000);
+  });
+
+  it("400s an enrol with an empty supervisedUsers list", async () => {
+    const userId = await createUser("Alice");
+    const token = await mintFor(userId, "alice");
+    const res = await enrol(token, {
+      hostname: "mint-01",
+      sshUser: "pct-agent",
+      supervisedUsers: [],
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.code).toBe("validation_error");
+  });
+
+  describe("multi-user mappings (the bijection check)", () => {
+    /** Mint a token bound to two users; returns [token, aliceId, bobId]. */
+    async function mintTwo(): Promise<[string, number, number]> {
+      const aliceId = await createUser("Alice");
+      const bobId = await createUser("Bob");
+      const res = await admin({
+        method: "POST",
+        url: "/api/clients/enrolment-tokens",
+        payload: {
+          supervisedUsers: [
+            { userId: aliceId, linuxUsername: "alice" },
+            { userId: bobId, linuxUsername: "bob" },
+          ],
+        },
+      });
+      expect(res.statusCode).toBe(201);
+      return [res.json().token as string, aliceId, bobId];
+    }
+
+    it("enrols both users (201) mapping each minted userId to its uid", async () => {
+      const [token, aliceId, bobId] = await mintTwo();
+      const res = await enrol(token, {
+        hostname: "mint-01",
+        sshUser: "pct-agent",
+        supervisedUsers: [
+          { linuxUsername: "alice", linuxUid: 1000 },
+          { linuxUsername: "bob", linuxUid: 1001 },
+        ],
+      });
+      expect(res.statusCode).toBe(201);
+      expect(res.json().supervisedUsers).toEqual([
+        { userId: aliceId, linuxUsername: "alice", linuxUid: 1000 },
+        { userId: bobId, linuxUsername: "bob", linuxUid: 1001 },
+      ]);
+    });
+
+    it("400s when a bound user is dropped from the enrol request", async () => {
+      const [token] = await mintTwo();
+      const res = await enrol(token, {
+        hostname: "mint-01",
+        sshUser: "pct-agent",
+        supervisedUsers: [{ linuxUsername: "alice", linuxUid: 1000 }],
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error.code).toBe("enrolment_user_mismatch");
+    });
+
+    it("400s when the enrol request smuggles in an unbound user", async () => {
+      const [token] = await mintTwo();
+      const res = await enrol(token, {
+        hostname: "mint-01",
+        sshUser: "pct-agent",
+        supervisedUsers: [
+          { linuxUsername: "alice", linuxUid: 1000 },
+          { linuxUsername: "carol", linuxUid: 1002 },
+        ],
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error.code).toBe("enrolment_user_mismatch");
+    });
+  });
+
   it("401s an enrol with an expired token", async () => {
     // Mint a token then fast-forward past its TTL by writing expiry into the past.
     const userId = await createUser("Alice");

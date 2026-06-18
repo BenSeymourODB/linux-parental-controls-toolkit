@@ -11,4 +11,5 @@ CREATE TABLE `enrolment_tokens` (
 );
 --> statement-breakpoint
 CREATE UNIQUE INDEX `enrolment_tokens_token_hash_unique` ON `enrolment_tokens` (`token_hash`);--> statement-breakpoint
-ALTER TABLE `clients` ADD `bearer_token_hash` text;
+ALTER TABLE `clients` ADD `bearer_token_hash` text;--> statement-breakpoint
+CREATE UNIQUE INDEX `clients_bearer_token_hash_unique` ON `clients` (`bearer_token_hash`);

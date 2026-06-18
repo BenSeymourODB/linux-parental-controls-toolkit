@@ -100,7 +100,14 @@ export const clients = sqliteTable(
     enrolledAt: timestampNow("enrolled_at"),
     lastSeen: integer("last_seen", { mode: "timestamp" }),
   },
-  (table) => [uniqueIndex("clients_hostname_unique").on(table.hostname)],
+  (table) => [
+    uniqueIndex("clients_hostname_unique").on(table.hostname),
+    // The per-client bearer token is the credential the Phase-8b event stream
+    // authenticates against (a lookup by hash), so make that lookup single-row
+    // by construction. SQLite treats multiple NULLs as distinct, so the
+    // admin-CRUD clients that carry no bearer token are unaffected.
+    uniqueIndex("clients_bearer_token_hash_unique").on(table.bearerTokenHash),
+  ],
 );
 
 /**

@@ -25,7 +25,7 @@ export interface MintResult {
 }
 
 /** What {@link enrolClient} hands back to the route (bearer token shown once). */
-export interface EnrolResult {
+export interface EnrolServiceResult {
   clientId: number;
   hostname: string;
   sshUser: string;
@@ -82,15 +82,29 @@ export function enrolClient(
   bearerEnrolmentToken: string,
   input: EnrolClientRequest,
   options: EnrolOptions,
-): EnrolResult {
+): EnrolServiceResult {
   const tokenRow = enrolmentRepo.findEnrolmentTokenByHash(db, hashToken(bearerEnrolmentToken));
   if (tokenRow === undefined) {
+    options.log.warn(
+      { event: "enrol_rejected", reason: "invalid_token" },
+      "client enrolment rejected",
+    );
     throw new ApiError(401, "enrolment_token_invalid", "Unknown or invalid enrolment token");
   }
   if (tokenRow.consumedAt !== null) {
+    options.log.warn(
+      { event: "enrol_rejected", reason: "used_token", tokenId: tokenRow.id },
+      "client enrolment rejected",
+    );
     throw new ApiError(401, "enrolment_token_used", "This enrolment token has already been used");
   }
+  // `expires_at` is stored at second granularity, so a token can read as expired
+  // up to ~1s early; harmless for the minute-to-hours TTLs in use.
   if (tokenRow.expiresAt.getTime() <= Date.now()) {
+    options.log.warn(
+      { event: "enrol_rejected", reason: "expired_token", tokenId: tokenRow.id },
+      "client enrolment rejected",
+    );
     throw new ApiError(401, "enrolment_token_expired", "This enrolment token has expired");
   }
 
@@ -137,6 +151,15 @@ export function enrolClient(
       links,
     });
   } catch (err) {
+    if (err instanceof enrolmentRepo.EnrolmentTokenConsumedError) {
+      // Lost a race for the same token (not reachable on today's synchronous
+      // path; the data-layer guard makes it safe regardless).
+      options.log.warn(
+        { event: "enrol_rejected", reason: "used_token", tokenId: tokenRow.id },
+        "client enrolment rejected",
+      );
+      throw new ApiError(401, "enrolment_token_used", "This enrolment token has already been used");
+    }
     if (repo.isUniqueViolation(err)) {
       throw new ApiError(
         409,
@@ -147,6 +170,10 @@ export function enrolClient(
     throw err;
   }
 
+  options.log.info(
+    { event: "client_enrolled", clientId: result.client.id, hostname: result.client.hostname },
+    "client enrolled",
+  );
   return {
     clientId: result.client.id,
     hostname: result.client.hostname,

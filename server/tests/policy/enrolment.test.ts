@@ -66,6 +66,35 @@ describe("enrolment repository", () => {
     expect(reloaded?.consumedClientId).toBe(result.client.id);
   });
 
+  it("refuses to consume an already-consumed token and rolls back (single-use guard)", () => {
+    const userId = seedUser();
+    const token = enrolmentRepo.createEnrolmentToken(db, {
+      tokenHash: "hash-guard",
+      supervisedUsers: [{ userId, linuxUsername: "alice" }],
+      expiresAt: new Date("2026-12-31T00:00:00Z"),
+    });
+    const links = [{ userId, linuxUsername: "alice", linuxUid: 1000 }];
+    enrolmentRepo.consumeTokenAndEnrol(db, token.id, {
+      hostname: "mint-01",
+      sshUser: "pct-agent",
+      bearerTokenHash: "bearer-hash-1",
+      links,
+    });
+
+    // A second redeem of the same token must throw (the consume guard) and
+    // create no second client. A fresh bearer hash is used so the rollback is
+    // driven by the consumed-token guard, not the bearer-hash unique index.
+    expect(() =>
+      enrolmentRepo.consumeTokenAndEnrol(db, token.id, {
+        hostname: "mint-02",
+        sshUser: "pct-agent",
+        bearerTokenHash: "bearer-hash-2",
+        links,
+      }),
+    ).toThrow(enrolmentRepo.EnrolmentTokenConsumedError);
+    expect(db.select().from(clients).all()).toHaveLength(1);
+  });
+
   it("rolls back the whole enrolment if a link violates a constraint", () => {
     const userId = seedUser();
     const token = enrolmentRepo.createEnrolmentToken(db, {

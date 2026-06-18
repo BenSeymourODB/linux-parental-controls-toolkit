@@ -9,7 +9,7 @@
  *
  * License boundary: none touched — Drizzle (Apache-2.0) + better-sqlite3 (MIT).
  */
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 
 import type { PolicyDb } from "./db.js";
 import { clients, enrolmentTokens, usersOnClients } from "./schema.js";
@@ -85,7 +85,21 @@ export function findEnrolmentTokenByHash(
  * whole thing back, so a failed enrolment never half-creates a client or burns
  * the token. The caller is responsible for having validated the token's
  * state (unexpired/unconsumed) and that each `userId` still exists first.
+ *
+ * The consume UPDATE is guarded with `consumed_at IS NULL` and its row count is
+ * asserted: although the synchronous request path already serialises the
+ * check-then-consume (the service does no `await` between them), this rolls the
+ * whole transaction back rather than double-enrolling if the token's state
+ * changed under us — defence in depth against a future async refactor.
+ * {@link EnrolmentTokenConsumedError} signals that case.
  */
+export class EnrolmentTokenConsumedError extends Error {
+  constructor() {
+    super("enrolment token was already consumed");
+    this.name = "EnrolmentTokenConsumedError";
+  }
+}
+
 export function consumeTokenAndEnrol(
   db: PolicyDb,
   tokenId: number,
@@ -115,10 +129,16 @@ export function consumeTokenAndEnrol(
         .get(),
     );
 
-    tx.update(enrolmentTokens)
+    const consumed = tx
+      .update(enrolmentTokens)
       .set({ consumedAt: new Date(), consumedClientId: client.id })
-      .where(eq(enrolmentTokens.id, tokenId))
+      .where(and(eq(enrolmentTokens.id, tokenId), isNull(enrolmentTokens.consumedAt)))
       .run();
+    if (consumed.changes !== 1) {
+      // Token was consumed between the caller's check and here — abort so the
+      // client + links insert above roll back with this transaction.
+      throw new EnrolmentTokenConsumedError();
+    }
 
     return { client, links };
   });

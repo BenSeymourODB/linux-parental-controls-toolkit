@@ -55,6 +55,10 @@ export function registerClientEnrolmentRoutes(scope: FastifyInstance, settings: 
     { preHandler: scope.requireAdmin, schema: { body: mintEnrolmentTokenSchema } },
     async (request, reply): Promise<EnrolmentTokenResponse> => {
       const result = mintEnrolmentToken(scope.db, request.body);
+      request.log.info(
+        { event: "enrolment_token_minted", tokenId: result.id },
+        "enrolment token minted",
+      );
       reply.code(201);
       return { id: result.id, token: result.token, expiresAt: result.expiresAt.toISOString() };
     },
@@ -62,6 +66,13 @@ export function registerClientEnrolmentRoutes(scope: FastifyInstance, settings: 
 
   // Intentionally NOT behind requireAdmin — authenticated by the bearer
   // enrolment token, which the service validates.
+  //
+  // No per-IP rate limit is applied here (unlike the login route's
+  // LoginRateLimiter): the token is a 256-bit random secret, so online guessing
+  // is infeasible, and protecting the unauthenticated surface from volumetric
+  // abuse belongs at the reverse proxy (Phase 11, docs/server-deployment.md →
+  // "Reverse proxy"). Rejections are logged so abuse is observable. Revisit if
+  // an application-layer limiter is wanted — tracked as a follow-up.
   typed.post(
     "/clients/enrol",
     { schema: { body: enrolClientSchema } },
