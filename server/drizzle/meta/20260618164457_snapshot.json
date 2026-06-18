@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "acbc3729-ef3c-4196-837a-82758691ba55",
+  "id": "8510a27b-0ca0-404d-a060-b1268030ed9e",
   "prevId": "99bc27bd-178a-4cff-8349-f8e6d2faa75d",
   "tables": {
     "activities": {
@@ -470,6 +470,13 @@
           "notNull": false,
           "autoincrement": false
         },
+        "effective_from": {
+          "name": "effective_from",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "expires_at": {
           "name": "expires_at",
           "type": "integer",
@@ -525,6 +532,10 @@
         "exceptions_target_coherence_check": {
           "name": "exceptions_target_coherence_check",
           "value": "(\"exceptions\".\"target_kind\" = 'overall') = (\"exceptions\".\"target_id\" is null)"
+        },
+        "exceptions_effective_window_check": {
+          "name": "exceptions_effective_window_check",
+          "value": "\"exceptions\".\"effective_from\" is null or \"exceptions\".\"effective_from\" < \"exceptions\".\"expires_at\""
         }
       }
     },
@@ -845,6 +856,41 @@
           "notNull": true,
           "autoincrement": false
         },
+        "recurrence_days": {
+          "name": "recurrence_days",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "recurrence_start_minute": {
+          "name": "recurrence_start_minute",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "recurrence_end_minute": {
+          "name": "recurrence_end_minute",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "effective_from": {
+          "name": "effective_from",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "effective_to": {
+          "name": "effective_to",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "action": {
           "name": "action",
           "type": "text",
@@ -900,131 +946,18 @@
         "schedules_target_coherence_check": {
           "name": "schedules_target_coherence_check",
           "value": "(\"schedules\".\"target_kind\" = 'overall') = (\"schedules\".\"target_id\" is null)"
-        }
-      }
-    },
-    "transport_queue": {
-      "name": "transport_queue",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "integer",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": true
         },
-        "client_id": {
-          "name": "client_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
+        "schedules_recurrence_days_check": {
+          "name": "schedules_recurrence_days_check",
+          "value": "\"schedules\".\"recurrence_days\" is null or (\"schedules\".\"recurrence_days\" between 1 and 127)"
         },
-        "coalesce_key": {
-          "name": "coalesce_key",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
+        "schedules_recurrence_minutes_check": {
+          "name": "schedules_recurrence_minutes_check",
+          "value": "(\"schedules\".\"recurrence_start_minute\" is null) = (\"schedules\".\"recurrence_end_minute\" is null) and (\"schedules\".\"recurrence_start_minute\" is null or (\"schedules\".\"recurrence_start_minute\" >= 0 and \"schedules\".\"recurrence_end_minute\" <= 1440 and \"schedules\".\"recurrence_start_minute\" < \"schedules\".\"recurrence_end_minute\"))"
         },
-        "kind": {
-          "name": "kind",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "payload": {
-          "name": "payload",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "status": {
-          "name": "status",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "'pending'"
-        },
-        "attempts": {
-          "name": "attempts",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": 0
-        },
-        "last_error": {
-          "name": "last_error",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "enqueued_at": {
-          "name": "enqueued_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "(unixepoch())"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "(unixepoch())"
-        }
-      },
-      "indexes": {
-        "transport_queue_client_coalesce_unique": {
-          "name": "transport_queue_client_coalesce_unique",
-          "columns": [
-            "client_id",
-            "coalesce_key"
-          ],
-          "isUnique": true
-        },
-        "transport_queue_client_status_id_idx": {
-          "name": "transport_queue_client_status_id_idx",
-          "columns": [
-            "client_id",
-            "status",
-            "id"
-          ],
-          "isUnique": false
-        }
-      },
-      "foreignKeys": {
-        "transport_queue_client_id_clients_id_fk": {
-          "name": "transport_queue_client_id_clients_id_fk",
-          "tableFrom": "transport_queue",
-          "tableTo": "clients",
-          "columnsFrom": [
-            "client_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {
-        "transport_queue_status_check": {
-          "name": "transport_queue_status_check",
-          "value": "\"transport_queue\".\"status\" in ('pending', 'failed')"
-        },
-        "transport_queue_attempts_check": {
-          "name": "transport_queue_attempts_check",
-          "value": "\"transport_queue\".\"attempts\" >= 0"
+        "schedules_effective_window_check": {
+          "name": "schedules_effective_window_check",
+          "value": "\"schedules\".\"effective_from\" is null or \"schedules\".\"effective_to\" is null or \"schedules\".\"effective_from\" < \"schedules\".\"effective_to\""
         }
       }
     },
