@@ -120,11 +120,18 @@ Budget        (id, user_id, scope=overall|activity|group,
                 seconds_allowed)
 
 Schedule      (id, user_id, target_kind, target_id?,
-                cron_or_window, action=allow|deny|extend, ordinal)
+                <recurrence>, action=allow|deny|extend, ordinal,
+                effective_from?, effective_to?)
               --  Evaluated ascending by ordinal; first active rule wins.
               --  See docs/adr/0004-schedule-precedence.md.
+              --  <recurrence> = day-of-week + intra-day window; NULL = always-on.
+              --  effective_from/to date-scope the rule. Recurrence grammar and
+              --  date scoping per docs/adr/0005-recurrence-and-date-scoping.md
+              --  (columns reserved by #146; resolver is Phase 4 / #143).
 
-Exception     (id, user_id, ...,  expires_at)
+Exception     (id, user_id, ...,  effective_from?, expires_at)
+              --  effective_from pre-schedules the override; expires_at is the
+              --  effective end. See docs/adr/0005-recurrence-and-date-scoping.md.
 
 UsageSample   (user_id, client_id, activity_id, started_at, ended_at)
               --  populated from ActivityWatch pulls
@@ -147,6 +154,27 @@ NotificationPolicy (user_id, enabled, sound_profile,
                   experience; pushed to the client and cached there
                   (see docs/client-notifications.md)
 ```
+
+### Recurrence and date-scoping
+
+Time-varying policy — "no Discord weekdays 16:00–18:00", "extra hour during
+spring break" — is represented as **rules**, not materialised per-day rows, and
+"what applies on day *D*" is resolved on the fly. `Schedule` carries a
+purpose-built recurrence (a day-of-week set plus an intra-day start/end window,
+not cron or RRULE) and an optional `effective_from`/`effective_to` date range;
+`Exception` gains an optional `effective_from` (its `expires_at` is the
+effective end). A rule with no recurrence and no effective window is the
+degenerate **always-on** case, identical to today's uniform rule. Recurrence
+weekdays and times, and the date gates, are all evaluated in the user's
+effective timezone (the same rule as budget rollover, above). This grammar is
+the "is this rule active at instant *T*?" predicate that
+[ADR 0004](adr/0004-schedule-precedence.md) deferred; first-match-wins
+precedence then ranks the rules that are active. The full decision —
+grammar, date anchoring, resolve-vs-materialise, retention interaction, and the
+reserved column shape — is in
+[`docs/adr/0005-recurrence-and-date-scoping.md`](adr/0005-recurrence-and-date-scoping.md).
+The columns are reserved in Phase 2 (#146); the resolver and editors land in
+Phase 4 (#143/#140) and Phase 13 (#141/#142).
 
 ### Timezones and budget rollover
 
@@ -190,6 +218,14 @@ Key derived views the dashboard renders:
    the client inventory.
 5. If a client is offline, the change is queued; an Ansible run is
    scheduled on next reconnect (detected by SSH probe).
+
+In **Phase 2** (`docs/roadmap.md`) none of the transport in steps 3–5 exists
+yet: every mutating policy write instead runs through a **stub transport**
+(`server/src/transport/stub.ts`, #54) that computes the intended per-client
+effect and *logs* it (`component: "transport/stub"`) rather than dispatching
+it. The logged command is shaped like the real per-client transport command,
+so Phase 4 (SSH + `timekpra`) and Phase 6 (Ansible) swap the log for a real
+dispatch without changing the call sites.
 
 ### Inbound (client → server) — telemetry pull
 

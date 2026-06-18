@@ -171,6 +171,21 @@ export function upsertLink(
     .get();
 }
 
+/**
+ * The ids of every client a user is linked to, ascending. Used by the stub
+ * transport (#54) to resolve the clients a user-level policy change would push
+ * to — captured *before* a delete, since the links cascade away with the user.
+ */
+export function listUserClientIds(db: PolicyDb, userId: number): number[] {
+  return db
+    .select({ clientId: usersOnClients.clientId })
+    .from(usersOnClients)
+    .where(eq(usersOnClients.userId, userId))
+    .orderBy(usersOnClients.clientId)
+    .all()
+    .map((row) => row.clientId);
+}
+
 /** Delete a link. Returns whether a row was removed. */
 export function deleteLink(db: PolicyDb, userId: number, clientId: number): boolean {
   return (
