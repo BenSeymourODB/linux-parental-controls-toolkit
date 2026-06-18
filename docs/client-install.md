@@ -95,12 +95,24 @@ dashboard, has a short TTL, and is single-use.
    - On success, the dashboard now lists the client in its inventory and
      can run an initial Ansible playbook to push the rest of the
      configuration.
-9. **Self-test**
-   - Verify `timekpra --status` works.
-   - Verify `aw-server` is reachable on `localhost:5600`.
-   - Verify e2guardian is intercepting (test request through curl as the
-     supervised UID).
-   - Print a green checklist to the terminal.
+9. **Self-test** (`client/self-test.sh`, #80)
+   - Read-only pass/fail probes of what the earlier steps laid down; exits
+     non-zero if any check fails so the installer surfaces it, and prints a
+     non-punitive checklist to the terminal. The complement to the admin
+     **Clients** health page (#81), which shows the same state server-side.
+   - Checks: the `pct-agent` account exists; the dashboard SSH key is
+     authorized for it (and `sshd` is up — the authenticated loopback
+     round-trip itself needs the dashboard's private key, so it is verified
+     server-side); the `pct-agent` sudoers drop-in is scoped to exactly
+     `timekpra`; the Timekpr-nExT daemon is active and `timekpra --userinfo
+     <user>` answers for each supervised user; `aw-server` is reachable on
+     `localhost:5600` and returns buckets; e2guardian is active; and the
+     dashboard enrolment record (`/etc/pct/pct-client.env`) is present and
+     `0600`.
+   - e2guardian is checked as *service active* only: the iptables OUTPUT
+     redirect that makes it actually intercept traffic is a Phase 6 Ansible
+     deliverable (#90), not part of the Phase 3 baseline (#79), so an
+     "is it intercepting" probe would not be meaningful yet.
 
 ## Other distributions
 
