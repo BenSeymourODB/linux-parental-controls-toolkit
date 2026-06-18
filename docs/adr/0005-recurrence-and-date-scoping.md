@@ -46,18 +46,19 @@ representation of "on these weekdays, between this start and end time":
 
 - **Days of week** — an ISO-8601 weekday set (`1` = Monday … `7` = Sunday),
   stored as a 7-bit mask (bit *i* set ⇒ active on ISO weekday *i + 1*; bit 0 =
-  Monday, bit 6 = Sunday). ISO numbering is chosen over JavaScript's
-  `0` = Sunday because it matches the day numbering Timekpr-nExT's allowed-hours
-  configuration uses, so the Phase 4 push (#140) translates without a remapping
-  table.
+  Monday, bit 6 = Sunday). ISO-8601 numbering is chosen as the stable internal
+  standard over JavaScript's `0` = Sunday; it is also expected to line up with
+  Timekpr-nExT's `1`–`7` allowed-days numbering, which the Phase 4 push (#140)
+  should map to directly — #140 confirms the exact correspondence against the
+  `timekpra` CLI when it builds the translation.
 - **Intra-day window** — `start` and `end` as **minutes from local midnight**
   (integers, `start` in `[0, 1440)`, `end` in `(0, 1440]`, `start < end`).
   Minutes-of-day give an unambiguous, directly comparable, CHECK-constrainable
   value; the API DTO may present them as `"HH:MM"`.
 
-A window is **anchored to a single local day**: it runs from `start` to `end`
-within each listed weekday and does **not** implicitly wrap past midnight
-(`end` must be strictly greater than `start`). An overnight span ("allowed
+A window is **anchored to a single local day**: it is active on the half-open
+local interval `[start, end)` within each listed weekday and does **not**
+implicitly wrap past midnight (`end` must be strictly greater than `start`). An overnight span ("allowed
 22:00 Fri → 06:00 Sat") is expressed as two rules, which is also exactly how it
 lands on Timekpr-nExT's per-weekday allowed-hours, so no information is lost.
 
@@ -133,7 +134,8 @@ the past (an `exception` past its `expires_at`, or a `schedule` past its
 `effective_to`). A purely recurring schedule (no `effective_to`) has no "age"
 and is out of retention's scope entirely. This is the property the roadmap's
 Phase 13 note already assumed ("rule-based resolution means retention targets
-only *dated* data — not the recurrence rules themselves").
+only *dated* data — usage samples, grants, audit, and date-specific overrides —
+not the recurrence rules themselves").
 
 ### 5. Timezone: resolve in the user's effective TZ
 
@@ -208,8 +210,10 @@ Coherence constraints #146 should encode:
 - `recurrence_start_minute` and `recurrence_end_minute` are **both** `NULL` or
   **both** set; when set, `0 ≤ start < end ≤ 1440`.
 - `recurrence_days`, when set, is in `[1, 127]` (at least one weekday).
-- `effective_from ≤ effective_to` when both are set (and, for exceptions,
-  `effective_from < expires_at` when `effective_from` is set).
+- `effective_from < effective_to` when both are set (and, for exceptions,
+  `effective_from < expires_at` when `effective_from` is set). Strict `<` is
+  preferred so a vacuous, never-active window (`from == to` under the half-open
+  `[from, to)` rule) is rejected rather than stored; #146 makes the final call.
 
 The zod DTOs (#51/#146) validate the same invariants at the API boundary, the
 single source of truth shared with the frontend and integrators.
