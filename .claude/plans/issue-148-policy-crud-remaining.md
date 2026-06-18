@@ -1,52 +1,68 @@
 # Plan — #148 `/api/*` policy CRUD, remaining entities
 
 Follow-up slice of the #51 umbrella. Slice 1 (`User`/`Client`/`UserOnClient`)
-landed. This PR adds CRUD for **all** remaining policy-model entities, so #148
-(and the #51 umbrella) can close:
+landed. This PR adds CRUD for **all** remaining policy-model entities, so it
+closes #148 and #51:
 
 - `Activity`
 - `ActivityGroup` + `activities_to_groups` membership
 - `Budget`
-- `Schedule` — against the recurrence + date-scoping shape finalized by #146
-  (PR #156, merged), reusing `policy/recurrence.ts`' `scheduleRecurrenceSchema`
-- `Exception` — `effective_from`/`expires_at` window per ADR 0005
+- `Schedule` — built against the recurrence + date-scoping shape finalized by
+  #146 / PR #156 (merged mid-session); reuses `scheduleRecurrenceSchema`.
+- `Exception` — `effective_from`/`expires_at` window per ADR 0005.
 
-> Scope history: an earlier revision deferred Schedule/Exception while PR #156
-> was reshaping those tables. #156 merged mid-session, so this PR was rebased
-> onto it and expanded to the full slice.
+> **Scope note.** This PR was initially scoped to Activity/ActivityGroup/Budget
+> while #146 (PR #156) was reshaping the `schedules`/`exceptions` tables. #156
+> merged during the session, so Schedule/Exception were folded back in against
+> the final shape (the branch was rebased onto the merge).
 
 ## Conventions reused (from slice 1)
 
-- DTOs in `server/src/api/policy/dtos.ts`, reusing `policy/enums.ts` +
-  `policy/recurrence.ts` and the shared error envelope. Types inferred.
-- Repository in `server/src/policy/repository.ts` over `app.db`; `isUniqueViolation()`
-  (→ 409) plus a new `isCheckViolation()` (→ 400) for storage-CHECK backstops.
+- DTOs in `server/src/api/policy/dtos.ts`, reusing `policy/enums.ts`
+  (`activityKindSchema`, `scopeSchema`, `budgetWindowSchema`,
+  `scheduleActionSchema`) and `policy/recurrence.ts`
+  (`scheduleRecurrenceSchema`). Types inferred, never hand-written twice.
+- Repository in `server/src/policy/repository.ts` over `app.db`; reuse
+  `isUniqueViolation()` (→ 409) and add `isCheckViolation()` (→ 400).
 - Routes in `server/src/api/policy/routes.ts`, behind `requireAdmin`. Thin
   handlers: validate via DTO, delegate to repo, map missing → 404, unique
-  collision → 409, coherence/CHECK violation → 400.
-- Barrels re-export new DTOs from `api/policy/index.ts` and `api/index.ts`.
-- Push stub (#54): `budget.*` / `schedule.*` / `exception.*` are user-scoped
+  collision → 409, CHECK/coherence violation → 400.
+- Barrels re-export the new DTOs from `api/policy/index.ts` and `api/index.ts`.
+- Push stub (#54): `budget.*`/`schedule.*`/`exception.*` are user-scoped
   reasons (fan out to the user's linked clients). Activity/ActivityGroup are
-  definitions with no per-client effect → no push.
+  definitions and do not push.
 
 ## Validation strategy
 
-- **Create** bodies validate fully at the DTO (enum/bounds, recurrence
-  invariants via `scheduleRecurrenceSchema`, exception `effectiveFrom < expiresAt`).
-- **Target coherence + referent existence** (polymorphic `target_id`) is one
-  route helper `assertTarget(db, kind, targetId)` shared by create and PATCH →
-  precise 400.
-- **PATCH** cross-field invariants that depend on the merged row (half-open
-  recurrence pair, exception window) are backstopped by the storage `CHECK`
-  mapped to 400 via `asValidated()`, so a partial update can never 500.
+- **Coherence + referent** (`scope`/`target_kind` ↔ `target_id`, and the
+  referenced activity/group must exist) is one route helper, `assertTarget`,
+  shared by create and PATCH so the rule lives in one place.
+- **Create** bodies validate fully at the DTO (enum bounds, recurrence
+  invariants via `scheduleRecurrenceSchema`, exception window via superRefine).
+- **PATCH** validates per-field bounds at the DTO and re-checks coherence on
+  the merged row in the route; the cross-field recurrence/window invariants a
+  partial PATCH can break are backstopped by the storage `CHECK` constraints,
+  mapped to a clear 400 (`asValidated`) rather than a generic 500.
 
-## Phases
+## Route surface
 
-1. Repository + DTOs + push-stub + barrels (this PR's source).
-2. Tests: repository unit (incl. FK/cascade + CHECK), `app.inject()` route
-   tests per entity (happy + validation + 404 + 409 + coherence + merged-row
-   backstop), DTO mappers, push-stub assertions.
-3. Quality gate + finalize, ready-for-review.
+- `GET/POST /api/activities`, `GET/PATCH/DELETE /api/activities/:id`
+- `GET/POST /api/activity-groups`, `GET/PATCH/DELETE /api/activity-groups/:id`
+- `GET /api/activity-groups/:groupId/activities`,
+  `PUT/DELETE /api/activity-groups/:groupId/activities/:activityId`
+- `GET/POST /api/budgets` (`?userId=` filter), `GET/PATCH/DELETE /api/budgets/:id`
+- `GET/POST /api/schedules` (`?userId=`), `GET/PATCH/DELETE /api/schedules/:id`
+- `GET/POST /api/exceptions` (`?userId=`), `GET/PATCH/DELETE /api/exceptions/:id`
+
+## Tests
+
+- Repository unit tests (CRUD round-trips, FK/cascade, idempotent membership,
+  ordering, `CHECK` backstops) in `tests/policy/repository.test.ts`.
+- `app.inject()` route tests (happy + validation + 404 + 409 + coherence +
+  PATCH CHECK backstops) in `tests/api/policy.test.ts`.
+- DTO mapper tests in `tests/api/policy-dtos.test.ts`.
+- Push-stub tests for the new user-scoped reasons in
+  `tests/api/policy-push-stub.test.ts`.
 
 ## License boundary
 
