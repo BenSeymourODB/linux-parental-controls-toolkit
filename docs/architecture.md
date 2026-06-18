@@ -191,6 +191,14 @@ Key derived views the dashboard renders:
 5. If a client is offline, the change is queued; an Ansible run is
    scheduled on next reconnect (detected by SSH probe).
 
+In **Phase 2** (`docs/roadmap.md`) none of the transport in steps 3–5 exists
+yet: every mutating policy write instead runs through a **stub transport**
+(`server/src/transport/stub.ts`, #54) that computes the intended per-client
+effect and *logs* it (`component: "transport/stub"`) rather than dispatching
+it. The logged command is shaped like the real per-client transport command,
+so Phase 4 (SSH + `timekpra`) and Phase 6 (Ansible) swap the log for a real
+dispatch without changing the call sites.
+
 ### Inbound (client → server) — telemetry pull
 
 1. Periodic job on the server (croner inside the dashboard process)

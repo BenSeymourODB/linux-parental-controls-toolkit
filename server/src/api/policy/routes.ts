@@ -15,6 +15,12 @@
 import type { FastifyInstance } from "fastify";
 
 import * as repo from "../../policy/repository.js";
+import {
+  clientPushCommands,
+  createPolicyPushStub,
+  linkPushCommands,
+  userPushCommands,
+} from "../../transport/stub.js";
 import { ApiError } from "../errors.js";
 import type { ZodTypeProvider } from "../validation.js";
 import {
@@ -54,6 +60,12 @@ export function registerPolicyRoutes(scope: FastifyInstance): void {
   const typed = scope.withTypeProvider<ZodTypeProvider>();
   const guard = { preHandler: scope.requireAdmin };
 
+  // Phase-2 stub transport (#54): every successful mutation logs the intended
+  // per-client effect instead of dispatching it. This is the seam Phase 4
+  // (SSH + `timekpra`) and Phase 6 (Ansible) fill in — see `transport/stub.ts`
+  // and `docs/architecture.md` → "Outbound (server → client) — policy push".
+  const pushStub = createPolicyPushStub(scope.log);
+
   // --- Users ---------------------------------------------------------------
 
   typed.get(
@@ -67,6 +79,14 @@ export function registerPolicyRoutes(scope: FastifyInstance): void {
     { ...guard, schema: { body: createUserSchema } },
     async (request, reply): Promise<UserResponse> => {
       const row = repo.createUser(scope.db, request.body);
+      // A brand-new user has no client links yet, so this pushes to nobody —
+      // the seam still fires (an empty command list is a no-op).
+      pushStub.push(
+        userPushCommands("user.created", row.id, repo.listUserClientIds(scope.db, row.id), {
+          displayName: row.displayName,
+          tz: row.tz,
+        }),
+      );
       reply.code(201);
       return toUserResponse(row);
     },
@@ -92,6 +112,11 @@ export function registerPolicyRoutes(scope: FastifyInstance): void {
       if (row === undefined) {
         throw new ApiError(404, "not_found", `User ${request.params.id} not found`);
       }
+      pushStub.push(
+        userPushCommands("user.updated", row.id, repo.listUserClientIds(scope.db, row.id), {
+          ...request.body,
+        }),
+      );
       return toUserResponse(row);
     },
   );
@@ -100,9 +125,13 @@ export function registerPolicyRoutes(scope: FastifyInstance): void {
     "/users/:id",
     { ...guard, schema: { params: idParamsSchema } },
     async (request, reply) => {
+      // Resolve the affected clients before deleting — the links cascade away
+      // with the user.
+      const clientIds = repo.listUserClientIds(scope.db, request.params.id);
       if (!repo.deleteUser(scope.db, request.params.id)) {
         throw new ApiError(404, "not_found", `User ${request.params.id} not found`);
       }
+      pushStub.push(userPushCommands("user.deleted", request.params.id, clientIds, {}));
       return reply.code(204).send();
     },
   );
@@ -122,6 +151,12 @@ export function registerPolicyRoutes(scope: FastifyInstance): void {
       const row = asConflict(
         () => repo.createClient(scope.db, request.body),
         `A client with hostname "${request.body.hostname}" already exists`,
+      );
+      pushStub.push(
+        clientPushCommands("client.created", row.id, {
+          hostname: row.hostname,
+          sshUser: row.sshUser,
+        }),
       );
       reply.code(201);
       return toClientResponse(row);
@@ -151,6 +186,7 @@ export function registerPolicyRoutes(scope: FastifyInstance): void {
       if (row === undefined) {
         throw new ApiError(404, "not_found", `Client ${request.params.id} not found`);
       }
+      pushStub.push(clientPushCommands("client.updated", row.id, { ...request.body }));
       return toClientResponse(row);
     },
   );
@@ -162,6 +198,7 @@ export function registerPolicyRoutes(scope: FastifyInstance): void {
       if (!repo.deleteClient(scope.db, request.params.id)) {
         throw new ApiError(404, "not_found", `Client ${request.params.id} not found`);
       }
+      pushStub.push(clientPushCommands("client.deleted", request.params.id, {}));
       return reply.code(204).send();
     },
   );
@@ -196,6 +233,12 @@ export function registerPolicyRoutes(scope: FastifyInstance): void {
         () => repo.upsertLink(scope.db, userId, clientId, request.body),
         `Linux UID ${request.body.linuxUid} is already mapped to another user on client ${clientId}`,
       );
+      pushStub.push(
+        linkPushCommands("link.upserted", userId, clientId, {
+          linuxUsername: row.linuxUsername,
+          linuxUid: row.linuxUid,
+        }),
+      );
       return toLinkResponse(row);
     },
   );
@@ -212,6 +255,7 @@ export function registerPolicyRoutes(scope: FastifyInstance): void {
           `No link between user ${userId} and client ${clientId}`,
         );
       }
+      pushStub.push(linkPushCommands("link.deleted", userId, clientId, {}));
       return reply.code(204).send();
     },
   );
