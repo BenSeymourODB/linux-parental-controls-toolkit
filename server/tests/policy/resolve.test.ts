@@ -217,6 +217,52 @@ describe("effectivePolicy — allowed windows", () => {
     ]);
   });
 
+  it("merges adjacent allowed segments split by a rule boundary into one window", () => {
+    // A mid-day allow rule on a baseline-allow day splits the timeline into
+    // three abutting allowed segments; they must collapse back to a single
+    // [0, 1440) window rather than leak three identical-action fragments.
+    const result = effectivePolicy(
+      mkInput({
+        schedules: [
+          mkRule({ action: "allow", recurrenceStartMinute: 480, recurrenceEndMinute: 720 }),
+        ],
+      }),
+    );
+    expect(result.allowedWindows).toEqual([{ start: 0, end: 1440 }]);
+  });
+
+  it("resolves three overlapping overall rules by precedence", () => {
+    // ordinal 0 allow [600,720) punches through ordinal 1 deny [480,1080),
+    // which itself overrides ordinal 2 allow [0,1440). The lowest-precedence
+    // all-day allow only shows where neither higher rule covers.
+    const result = effectivePolicy(
+      mkInput({
+        schedules: [
+          mkRule({
+            id: 1,
+            ordinal: 0,
+            action: "allow",
+            recurrenceStartMinute: 600,
+            recurrenceEndMinute: 720,
+          }),
+          mkRule({
+            id: 2,
+            ordinal: 1,
+            action: "deny",
+            recurrenceStartMinute: 480,
+            recurrenceEndMinute: 1080,
+          }),
+          mkRule({ id: 3, ordinal: 2, action: "allow" }),
+        ],
+      }),
+    );
+    expect(result.allowedWindows).toEqual([
+      { start: 0, end: 480 },
+      { start: 600, end: 720 },
+      { start: 1080, end: 1440 },
+    ]);
+  });
+
   it("ignores a rule whose weekday mask excludes the resolved day", () => {
     // A Monday-only deny has no effect on a Tuesday (2024-06-04).
     const result = effectivePolicy(
@@ -310,6 +356,16 @@ describe("effectivePolicy — overall budget", () => {
       secondsAllowed: 36000,
     };
     expect(effectivePolicy(mkInput({ budgets: [weekly] })).overallSeconds).toBeNull();
+  });
+
+  it("sums multiple daily overall budget rows (the schema allows more than one)", () => {
+    const second: BudgetInput = {
+      scope: "overall",
+      targetId: null,
+      window: "daily",
+      secondsAllowed: 1200,
+    };
+    expect(effectivePolicy(mkInput({ budgets: [dailyOverall, second] })).overallSeconds).toBe(8400);
   });
 
   it("is the daily baseline when no grants apply", () => {

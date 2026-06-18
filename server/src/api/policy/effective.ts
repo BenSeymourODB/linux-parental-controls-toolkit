@@ -54,8 +54,16 @@ const dateQuerySchema = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/, "date must be in YYYY-MM-DD form")
   .transform((value, ctx) => {
-    const [year, month, day] = value.split("-").map(Number) as [number, number, number];
-    if (!isRealCalendarDate(year, month, day)) {
+    // The regex above guarantees three numeric parts; the explicit undefined
+    // guard narrows them to `number` without an unchecked `as` tuple cast
+    // (CLAUDE.md → "no unchecked `as` casts").
+    const [year, month, day] = value.split("-").map(Number);
+    if (
+      year === undefined ||
+      month === undefined ||
+      day === undefined ||
+      !isRealCalendarDate(year, month, day)
+    ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: `${value} is not a real calendar date`,
