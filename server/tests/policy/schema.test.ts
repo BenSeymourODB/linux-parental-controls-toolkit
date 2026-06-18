@@ -18,6 +18,7 @@ import {
   activityGroups,
   budgets,
   clients,
+  enrolmentTokens,
   exceptions,
   grants,
   integrationTokens,
@@ -44,6 +45,7 @@ const allTables: Record<string, SQLiteTable> = {
   grants,
   integrationTokens,
   notificationPolicies,
+  enrolmentTokens,
 };
 
 let db: TestDb;
@@ -191,6 +193,124 @@ describe("value & coherence constraints", () => {
     expect(() => insertSample(2000, 1000)).toThrow(/CHECK constraint/i);
     expect(() => insertSample(1000, 2000)).not.toThrow();
     expect(() => insertSample(1000, 1000)).not.toThrow(); // zero-length is allowed
+  });
+});
+
+describe("recurrence + date-scoping reservation (#146 / ADR 0005)", () => {
+  /**
+   * Insert a `schedules` row through raw SQL so an invalid recurrence/date
+   * combination is representable (the typed columns would otherwise let the
+   * application layer be the only gate) — these prove the *storage* layer
+   * enforces the ADR-0005 coherence rules.
+   */
+  function insertSchedule(
+    userId: number,
+    cols: {
+      recurrenceDays?: number | null;
+      startMinute?: number | null;
+      endMinute?: number | null;
+      effectiveFrom?: number | null;
+      effectiveTo?: number | null;
+    },
+  ): void {
+    db.$client
+      .prepare(
+        "INSERT INTO schedules " +
+          "(user_id, target_kind, recurrence_days, recurrence_start_minute, recurrence_end_minute, effective_from, effective_to, action) " +
+          "VALUES (?,?,?,?,?,?,?,?)",
+      )
+      .run(
+        userId,
+        "overall",
+        cols.recurrenceDays ?? null,
+        cols.startMinute ?? null,
+        cols.endMinute ?? null,
+        cols.effectiveFrom ?? null,
+        cols.effectiveTo ?? null,
+        "allow",
+      );
+  }
+
+  it("accepts the all-null degenerate schedule (always-on)", () => {
+    const userId = insertUser();
+    expect(() => insertSchedule(userId, {})).not.toThrow();
+  });
+
+  it("accepts a fully-specified recurrence window", () => {
+    const userId = insertUser();
+    expect(() =>
+      insertSchedule(userId, {
+        recurrenceDays: 0b0011111,
+        startMinute: 960,
+        endMinute: 1080,
+        effectiveFrom: 1_800_000_000,
+        effectiveTo: 1_800_600_000,
+      }),
+    ).not.toThrow();
+  });
+
+  it("bounds the weekday mask to 1..127", () => {
+    const userId = insertUser();
+    expect(() => insertSchedule(userId, { recurrenceDays: 0 })).toThrow(/CHECK constraint/i);
+    expect(() => insertSchedule(userId, { recurrenceDays: 128 })).toThrow(/CHECK constraint/i);
+    expect(() => insertSchedule(userId, { recurrenceDays: 1 })).not.toThrow();
+    expect(() => insertSchedule(userId, { recurrenceDays: 127 })).not.toThrow();
+  });
+
+  it("requires the two intra-day minute bounds to be set together", () => {
+    const userId = insertUser();
+    expect(() => insertSchedule(userId, { startMinute: 600, endMinute: null })).toThrow(
+      /CHECK constraint/i,
+    );
+    expect(() => insertSchedule(userId, { startMinute: null, endMinute: 600 })).toThrow(
+      /CHECK constraint/i,
+    );
+  });
+
+  it("requires a non-empty intra-day window within [0, 1440]", () => {
+    const userId = insertUser();
+    expect(() => insertSchedule(userId, { startMinute: 600, endMinute: 600 })).toThrow(
+      /CHECK constraint/i,
+    );
+    expect(() => insertSchedule(userId, { startMinute: 700, endMinute: 600 })).toThrow(
+      /CHECK constraint/i,
+    );
+    expect(() => insertSchedule(userId, { startMinute: -1, endMinute: 600 })).toThrow(
+      /CHECK constraint/i,
+    );
+    expect(() => insertSchedule(userId, { startMinute: 600, endMinute: 1441 })).toThrow(
+      /CHECK constraint/i,
+    );
+    expect(() => insertSchedule(userId, { startMinute: 0, endMinute: 1440 })).not.toThrow();
+  });
+
+  it("requires a bounded effective window to be non-empty (from < to)", () => {
+    const userId = insertUser();
+    expect(() =>
+      insertSchedule(userId, { effectiveFrom: 1_800_000_000, effectiveTo: 1_800_000_000 }),
+    ).toThrow(/CHECK constraint/i);
+    expect(() =>
+      insertSchedule(userId, { effectiveFrom: 1_800_600_000, effectiveTo: 1_800_000_000 }),
+    ).toThrow(/CHECK constraint/i);
+    // An open-ended bound on either side is always fine.
+    expect(() => insertSchedule(userId, { effectiveFrom: 1_800_000_000 })).not.toThrow();
+    expect(() => insertSchedule(userId, { effectiveTo: 1_800_000_000 })).not.toThrow();
+  });
+
+  it("lets an exception pre-schedule with effective_from, but only before it expires", () => {
+    const userId = insertUser();
+    const insertException = (effectiveFrom: number | null, expiresAt: number): void => {
+      db.$client
+        .prepare(
+          "INSERT INTO exceptions (user_id, target_kind, action, effective_from, expires_at) VALUES (?,?,?,?,?)",
+        )
+        .run(userId, "overall", "allow", effectiveFrom, expiresAt);
+    };
+
+    expect(() => insertException(null, 1_800_600_000)).not.toThrow(); // active from creation
+    expect(() => insertException(1_800_000_000, 1_800_600_000)).not.toThrow(); // pre-scheduled
+    expect(() => insertException(1_800_600_000, 1_800_600_000)).toThrow(/CHECK constraint/i); // not before expiry
+    expect(() => insertException(1_800_600_000, 1_800_000_000)).toThrow(/CHECK constraint/i); // starts after expiry
   });
 });
 
@@ -346,6 +466,58 @@ describe("integration_tokens", () => {
 
     expect(row?.scopes).toStrictEqual(["grants:write", "policy:read"]);
     expect(row?.revokedAt).toBeNull();
+  });
+});
+
+describe("enrolment_tokens", () => {
+  it("stores only a hashed token, never the plaintext", () => {
+    const columns = db.$client
+      .prepare("SELECT name FROM pragma_table_info('enrolment_tokens')")
+      .pluck()
+      .all() as string[];
+
+    expect(columns).toContain("token_hash");
+    expect(columns).not.toContain("token");
+    expect(columns).not.toContain("secret");
+    expect(columns).not.toContain("plaintext");
+  });
+
+  it("round-trips the supervised-users JSON and defaults consumed_at to null", () => {
+    const userId = insertUser();
+    db.insert(enrolmentTokens)
+      .values({
+        tokenHash: "abc123",
+        supervisedUsers: [{ userId, linuxUsername: "alice" }],
+        expiresAt: new Date("2026-12-31T00:00:00Z"),
+      })
+      .run();
+    const row = db.select().from(enrolmentTokens).get();
+
+    expect(row?.supervisedUsers).toStrictEqual([{ userId, linuxUsername: "alice" }]);
+    expect(row?.consumedAt).toBeNull();
+    expect(row?.consumedClientId).toBeNull();
+  });
+
+  it("nulls consumed_client_id when the consuming client is deleted (ON DELETE set null)", () => {
+    const clientId = db
+      .insert(clients)
+      .values({ hostname: "mint-x", sshUser: "pct-agent" })
+      .returning({ id: clients.id })
+      .get()?.id;
+    if (clientId === undefined) throw new Error("client insert returned no row");
+    db.insert(enrolmentTokens)
+      .values({
+        tokenHash: "tok",
+        supervisedUsers: [],
+        expiresAt: new Date("2026-12-31T00:00:00Z"),
+        consumedAt: new Date("2026-06-18T00:00:00Z"),
+        consumedClientId: clientId,
+      })
+      .run();
+
+    db.delete(clients).where(eq(clients.id, clientId)).run();
+
+    expect(db.select().from(enrolmentTokens).get()?.consumedClientId).toBeNull();
   });
 });
 

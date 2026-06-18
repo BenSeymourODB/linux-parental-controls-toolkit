@@ -50,6 +50,11 @@ function userTableNames(sqlite: Database.Database): string[] {
     .all() as string[];
 }
 
+/** Column names of a materialised table, in declaration order. */
+function columnNames(sqlite: Database.Database, table: string): string[] {
+  return sqlite.prepare(`SELECT name FROM pragma_table_info('${table}')`).pluck().all() as string[];
+}
+
 /**
  * Every table the committed migrations must materialise. These are the
  * policy-model tables (docs/architecture.md) plus `admin_credentials`, the
@@ -63,6 +68,7 @@ const EXPECTED_TABLES = [
   "admin_credentials",
   "budgets",
   "clients",
+  "enrolment_tokens",
   "exceptions",
   "grants",
   "integration_tokens",
@@ -94,6 +100,36 @@ describe("policy migrations", () => {
 
     // Every policy-model table must exist, and no stray tables beyond them.
     expect(userTableNames(sqlite)).toStrictEqual(EXPECTED_TABLES);
+
+    sqlite.close();
+  });
+
+  it("reserves the recurrence + date-scoping columns and drops cron_or_window (#146)", () => {
+    // Locks the two-step add/drop migration (and its hand-fixed recreate copy,
+    // a known drizzle-kit SQLite limitation) against a future regeneration that
+    // names or shapes the reserved columns differently — per ADR 0005.
+    const sqlite = new Database(":memory:");
+    const db = drizzle(sqlite);
+
+    migrate(db, { migrationsFolder });
+
+    const scheduleColumns = columnNames(sqlite, "schedules");
+    expect(scheduleColumns).toEqual(
+      expect.arrayContaining([
+        "recurrence_days",
+        "recurrence_start_minute",
+        "recurrence_end_minute",
+        "effective_from",
+        "effective_to",
+      ]),
+    );
+    // The never-defined free-text column is gone after the second migration.
+    expect(scheduleColumns).not.toContain("cron_or_window");
+
+    const exceptionColumns = columnNames(sqlite, "exceptions");
+    expect(exceptionColumns).toContain("effective_from");
+    // expires_at remains the effective end — no separate effective_to (ADR 0005 §2).
+    expect(exceptionColumns).not.toContain("effective_to");
 
     sqlite.close();
   });
