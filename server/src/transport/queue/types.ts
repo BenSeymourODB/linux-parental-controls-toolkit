@@ -34,14 +34,13 @@ export interface NewQueuedAction {
 }
 
 /**
- * The narrowed view of a queued action handed to an {@link ActionExecutor} —
- * the identity and the replay content, without the queue's own bookkeeping
- * (status / attempts / timestamps).
+ * The action content an {@link ActionExecutor} performs — the target client and
+ * the replay payload, without the queue's own bookkeeping (id / status /
+ * attempts / timestamps). Structurally this is exactly {@link NewQueuedAction},
+ * so the optimistic-push and the later replay paths hand the executor the same
+ * shape whether or not a row has been persisted yet.
  */
-export type QueuedAction = Pick<
-  QueuedActionRow,
-  "id" | "clientId" | "coalesceKey" | "kind" | "payload"
->;
+export type QueuedAction = Pick<QueuedActionRow, "clientId" | "coalesceKey" | "kind" | "payload">;
 
 /**
  * Performs the real remote action for one queued item. Resolves on success;
