@@ -12,7 +12,7 @@ import { registerAuth } from "../auth/index.js";
 import type { Settings } from "../config.js";
 import { registerClientEnrolmentRoutes } from "./clients/index.js";
 import { registerMetaRoute } from "./meta.js";
-import { registerPolicyRoutes } from "./policy/index.js";
+import { registerEffectiveRoutes, registerPolicyRoutes } from "./policy/index.js";
 import { installApiConventions } from "./validation.js";
 
 /** Options the `/api` plugin needs from its host app. */
@@ -33,6 +33,9 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (scope, opt
   registerMetaRoute(scope);
   // Policy CRUD (#51) — registered after auth so `scope.requireAdmin` exists.
   registerPolicyRoutes(scope);
+  // Effective-policy preview (#143): GET /users/:userId/effective. Needs
+  // `settings` for the server-default timezone of users with no `tz`.
+  registerEffectiveRoutes(scope, opts.settings);
   // Client enrolment (#77): admin-minted token + the install script's enrol
   // exchange. `settings` carries the SSH-public-key path the enrol response returns.
   registerClientEnrolmentRoutes(scope, opts.settings);
