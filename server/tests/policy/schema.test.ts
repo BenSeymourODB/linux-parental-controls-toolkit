@@ -24,6 +24,7 @@ import {
   integrationTokens,
   notificationPolicies,
   schedules,
+  transportQueue,
   usageSamples,
   usersOnClients,
   users,
@@ -46,6 +47,7 @@ const allTables: Record<string, SQLiteTable> = {
   integrationTokens,
   notificationPolicies,
   enrolmentTokens,
+  transportQueue,
 };
 
 let db: TestDb;
@@ -500,6 +502,66 @@ describe("table metadata", () => {
     expect(
       getTableConfig(activitiesToGroups).primaryKeys[0]?.columns.map((c) => c.name),
     ).toStrictEqual(["activity_id", "group_id"]);
+  });
+});
+
+describe("transport_queue (#84)", () => {
+  /** Insert a client and return its id (the queue's FK target). */
+  function insertClient(hostname = "mint-01"): number {
+    const row = db
+      .insert(clients)
+      .values({ hostname, sshUser: "pct-agent" })
+      .returning({ id: clients.id })
+      .get();
+    if (row === undefined) throw new Error("client insert returned no row");
+    return row.id;
+  }
+
+  it("defaults status to pending and attempts to 0", () => {
+    const clientId = insertClient();
+    const row = db
+      .insert(transportQueue)
+      .values({ clientId, coalesceKey: "user:1", kind: "policy.push", payload: { v: 1 } })
+      .returning()
+      .get();
+    expect(row?.status).toBe("pending");
+    expect(row?.attempts).toBe(0);
+    expect(row?.enqueuedAt).toBeInstanceOf(Date);
+  });
+
+  it("rejects a status outside the tuple", () => {
+    const clientId = insertClient();
+    expect(() =>
+      db.$client
+        .prepare(
+          "INSERT INTO transport_queue (client_id, coalesce_key, kind, payload, status) VALUES (?,?,?,?,?)",
+        )
+        .run(clientId, "user:1", "policy.push", "{}", "bogus"),
+    ).toThrow(/CHECK constraint/i);
+  });
+
+  it("rejects a negative attempts count", () => {
+    const clientId = insertClient();
+    expect(() =>
+      db.$client
+        .prepare(
+          "INSERT INTO transport_queue (client_id, coalesce_key, kind, payload, attempts) VALUES (?,?,?,?,?)",
+        )
+        .run(clientId, "user:1", "policy.push", "{}", -1),
+    ).toThrow(/CHECK constraint/i);
+  });
+
+  it("enforces one row per (client_id, coalesce_key) via the unique index", () => {
+    const clientId = insertClient();
+    db.insert(transportQueue)
+      .values({ clientId, coalesceKey: "user:1", kind: "policy.push", payload: {} })
+      .run();
+    expect(() =>
+      db
+        .insert(transportQueue)
+        .values({ clientId, coalesceKey: "user:1", kind: "policy.push", payload: {} })
+        .run(),
+    ).toThrow(/UNIQUE constraint/i);
   });
 });
 

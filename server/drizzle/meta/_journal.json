@@ -29,6 +29,13 @@
       "when": 1781795035747,
       "tag": "20260618150355_daffy_mantis",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1781819681734,
+      "tag": "20260618215441_naive_night_thrasher",
+      "breakpoints": true
     }
   ]
 }
