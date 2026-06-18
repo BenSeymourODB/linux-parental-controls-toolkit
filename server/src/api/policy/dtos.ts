@@ -1,9 +1,13 @@
 /**
- * zod DTOs for the account/device-core CRUD surface (#51): request bodies,
- * URL params, and response shapes for `User`, `Client`, and the `UserOnClient`
- * link. As with every `/api/*` DTO these are the single contract shared with
- * the SvelteKit frontend and external integrators — types are inferred from the
- * schemas, never hand-written twice (`CLAUDE.md` → "api/ — zod DTOs ...").
+ * zod DTOs for the policy-model CRUD surface: request bodies, URL params, and
+ * response shapes for `User` / `Client` / `UserOnClient` (slice 1, #51) and
+ * `Activity` / `ActivityGroup` (+ membership) / `Budget` / `Schedule` /
+ * `Exception` (slice 2, #148). As with every `/api/*` DTO these are the single
+ * contract shared with the SvelteKit frontend and external integrators — types
+ * are inferred from the schemas, never hand-written twice (`CLAUDE.md` → "api/
+ * — zod DTOs ..."). Enum and recurrence invariants are imported from
+ * `policy/enums.ts` and `policy/recurrence.ts` so the storage `CHECK`
+ * constraints and the request validation share one source.
  *
  * Storage uses epoch-second `Date` columns (see `policy/schema.ts`); the
  * response mappers below serialize them as ISO-8601 UTC strings so the wire
@@ -14,7 +18,23 @@
 import { z } from "zod";
 
 import { isValidTimeZone } from "../../policy/budget-window.js";
-import type { ClientRow, UserOnClientRow, UserRow } from "../../policy/repository.js";
+import {
+  activityKindSchema,
+  budgetWindowSchema,
+  scheduleActionSchema,
+  scopeSchema,
+} from "../../policy/enums.js";
+import { scheduleRecurrenceSchema } from "../../policy/recurrence.js";
+import type {
+  ActivityGroupRow,
+  ActivityRow,
+  BudgetRow,
+  ClientRow,
+  ExceptionRow,
+  ScheduleRow,
+  UserOnClientRow,
+  UserRow,
+} from "../../policy/repository.js";
 
 /** An IANA timezone name, validated against the host's tz database (ADR-0001). */
 export const tzSchema = z.string().refine(isValidTimeZone, { message: "Unknown IANA timezone" });
@@ -134,5 +154,287 @@ export function toLinkResponse(row: UserOnClientRow): LinkResponse {
     clientId: row.clientId,
     linuxUsername: row.linuxUsername,
     linuxUid: row.linuxUid,
+  };
+}
+
+// --- Shared policy-target field --------------------------------------------
+
+/**
+ * The polymorphic `target_id`: an `activity.id` (scope `activity`), an
+ * `activity_group.id` (scope `group`), or `null` (scope `overall`). JSON
+ * bodies carry real numbers, so no coercion. Coherence with the scope and the
+ * existence of the referent are enforced in the route layer (it needs DB
+ * access), shared by create and PATCH so the rule lives in one place.
+ */
+const targetIdSchema = z.number().int().positive().nullable();
+
+// --- Activities ------------------------------------------------------------
+
+export const createActivitySchema = z.object({
+  kind: activityKindSchema,
+  matcher: z.string().trim().min(1).max(512),
+});
+
+export const updateActivitySchema = z
+  .object({
+    kind: activityKindSchema.optional(),
+    matcher: z.string().trim().min(1).max(512).optional(),
+  })
+  .refine(nonEmpty, { message: "At least one field must be provided" });
+
+export const activityResponseSchema = z.object({
+  id: z.number().int(),
+  kind: activityKindSchema,
+  matcher: z.string(),
+});
+
+export type CreateActivityRequest = z.infer<typeof createActivitySchema>;
+export type UpdateActivityRequest = z.infer<typeof updateActivitySchema>;
+export type ActivityResponse = z.infer<typeof activityResponseSchema>;
+
+/** Map a stored activity row to its wire DTO. */
+export function toActivityResponse(row: ActivityRow): ActivityResponse {
+  return { id: row.id, kind: row.kind, matcher: row.matcher };
+}
+
+// --- Activity groups -------------------------------------------------------
+
+export const createActivityGroupSchema = z.object({
+  name: z.string().trim().min(1).max(200),
+});
+
+export const updateActivityGroupSchema = z
+  .object({
+    name: z.string().trim().min(1).max(200).optional(),
+  })
+  .refine(nonEmpty, { message: "At least one field must be provided" });
+
+export const activityGroupResponseSchema = z.object({
+  id: z.number().int(),
+  name: z.string(),
+});
+
+export type CreateActivityGroupRequest = z.infer<typeof createActivityGroupSchema>;
+export type UpdateActivityGroupRequest = z.infer<typeof updateActivityGroupSchema>;
+export type ActivityGroupResponse = z.infer<typeof activityGroupResponseSchema>;
+
+/** Map a stored activity-group row to its wire DTO. */
+export function toActivityGroupResponse(row: ActivityGroupRow): ActivityGroupResponse {
+  return { id: row.id, name: row.name };
+}
+
+/** `:groupId` path param for the membership routes. */
+export const groupIdParamsSchema = z.object({ groupId: z.coerce.number().int().positive() });
+
+/** `:groupId`/`:activityId` path params for a single membership. */
+export const groupActivityParamsSchema = z.object({
+  groupId: z.coerce.number().int().positive(),
+  activityId: z.coerce.number().int().positive(),
+});
+
+/**
+ * `?userId=` filter shared by the user-scoped policy collections (budgets,
+ * schedules, exceptions): present ⇒ restrict to that user, absent ⇒ list all.
+ */
+export const userIdQuerySchema = z.object({
+  userId: z.coerce.number().int().positive().optional(),
+});
+
+// --- Budgets ---------------------------------------------------------------
+
+export const createBudgetSchema = z.object({
+  userId: z.number().int().positive(),
+  scope: scopeSchema,
+  targetId: targetIdSchema.default(null),
+  window: budgetWindowSchema,
+  secondsAllowed: z.number().int().min(0),
+});
+
+export const updateBudgetSchema = z
+  .object({
+    scope: scopeSchema.optional(),
+    // Present (incl. explicit null) ⇒ change; absent ⇒ leave unchanged. No
+    // default, so the route can tell "not provided" from "set to null".
+    targetId: targetIdSchema.optional(),
+    window: budgetWindowSchema.optional(),
+    secondsAllowed: z.number().int().min(0).optional(),
+  })
+  .refine(nonEmpty, { message: "At least one field must be provided" });
+
+export const budgetResponseSchema = z.object({
+  id: z.number().int(),
+  userId: z.number().int(),
+  scope: scopeSchema,
+  targetId: z.number().int().nullable(),
+  window: budgetWindowSchema,
+  secondsAllowed: z.number().int(),
+});
+
+export type CreateBudgetRequest = z.infer<typeof createBudgetSchema>;
+export type UpdateBudgetRequest = z.infer<typeof updateBudgetSchema>;
+export type BudgetResponse = z.infer<typeof budgetResponseSchema>;
+
+/** Map a stored budget row to its wire DTO. */
+export function toBudgetResponse(row: BudgetRow): BudgetResponse {
+  return {
+    id: row.id,
+    userId: row.userId,
+    scope: row.scope,
+    targetId: row.targetId,
+    window: row.window,
+    secondsAllowed: row.secondsAllowed,
+  };
+}
+
+// --- Schedules -------------------------------------------------------------
+
+/**
+ * Schedule create body: the rule's target/action/order, intersected with the
+ * shared recurrence + date-scoping fields ({@link scheduleRecurrenceSchema},
+ * #146). The intersection runs both validators, so the recurrence invariants
+ * (both-or-neither minutes, `start < end`, `effectiveFrom < effectiveTo`) are
+ * enforced here from their single source. `ordinal` is optional (defaults to
+ * the column default); the drag-reorder editor (#63) owns reordering.
+ */
+export const createScheduleSchema = z.intersection(
+  z.object({
+    userId: z.number().int().positive(),
+    targetKind: scopeSchema,
+    targetId: targetIdSchema.default(null),
+    action: scheduleActionSchema,
+    ordinal: z.number().int().min(0).optional(),
+  }),
+  scheduleRecurrenceSchema,
+);
+
+/**
+ * Schedule PATCH body: each field optional. Per-field bounds are enforced here;
+ * the cross-field recurrence invariants are re-checked against the merged row
+ * by the storage `CHECK` constraints (mapped to a 400), since a PATCH may set
+ * only one half of a pair.
+ */
+export const updateScheduleSchema = z
+  .object({
+    targetKind: scopeSchema.optional(),
+    targetId: targetIdSchema.optional(),
+    action: scheduleActionSchema.optional(),
+    recurrenceDays: z.number().int().min(1).max(127).nullable().optional(),
+    recurrenceStartMinute: z.number().int().min(0).max(1440).nullable().optional(),
+    recurrenceEndMinute: z.number().int().min(0).max(1440).nullable().optional(),
+    effectiveFrom: z.string().datetime().nullable().optional(),
+    effectiveTo: z.string().datetime().nullable().optional(),
+    ordinal: z.number().int().min(0).optional(),
+  })
+  .refine(nonEmpty, { message: "At least one field must be provided" });
+
+export const scheduleResponseSchema = z.object({
+  id: z.number().int(),
+  userId: z.number().int(),
+  targetKind: scopeSchema,
+  targetId: z.number().int().nullable(),
+  action: scheduleActionSchema,
+  recurrenceDays: z.number().int().nullable(),
+  recurrenceStartMinute: z.number().int().nullable(),
+  recurrenceEndMinute: z.number().int().nullable(),
+  effectiveFrom: z.string().nullable(),
+  effectiveTo: z.string().nullable(),
+  ordinal: z.number().int(),
+});
+
+export type CreateScheduleRequest = z.infer<typeof createScheduleSchema>;
+export type UpdateScheduleRequest = z.infer<typeof updateScheduleSchema>;
+export type ScheduleResponse = z.infer<typeof scheduleResponseSchema>;
+
+/** Map a stored schedule row to its wire DTO (timestamps → ISO-8601 UTC). */
+export function toScheduleResponse(row: ScheduleRow): ScheduleResponse {
+  return {
+    id: row.id,
+    userId: row.userId,
+    targetKind: row.targetKind,
+    targetId: row.targetId,
+    action: row.action,
+    recurrenceDays: row.recurrenceDays,
+    recurrenceStartMinute: row.recurrenceStartMinute,
+    recurrenceEndMinute: row.recurrenceEndMinute,
+    effectiveFrom: row.effectiveFrom === null ? null : row.effectiveFrom.toISOString(),
+    effectiveTo: row.effectiveTo === null ? null : row.effectiveTo.toISOString(),
+    ordinal: row.ordinal,
+  };
+}
+
+// --- Exceptions ------------------------------------------------------------
+
+/**
+ * Exception create body. The override is active during
+ * `[effectiveFrom ?? createdAt, expiresAt)` (ADR 0005 §2); the superRefine
+ * enforces `effectiveFrom < expiresAt` when a pre-schedule instant is given.
+ */
+export const createExceptionSchema = z
+  .object({
+    userId: z.number().int().positive(),
+    targetKind: scopeSchema,
+    targetId: targetIdSchema.default(null),
+    action: scheduleActionSchema,
+    reason: z.string().trim().min(1).max(500).nullable().default(null),
+    effectiveFrom: z.string().datetime().nullable().default(null),
+    expiresAt: z.string().datetime(),
+  })
+  .superRefine((value, ctx) => {
+    if (
+      value.effectiveFrom !== null &&
+      Date.parse(value.effectiveFrom) >= Date.parse(value.expiresAt)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "expiresAt must be after effectiveFrom",
+        path: ["expiresAt"],
+      });
+    }
+  });
+
+/**
+ * Exception PATCH body: each field optional. The `effectiveFrom < expiresAt`
+ * window is re-checked against the merged row by the storage `CHECK` (mapped to
+ * a 400), since a PATCH may move only one bound.
+ */
+export const updateExceptionSchema = z
+  .object({
+    targetKind: scopeSchema.optional(),
+    targetId: targetIdSchema.optional(),
+    action: scheduleActionSchema.optional(),
+    reason: z.string().trim().min(1).max(500).nullable().optional(),
+    effectiveFrom: z.string().datetime().nullable().optional(),
+    expiresAt: z.string().datetime().optional(),
+  })
+  .refine(nonEmpty, { message: "At least one field must be provided" });
+
+export const exceptionResponseSchema = z.object({
+  id: z.number().int(),
+  userId: z.number().int(),
+  targetKind: scopeSchema,
+  targetId: z.number().int().nullable(),
+  action: scheduleActionSchema,
+  reason: z.string().nullable(),
+  effectiveFrom: z.string().nullable(),
+  expiresAt: z.string(),
+  createdAt: z.string(),
+});
+
+export type CreateExceptionRequest = z.infer<typeof createExceptionSchema>;
+export type UpdateExceptionRequest = z.infer<typeof updateExceptionSchema>;
+export type ExceptionResponse = z.infer<typeof exceptionResponseSchema>;
+
+/** Map a stored exception row to its wire DTO (timestamps → ISO-8601 UTC). */
+export function toExceptionResponse(row: ExceptionRow): ExceptionResponse {
+  return {
+    id: row.id,
+    userId: row.userId,
+    targetKind: row.targetKind,
+    targetId: row.targetId,
+    action: row.action,
+    reason: row.reason,
+    effectiveFrom: row.effectiveFrom === null ? null : row.effectiveFrom.toISOString(),
+    expiresAt: row.expiresAt.toISOString(),
+    createdAt: row.createdAt.toISOString(),
   };
 }

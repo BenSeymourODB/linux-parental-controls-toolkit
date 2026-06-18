@@ -224,6 +224,87 @@ describe("stub transport push on policy change (#54)", () => {
     expect(pushed[0]).toMatchObject({ clientId, userId, reason: "link.deleted" });
   });
 
+  /** A user linked to one client, ready for user-scoped policy pushes (#148). */
+  async function linkedUser(): Promise<{ userId: number; clientId: number }> {
+    const { userId, clientId } = await makeUserAndClient();
+    await auth({
+      method: "PUT",
+      url: `/api/users/${userId}/clients/${clientId}`,
+      payload: { linuxUsername: "alice", linuxUid: 1001 },
+    });
+    return { userId, clientId };
+  }
+
+  it("logs a budget.created push to each linked client (#148)", async () => {
+    const { userId, clientId } = await linkedUser();
+    const budget = (
+      await auth({
+        method: "POST",
+        url: "/api/budgets",
+        payload: { userId, scope: "overall", window: "daily", secondsAllowed: 7200 },
+      })
+    ).json();
+
+    const pushed = pushLines("budget.created");
+    expect(pushed).toHaveLength(1);
+    expect(pushed[0]).toMatchObject({
+      clientId,
+      userId,
+      reason: "budget.created",
+      detail: { budgetId: budget.id, scope: "overall", secondsAllowed: 7200 },
+    });
+  });
+
+  it("logs a budget.deleted push (clients resolved before the row is gone)", async () => {
+    const { userId, clientId } = await linkedUser();
+    const budget = (
+      await auth({
+        method: "POST",
+        url: "/api/budgets",
+        payload: { userId, scope: "overall", window: "daily", secondsAllowed: 1 },
+      })
+    ).json();
+
+    await auth({ method: "DELETE", url: `/api/budgets/${budget.id}` });
+
+    const pushed = pushLines("budget.deleted");
+    expect(pushed).toHaveLength(1);
+    expect(pushed[0]).toMatchObject({ clientId, userId, reason: "budget.deleted" });
+  });
+
+  it("logs schedule.created and exception.created pushes to the linked client", async () => {
+    const { userId, clientId } = await linkedUser();
+    await auth({
+      method: "POST",
+      url: "/api/schedules",
+      payload: { userId, targetKind: "overall", action: "deny" },
+    });
+    await auth({
+      method: "POST",
+      url: "/api/exceptions",
+      payload: {
+        userId,
+        targetKind: "overall",
+        action: "allow",
+        expiresAt: "2026-07-01T00:00:00.000Z",
+      },
+    });
+
+    const sched = pushLines("schedule.created");
+    expect(sched).toHaveLength(1);
+    expect(sched[0]).toMatchObject({ clientId, userId, reason: "schedule.created" });
+
+    const exc = pushLines("exception.created");
+    expect(exc).toHaveLength(1);
+    expect(exc[0]).toMatchObject({ clientId, userId, reason: "exception.created" });
+  });
+
+  it("does not push for activity/group definitions (no per-client effect)", async () => {
+    await auth({ method: "POST", url: "/api/activities", payload: { kind: "app", matcher: "x" } });
+    await auth({ method: "POST", url: "/api/activity-groups", payload: { name: "G" } });
+    expect(pushLines().length).toBe(0);
+  });
+
   it("does not emit a stub line for reads or rejected writes", async () => {
     const before = pushLines().length;
 
