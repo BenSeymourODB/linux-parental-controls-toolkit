@@ -119,6 +119,9 @@ export interface PolicyPushStub {
  * line carries the `component` field, per the #11 logging convention.
  */
 export function createPolicyPushStub(log: FastifyBaseLogger): PolicyPushStub {
+  // Deliberately mirrors `web/logger.ts` → `componentLogger` (which is just
+  // `app.log.child({ component })`); inlined here because callers hold a bare
+  // logger, not the `FastifyInstance` that helper takes.
   const child = log.child({ component: PUSH_STUB_COMPONENT });
   return {
     push(commands) {

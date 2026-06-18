@@ -156,6 +156,44 @@ describe("stub transport push on policy change (#54)", () => {
     });
   });
 
+  it("fans a user.updated push out to every client the user is linked to", async () => {
+    const { userId, clientId } = await makeUserAndClient();
+    const secondClientId = (
+      await auth({
+        method: "POST",
+        url: "/api/clients",
+        payload: { hostname: "mint-02", sshUser: "pct-agent" },
+      })
+    ).json().id;
+    await auth({
+      method: "PUT",
+      url: `/api/users/${userId}/clients/${clientId}`,
+      payload: { linuxUsername: "alice", linuxUid: 1001 },
+    });
+    await auth({
+      method: "PUT",
+      url: `/api/users/${userId}/clients/${secondClientId}`,
+      payload: { linuxUsername: "alice", linuxUid: 1002 },
+    });
+
+    await auth({
+      method: "PATCH",
+      url: `/api/users/${userId}`,
+      payload: { displayName: "Alice Renamed" },
+    });
+
+    const pushed = pushLines("user.updated");
+    expect(pushed).toHaveLength(2);
+    expect(new Set(pushed.map((l) => l.clientId))).toEqual(new Set([clientId, secondClientId]));
+    for (const line of pushed) {
+      expect(line).toMatchObject({
+        userId,
+        reason: "user.updated",
+        detail: { displayName: "Alice Renamed" },
+      });
+    }
+  });
+
   it("logs a user.deleted push for each linked client (resolved before cascade)", async () => {
     const { userId, clientId } = await makeUserAndClient();
     await auth({
