@@ -109,8 +109,20 @@ User          (id, display_name, tz?)
               --  NULL means "inherit the server default" (PCT_DEFAULT_TZ).
               --  The user's effective TZ defines daily/weekly/monthly
               --  budget rollover. See docs/adr/0001-budget-timezone.md.
-Client        (id, hostname, ssh_user, enrolled_at, last_seen)
+Client        (id, hostname, ssh_user, bearer_token_hash?, enrolled_at,
+                last_seen)
+              --  bearer_token_hash is the SHA-256 of the per-client bearer
+              --  token issued at enrolment (the /api/events/stream credential);
+              --  NULL for a client created via admin CRUD, set at enrol time.
 UserOnClient  (user_id, client_id, linux_username, linux_uid)
+
+EnrolmentToken (id, token_hash, hostname?, supervised_users[],
+                expires_at, created_at, consumed_at?, consumed_client_id?)
+              --  single-use, expiring client-enrolment credential (#77).
+              --  Admin mints one bound to the policy-user ↔ Linux-account
+              --  mapping; POST /api/clients/enrol redeems it (creating the
+              --  Client + UserOnClient rows) and marks it consumed. Only the
+              --  SHA-256 token_hash is stored, never the plaintext.
 
 Activity      (id, kind=app|app_group|domain|domain_group, matcher)
 ActivityGroup (id, name)  --  many-to-many with Activity

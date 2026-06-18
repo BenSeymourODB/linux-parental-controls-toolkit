@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "e50e3821-18b2-4f82-a70a-2b7b4f7f392d",
-  "prevId": "1fa9b136-3339-4fb8-a20d-0c5e8cd0ce52",
+  "id": "99bc27bd-178a-4cff-8349-f8e6d2faa75d",
+  "prevId": "10ef7f27-452f-4519-9057-6860647066f7",
   "tables": {
     "activities": {
       "name": "activities",
@@ -292,6 +292,13 @@
           "notNull": true,
           "autoincrement": false
         },
+        "bearer_token_hash": {
+          "name": "bearer_token_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "enrolled_at": {
           "name": "enrolled_at",
           "type": "integer",
@@ -315,9 +322,105 @@
             "hostname"
           ],
           "isUnique": true
+        },
+        "clients_bearer_token_hash_unique": {
+          "name": "clients_bearer_token_hash_unique",
+          "columns": [
+            "bearer_token_hash"
+          ],
+          "isUnique": true
         }
       },
       "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "enrolment_tokens": {
+      "name": "enrolment_tokens",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "token_hash": {
+          "name": "token_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "hostname": {
+          "name": "hostname",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "supervised_users": {
+          "name": "supervised_users",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch())"
+        },
+        "consumed_at": {
+          "name": "consumed_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "consumed_client_id": {
+          "name": "consumed_client_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "enrolment_tokens_token_hash_unique": {
+          "name": "enrolment_tokens_token_hash_unique",
+          "columns": [
+            "token_hash"
+          ],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {
+        "enrolment_tokens_consumed_client_id_clients_id_fk": {
+          "name": "enrolment_tokens_consumed_client_id_clients_id_fk",
+          "tableFrom": "enrolment_tokens",
+          "tableTo": "clients",
+          "columnsFrom": [
+            "consumed_client_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "checkConstraints": {}
@@ -363,13 +466,6 @@
         "reason": {
           "name": "reason",
           "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "effective_from": {
-          "name": "effective_from",
-          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
@@ -429,10 +525,6 @@
         "exceptions_target_coherence_check": {
           "name": "exceptions_target_coherence_check",
           "value": "(\"exceptions\".\"target_kind\" = 'overall') = (\"exceptions\".\"target_id\" is null)"
-        },
-        "exceptions_effective_window_check": {
-          "name": "exceptions_effective_window_check",
-          "value": "\"exceptions\".\"effective_from\" is null or \"exceptions\".\"effective_from\" < \"exceptions\".\"expires_at\""
         }
       }
     },
@@ -746,39 +838,11 @@
           "notNull": false,
           "autoincrement": false
         },
-        "recurrence_days": {
-          "name": "recurrence_days",
-          "type": "integer",
+        "cron_or_window": {
+          "name": "cron_or_window",
+          "type": "text",
           "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "recurrence_start_minute": {
-          "name": "recurrence_start_minute",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "recurrence_end_minute": {
-          "name": "recurrence_end_minute",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "effective_from": {
-          "name": "effective_from",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "effective_to": {
-          "name": "effective_to",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
+          "notNull": true,
           "autoincrement": false
         },
         "action": {
@@ -836,18 +900,6 @@
         "schedules_target_coherence_check": {
           "name": "schedules_target_coherence_check",
           "value": "(\"schedules\".\"target_kind\" = 'overall') = (\"schedules\".\"target_id\" is null)"
-        },
-        "schedules_recurrence_days_check": {
-          "name": "schedules_recurrence_days_check",
-          "value": "\"schedules\".\"recurrence_days\" is null or (\"schedules\".\"recurrence_days\" between 1 and 127)"
-        },
-        "schedules_recurrence_minutes_check": {
-          "name": "schedules_recurrence_minutes_check",
-          "value": "(\"schedules\".\"recurrence_start_minute\" is null) = (\"schedules\".\"recurrence_end_minute\" is null) and (\"schedules\".\"recurrence_start_minute\" is null or (\"schedules\".\"recurrence_start_minute\" >= 0 and \"schedules\".\"recurrence_end_minute\" <= 1440 and \"schedules\".\"recurrence_start_minute\" < \"schedules\".\"recurrence_end_minute\"))"
-        },
-        "schedules_effective_window_check": {
-          "name": "schedules_effective_window_check",
-          "value": "\"schedules\".\"effective_from\" is null or \"schedules\".\"effective_to\" is null or \"schedules\".\"effective_from\" < \"schedules\".\"effective_to\""
         }
       }
     },

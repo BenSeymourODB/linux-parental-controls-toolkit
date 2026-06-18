@@ -86,17 +86,70 @@ export const users = sqliteTable("users", {
   createdAt: timestampNow("created_at"),
 });
 
-/** An enrolled Linux desktop the dashboard orchestrates over SSH. */
+/**
+ * An enrolled Linux desktop the dashboard orchestrates over SSH.
+ *
+ * `bearer_token_hash` is the SHA-256 of the per-client bearer token issued at
+ * enrolment (#77), which the Phase-8b event stream (`/api/events/stream`)
+ * authenticates against. Only the hash is stored — never the plaintext. It is
+ * nullable because a client created through the admin CRUD (`POST /api/clients`,
+ * #51) has not been through the enrolment exchange and so holds no bearer
+ * token; only `POST /api/clients/enrol` sets it.
+ */
 export const clients = sqliteTable(
   "clients",
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
     hostname: text("hostname").notNull(),
     sshUser: text("ssh_user").notNull(),
+    bearerTokenHash: text("bearer_token_hash"),
     enrolledAt: timestampNow("enrolled_at"),
     lastSeen: integer("last_seen", { mode: "timestamp" }),
   },
-  (table) => [uniqueIndex("clients_hostname_unique").on(table.hostname)],
+  (table) => [
+    uniqueIndex("clients_hostname_unique").on(table.hostname),
+    // The per-client bearer token is the credential the Phase-8b event stream
+    // authenticates against (a lookup by hash), so make that lookup single-row
+    // by construction. SQLite treats multiple NULLs as distinct, so the
+    // admin-CRUD clients that carry no bearer token are unaffected.
+    uniqueIndex("clients_bearer_token_hash_unique").on(table.bearerTokenHash),
+  ],
+);
+
+/**
+ * A single-use, expiring client-enrolment credential (#77).
+ *
+ * The admin mints one ("Add client" flow) bound to the supervised-user mapping
+ * being provisioned; the install script (#76) presents it once to
+ * `POST /api/clients/enrol`, which creates the {@link clients} row and the
+ * {@link usersOnClients} links and then **consumes** the token. Like
+ * {@link integrationTokens}, only the SHA-256 `token_hash` is stored — never
+ * the plaintext.
+ *
+ * `supervised_users` is a JSON array of `{ userId, linuxUsername }` the admin
+ * bound at mint time (the policy user ↔ Linux account mapping); the client
+ * supplies each user's `linuxUid` at enrol time. Single-use is enforced by
+ * `consumed_at` (set when redeemed, with `consumed_client_id` pointing at the
+ * client it created); expiry by `expires_at`. The token is never edited
+ * in-place beyond being marked consumed.
+ */
+export const enrolmentTokens = sqliteTable(
+  "enrolment_tokens",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    tokenHash: text("token_hash").notNull(),
+    hostname: text("hostname"),
+    supervisedUsers: text("supervised_users", { mode: "json" })
+      .$type<{ userId: number; linuxUsername: string }[]>()
+      .notNull(),
+    expiresAt: integer("expires_at", { mode: "timestamp" }).notNull(),
+    createdAt: timestampNow("created_at"),
+    consumedAt: integer("consumed_at", { mode: "timestamp" }),
+    consumedClientId: integer("consumed_client_id").references(() => clients.id, {
+      onDelete: "set null",
+    }),
+  },
+  (table) => [uniqueIndex("enrolment_tokens_token_hash_unique").on(table.tokenHash)],
 );
 
 /**
