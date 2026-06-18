@@ -20,13 +20,40 @@ import {
   type ScheduleRule,
 } from "../../src/policy/schedule-precedence.js";
 
+/**
+ * Two provably-distinct recurrence windows (ADR 0005) — the shadow heuristic
+ * compares the reserved recurrence fields field-for-field, so these stand in
+ * for the old free-text `cron_or_window` strings (one reused = "identical
+ * window", two different = "different windows").
+ */
+const WEEKDAY_AFTERNOON = {
+  recurrenceDays: 0b0011111, // Mon–Fri
+  recurrenceStartMinute: 960, // 16:00
+  recurrenceEndMinute: 1080, // 18:00
+  effectiveFrom: null,
+  effectiveTo: null,
+} satisfies Partial<ScheduleRule>;
+const WEEKEND_MORNING = {
+  recurrenceDays: 0b1100000, // Sat–Sun
+  recurrenceStartMinute: 480, // 08:00
+  recurrenceEndMinute: 720, // 12:00
+  effectiveFrom: null,
+  effectiveTo: null,
+} satisfies Partial<ScheduleRule>;
+
 /** Build a rule with sensible defaults so each test states only what it cares about. */
 function rule(overrides: Partial<ScheduleRule> & Pick<ScheduleRule, "id">): ScheduleRule {
   return {
     ordinal: 0,
     targetKind: "overall" as Scope,
     targetId: null,
-    cronOrWindow: "* * * * *",
+    // The always-on degenerate (every recurrence field null), so window-agnostic
+    // tests need not restate it; the shadow-heuristic cases set a window below.
+    recurrenceDays: null,
+    recurrenceStartMinute: null,
+    recurrenceEndMinute: null,
+    effectiveFrom: null,
+    effectiveTo: null,
     action: "allow" as ScheduleAction,
     ...overrides,
   };
@@ -142,9 +169,16 @@ describe("reorder", () => {
   });
 
   it("preserves every non-ordinal field of each rule", () => {
-    const rules = [rule({ id: 1, ordinal: 0, action: "deny", cronOrWindow: "@daily" })];
+    const rules = [rule({ id: 1, ordinal: 0, action: "deny", ...WEEKDAY_AFTERNOON })];
     const [moved] = reorder(rules, [1]);
-    expect(moved).toMatchObject({ id: 1, action: "deny", cronOrWindow: "@daily", ordinal: 0 });
+    expect(moved).toMatchObject({
+      id: 1,
+      action: "deny",
+      recurrenceDays: WEEKDAY_AFTERNOON.recurrenceDays,
+      recurrenceStartMinute: WEEKDAY_AFTERNOON.recurrenceStartMinute,
+      recurrenceEndMinute: WEEKDAY_AFTERNOON.recurrenceEndMinute,
+      ordinal: 0,
+    });
   });
 
   it("does not mutate the input rules", () => {
@@ -172,8 +206,8 @@ describe("reorder", () => {
 describe("findShadowedRules", () => {
   it("flags a later rule with an identical window under an earlier overall rule", () => {
     const rules = [
-      rule({ id: 1, ordinal: 0, targetKind: "overall", targetId: null, cronOrWindow: "@daily" }),
-      rule({ id: 2, ordinal: 1, targetKind: "activity", targetId: 7, cronOrWindow: "@daily" }),
+      rule({ id: 1, ordinal: 0, targetKind: "overall", targetId: null, ...WEEKDAY_AFTERNOON }),
+      rule({ id: 2, ordinal: 1, targetKind: "activity", targetId: 7, ...WEEKDAY_AFTERNOON }),
     ];
     expect(findShadowedRules(rules)).toStrictEqual([{ shadowedId: 2, shadowedById: 1 }]);
   });
@@ -185,7 +219,7 @@ describe("findShadowedRules", () => {
         ordinal: 0,
         targetKind: "activity",
         targetId: 7,
-        cronOrWindow: "@daily",
+        ...WEEKDAY_AFTERNOON,
         action: "deny",
       }),
       rule({
@@ -193,25 +227,82 @@ describe("findShadowedRules", () => {
         ordinal: 1,
         targetKind: "activity",
         targetId: 7,
-        cronOrWindow: "@daily",
+        ...WEEKDAY_AFTERNOON,
         action: "allow",
       }),
     ];
     expect(findShadowedRules(rules)).toStrictEqual([{ shadowedId: 2, shadowedById: 1 }]);
   });
 
-  it("does not flag rules with different windows (conservative — no false positive)", () => {
+  it("flags two always-on degenerate rules with the same target (every field null)", () => {
+    // The degenerate (all recurrence fields null) is a window like any other:
+    // an earlier always-on rule shadows a later always-on rule on the same target.
     const rules = [
-      rule({ id: 1, ordinal: 0, targetKind: "overall", cronOrWindow: "@daily" }),
-      rule({ id: 2, ordinal: 1, targetKind: "overall", cronOrWindow: "@weekly" }),
+      rule({ id: 1, ordinal: 0, targetKind: "overall" }),
+      rule({ id: 2, ordinal: 1, targetKind: "overall" }),
+    ];
+    expect(findShadowedRules(rules)).toStrictEqual([{ shadowedId: 2, shadowedById: 1 }]);
+  });
+
+  it("does not flag rules with different recurrence windows (conservative — no false positive)", () => {
+    const rules = [
+      rule({ id: 1, ordinal: 0, targetKind: "overall", ...WEEKDAY_AFTERNOON }),
+      rule({ id: 2, ordinal: 1, targetKind: "overall", ...WEEKEND_MORNING }),
+    ];
+    expect(findShadowedRules(rules)).toStrictEqual([]);
+  });
+
+  it("treats the effective date range as part of the window: equal instants shadow", () => {
+    const from = new Date("2026-03-25T00:00:00Z");
+    const to = new Date("2026-04-02T00:00:00Z");
+    const rules = [
+      rule({ id: 1, ordinal: 0, targetKind: "overall", effectiveFrom: from, effectiveTo: to }),
+      rule({
+        id: 2,
+        ordinal: 1,
+        targetKind: "overall",
+        effectiveFrom: new Date(from),
+        effectiveTo: new Date(to),
+      }),
+    ];
+    expect(findShadowedRules(rules)).toStrictEqual([{ shadowedId: 2, shadowedById: 1 }]);
+  });
+
+  it("does not flag rules whose effective ranges differ", () => {
+    const rules = [
+      rule({
+        id: 1,
+        ordinal: 0,
+        targetKind: "overall",
+        effectiveFrom: new Date("2026-03-25T00:00:00Z"),
+      }),
+      rule({
+        id: 2,
+        ordinal: 1,
+        targetKind: "overall",
+        effectiveFrom: new Date("2026-06-01T00:00:00Z"),
+      }),
+    ];
+    expect(findShadowedRules(rules)).toStrictEqual([]);
+  });
+
+  it("does not flag when one rule date-scopes and the other is open-ended", () => {
+    const rules = [
+      rule({
+        id: 1,
+        ordinal: 0,
+        targetKind: "overall",
+        effectiveFrom: new Date("2026-03-25T00:00:00Z"),
+      }),
+      rule({ id: 2, ordinal: 1, targetKind: "overall", effectiveFrom: null }),
     ];
     expect(findShadowedRules(rules)).toStrictEqual([]);
   });
 
   it("does not flag a later rule whose target the earlier rule does not cover", () => {
     const rules = [
-      rule({ id: 1, ordinal: 0, targetKind: "activity", targetId: 7, cronOrWindow: "@daily" }),
-      rule({ id: 2, ordinal: 1, targetKind: "activity", targetId: 8, cronOrWindow: "@daily" }),
+      rule({ id: 1, ordinal: 0, targetKind: "activity", targetId: 7, ...WEEKDAY_AFTERNOON }),
+      rule({ id: 2, ordinal: 1, targetKind: "activity", targetId: 8, ...WEEKDAY_AFTERNOON }),
     ];
     expect(findShadowedRules(rules)).toStrictEqual([]);
   });
@@ -220,8 +311,8 @@ describe("findShadowedRules", () => {
     // A group rule and an activity rule that happen to share a target_id are
     // different targets — the earlier one must not shadow the later.
     const rules = [
-      rule({ id: 1, ordinal: 0, targetKind: "group", targetId: 7, cronOrWindow: "@daily" }),
-      rule({ id: 2, ordinal: 1, targetKind: "activity", targetId: 7, cronOrWindow: "@daily" }),
+      rule({ id: 1, ordinal: 0, targetKind: "group", targetId: 7, ...WEEKDAY_AFTERNOON }),
+      rule({ id: 2, ordinal: 1, targetKind: "activity", targetId: 7, ...WEEKDAY_AFTERNOON }),
     ];
     expect(findShadowedRules(rules)).toStrictEqual([]);
   });
@@ -230,17 +321,17 @@ describe("findShadowedRules", () => {
     // An activity rule cannot shadow a later overall rule: it does not cover
     // everything the overall rule does.
     const rules = [
-      rule({ id: 1, ordinal: 0, targetKind: "activity", targetId: 7, cronOrWindow: "@daily" }),
-      rule({ id: 2, ordinal: 1, targetKind: "overall", targetId: null, cronOrWindow: "@daily" }),
+      rule({ id: 1, ordinal: 0, targetKind: "activity", targetId: 7, ...WEEKDAY_AFTERNOON }),
+      rule({ id: 2, ordinal: 1, targetKind: "overall", targetId: null, ...WEEKDAY_AFTERNOON }),
     ];
     expect(findShadowedRules(rules)).toStrictEqual([]);
   });
 
   it("reports each shadowed rule once, against its highest-precedence shadower", () => {
     const rules = [
-      rule({ id: 1, ordinal: 0, targetKind: "overall", cronOrWindow: "@daily" }),
-      rule({ id: 2, ordinal: 1, targetKind: "overall", cronOrWindow: "@daily" }),
-      rule({ id: 3, ordinal: 2, targetKind: "overall", cronOrWindow: "@daily" }),
+      rule({ id: 1, ordinal: 0, targetKind: "overall", ...WEEKDAY_AFTERNOON }),
+      rule({ id: 2, ordinal: 1, targetKind: "overall", ...WEEKDAY_AFTERNOON }),
+      rule({ id: 3, ordinal: 2, targetKind: "overall", ...WEEKDAY_AFTERNOON }),
     ];
     expect(findShadowedRules(rules)).toStrictEqual([
       { shadowedId: 2, shadowedById: 1 },
@@ -252,8 +343,8 @@ describe("findShadowedRules", () => {
     // id 2 has the lower ordinal, so it is the shadower even though it is
     // listed second in the input.
     const rules = [
-      rule({ id: 1, ordinal: 1, targetKind: "overall", cronOrWindow: "@daily" }),
-      rule({ id: 2, ordinal: 0, targetKind: "overall", cronOrWindow: "@daily" }),
+      rule({ id: 1, ordinal: 1, targetKind: "overall", ...WEEKDAY_AFTERNOON }),
+      rule({ id: 2, ordinal: 0, targetKind: "overall", ...WEEKDAY_AFTERNOON }),
     ];
     expect(findShadowedRules(rules)).toStrictEqual([{ shadowedId: 1, shadowedById: 2 }]);
   });

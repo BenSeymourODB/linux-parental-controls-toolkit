@@ -15,9 +15,9 @@
  * identically and the stored `ordinal` order is the single source of truth.
  *
  * **What this module deliberately does not know:** how to decide whether a
- * given rule's `cron_or_window` expression is active at an instant. That
- * grammar is not yet defined and is a separate concern; callers inject it as
- * an {@link RuleActivePredicate}. Keeping it out keeps this module pure,
+ * given rule's recurrence window (ADR 0005) is active at an instant. That
+ * resolver (#143) is a separate concern; callers inject it as an
+ * {@link RuleActivePredicate}. Keeping it out keeps this module pure,
  * dependency-free, and grammar-agnostic — exactly like `budget-window.ts`
  * abstracts the timezone source from the windowing math.
  */
@@ -38,16 +38,26 @@ export interface ScheduleRule {
   readonly targetKind: Scope;
   /** The activity/group id when scoped; `null` for `overall`. */
   readonly targetId: number | null;
-  /** The (opaque-to-this-module) schedule expression; see file header. */
-  readonly cronOrWindow: string;
+  /**
+   * The reserved recurrence + date-scoping window (ADR 0005, #146): a 7-bit
+   * ISO-weekday mask, an intra-day `[start, end)` minute pair, and an effective
+   * date range. All `null` is the always-on degenerate. Whether the window is
+   * *active at an instant* is opaque to this module (see file header); these
+   * fields feed only the structural shadow heuristic in {@link findShadowedRules}.
+   */
+  readonly recurrenceDays: number | null;
+  readonly recurrenceStartMinute: number | null;
+  readonly recurrenceEndMinute: number | null;
+  readonly effectiveFrom: Date | null;
+  readonly effectiveTo: Date | null;
   /** What the rule does in its window when it wins. */
   readonly action: ScheduleAction;
 }
 
 /**
  * Decides whether `rule`'s window is active for the instant/context the
- * caller cares about. Supplied by the caller because the `cron_or_window`
- * grammar lives outside this module (see file header).
+ * caller cares about. Supplied by the caller because the recurrence grammar
+ * (ADR 0005) lives outside this module (see file header).
  */
 export type RuleActivePredicate = (rule: ScheduleRule) => boolean;
 
@@ -159,20 +169,45 @@ function targetSupersetOf(earlier: ScheduleRule, later: ScheduleRule): boolean {
   return earlier.targetKind === later.targetKind && earlier.targetId === later.targetId;
 }
 
+/** Equal instants (or both absent) — the date-scoping half of {@link sameWindow}. */
+function sameInstant(a: Date | null, b: Date | null): boolean {
+  if (a === null || b === null) return a === b;
+  return a.getTime() === b.getTime();
+}
+
+/**
+ * Do two rules carry the **provably identical** recurrence + date-scoping
+ * window (ADR 0005)? Used by the conservative shadow heuristic: when an earlier
+ * rule's window matches a later one's field-for-field, the earlier rule is
+ * active in exactly the same instants and wins every time. This is the
+ * structured successor to the old free-text `cron_or_window` string equality —
+ * same conservatism, no understanding of the grammar (a broader window
+ * subsuming a narrower one is still left to the resolver, #143).
+ */
+function sameWindow(a: ScheduleRule, b: ScheduleRule): boolean {
+  return (
+    a.recurrenceDays === b.recurrenceDays &&
+    a.recurrenceStartMinute === b.recurrenceStartMinute &&
+    a.recurrenceEndMinute === b.recurrenceEndMinute &&
+    sameInstant(a.effectiveFrom, b.effectiveFrom) &&
+    sameInstant(a.effectiveTo, b.effectiveTo)
+  );
+}
+
 /**
  * Rules that can never fire because an earlier rule shadows them — the input
  * to the editor's "this rule will never apply" warning.
  *
  * **Conservative by design:** a later rule is flagged only when an earlier
  * rule (a) covers its target (see {@link targetSupersetOf}) **and** (b) has an
- * **identical** `cron_or_window` string, so the earlier rule is provably
- * active in exactly the windows the later one is and wins every time. This
- * never produces a false positive. It does miss shadowing that needs
- * understanding the `cron_or_window` grammar (e.g. a broader window
- * subsuming a narrower one, or group membership) — that analysis belongs with
- * the expression-grammar work and is intentionally out of scope here; see the
- * file header. Each later rule is reported at most once, against the first
- * (highest-precedence) rule that shadows it.
+ * **identical** recurrence window (see {@link sameWindow}), so the earlier rule
+ * is provably active in exactly the windows the later one is and wins every
+ * time. This never produces a false positive. It does miss shadowing that needs
+ * understanding the recurrence grammar (e.g. a broader window subsuming a
+ * narrower one, or group membership) — that analysis belongs with the resolver
+ * (#143) and is intentionally out of scope here; see the file header. Each
+ * later rule is reported at most once, against the first (highest-precedence)
+ * rule that shadows it.
  */
 export function findShadowedRules(rules: readonly ScheduleRule[]): ShadowFinding[] {
   const ordered = byOrdinal(rules);
@@ -183,7 +218,7 @@ export function findShadowedRules(rules: readonly ScheduleRule[]): ShadowFinding
     for (let j = 0; j < i; j++) {
       const earlier = ordered[j];
       if (earlier === undefined) continue;
-      if (earlier.cronOrWindow === later.cronOrWindow && targetSupersetOf(earlier, later)) {
+      if (sameWindow(earlier, later) && targetSupersetOf(earlier, later)) {
         findings.push({ shadowedId: later.id, shadowedById: earlier.id });
         break;
       }

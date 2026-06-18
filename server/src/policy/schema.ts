@@ -37,6 +37,12 @@ import {
   scheduleActionValues,
   scopeValues,
 } from "./enums.js";
+import {
+  MINUTE_OF_DAY_MAX,
+  MINUTE_OF_DAY_MIN,
+  WEEKDAY_MASK_MAX,
+  WEEKDAY_MASK_MIN,
+} from "./recurrence.js";
 
 /**
  * Build a `CHECK (column IN ('a', 'b', ...))` constraint expression from a
@@ -232,9 +238,28 @@ export const budgets = sqliteTable(
 );
 
 /**
- * A recurring allow/deny/extend rule. `cron_or_window` carries the schedule
- * expression; `target_kind` reuses the scope vocabulary (overall/activity/
- * group) with the same polymorphic `target_id` semantics as {@link budgets}.
+ * A recurring allow/deny/extend rule. `target_kind` reuses the scope
+ * vocabulary (overall/activity/group) with the same polymorphic `target_id`
+ * semantics as {@link budgets}.
+ *
+ * **Recurrence + date-scoping (reserved by #146, model fixed in
+ * `docs/adr/0005-recurrence-and-date-scoping.md`).** The window is a
+ * purpose-built day-of-week + intra-day struct, replacing the never-defined
+ * free-text `cron_or_window`:
+ *
+ * - `recurrence_days` — a 7-bit ISO-weekday mask (`1..127`, bit 0 = Monday …
+ *   bit 6 = Sunday); NULL = no weekday restriction.
+ * - `recurrence_start_minute` / `recurrence_end_minute` — minutes from local
+ *   midnight, active on `[start, end)`; both NULL = no intra-day restriction,
+ *   and when set `0 <= start < end <= 1440`.
+ * - `effective_from` / `effective_to` — UTC instants that date-scope the rule;
+ *   NULL on a side means open-ended there.
+ *
+ * A row with all five NULL is the **always-on degenerate** — behaviourally
+ * identical to the pre-recurrence uniform rule, so this reservation is
+ * non-breaking. The "is this rule active at instant *T*?" resolver (#143) and
+ * the editors (#53/#63) are out of scope here; see {@link ./recurrence.ts} for
+ * the shared bounds/validators and ADR 0005 for the model.
  *
  * `ordinal` makes evaluation order **explicit and stored**, not implied by
  * insertion: a user's rules are evaluated ascending by `ordinal` and the
@@ -255,7 +280,11 @@ export const schedules = sqliteTable(
       .references(() => users.id, { onDelete: "cascade" }),
     targetKind: text("target_kind", { enum: scopeValues }).notNull(),
     targetId: integer("target_id"),
-    cronOrWindow: text("cron_or_window").notNull(),
+    recurrenceDays: integer("recurrence_days"),
+    recurrenceStartMinute: integer("recurrence_start_minute"),
+    recurrenceEndMinute: integer("recurrence_end_minute"),
+    effectiveFrom: integer("effective_from", { mode: "timestamp" }),
+    effectiveTo: integer("effective_to", { mode: "timestamp" }),
     action: text("action", { enum: scheduleActionValues }).notNull(),
     ordinal: integer("ordinal").notNull().default(0),
   },
@@ -264,6 +293,22 @@ export const schedules = sqliteTable(
     check("schedules_target_kind_check", oneOf(table.targetKind, scopeValues)),
     check("schedules_action_check", oneOf(table.action, scheduleActionValues)),
     check("schedules_target_coherence_check", targetCoherence(table.targetKind, table.targetId)),
+    // Weekday mask, when present, names at least one ISO weekday (1..127).
+    check(
+      "schedules_recurrence_days_check",
+      sql`${table.recurrenceDays} is null or (${table.recurrenceDays} between ${sql.raw(String(WEEKDAY_MASK_MIN))} and ${sql.raw(String(WEEKDAY_MASK_MAX))})`,
+    ),
+    // The intra-day bounds are both NULL or both set, and when set form a
+    // non-empty half-open window 0 <= start < end <= 1440.
+    check(
+      "schedules_recurrence_minutes_check",
+      sql`(${table.recurrenceStartMinute} is null) = (${table.recurrenceEndMinute} is null) and (${table.recurrenceStartMinute} is null or (${table.recurrenceStartMinute} >= ${sql.raw(String(MINUTE_OF_DAY_MIN))} and ${table.recurrenceEndMinute} <= ${sql.raw(String(MINUTE_OF_DAY_MAX))} and ${table.recurrenceStartMinute} < ${table.recurrenceEndMinute}))`,
+    ),
+    // A bounded effective window must be non-empty (strict `<`).
+    check(
+      "schedules_effective_window_check",
+      sql`${table.effectiveFrom} is null or ${table.effectiveTo} is null or ${table.effectiveFrom} < ${table.effectiveTo}`,
+    ),
   ],
 );
 
@@ -271,6 +316,13 @@ export const schedules = sqliteTable(
  * A one-off, expiring override of the normal policy (e.g. "allow games until
  * 9pm tonight"). `expires_at` is UTC; the active-exception lookup is the hot
  * path the `(user_id, expires_at)` index serves.
+ *
+ * `effective_from` (reserved by #146, ADR 0005) lets an override be
+ * **pre-scheduled** for a future instant instead of being active the moment it
+ * is created: the override is active during `[effective_from ?? created_at,
+ * expires_at)`. NULL keeps today's behaviour (active from creation).
+ * `expires_at` remains the effective end — no separate `effective_to` column,
+ * per ADR 0005 §2.
  */
 export const exceptions = sqliteTable(
   "exceptions",
@@ -283,6 +335,7 @@ export const exceptions = sqliteTable(
     targetId: integer("target_id"),
     action: text("action", { enum: scheduleActionValues }).notNull(),
     reason: text("reason"),
+    effectiveFrom: integer("effective_from", { mode: "timestamp" }),
     expiresAt: integer("expires_at", { mode: "timestamp" }).notNull(),
     createdAt: timestampNow("created_at"),
   },
@@ -291,6 +344,11 @@ export const exceptions = sqliteTable(
     check("exceptions_target_kind_check", oneOf(table.targetKind, scopeValues)),
     check("exceptions_action_check", oneOf(table.action, scheduleActionValues)),
     check("exceptions_target_coherence_check", targetCoherence(table.targetKind, table.targetId)),
+    // A pre-scheduled override must begin strictly before it expires.
+    check(
+      "exceptions_effective_window_check",
+      sql`${table.effectiveFrom} is null or ${table.effectiveFrom} < ${table.expiresAt}`,
+    ),
   ],
 );
 
