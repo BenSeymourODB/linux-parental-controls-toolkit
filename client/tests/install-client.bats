@@ -45,6 +45,13 @@ ok_args() {
     --supervised-user alice "$@"
 }
 
+# Run with dry-run DISABLED, to exercise the strict (real-run) validation that a
+# dry-run preview deliberately relaxes. Used only for negative arg tests, which
+# return before any privileged pre-flight work.
+plan_strict() {
+  run env -u PCT_DRY_RUN bash "$SCRIPT" "$@"
+}
+
 # --- argument / usage handling ---------------------------------------------
 
 @test "--help prints usage and exits 0" {
@@ -53,22 +60,31 @@ ok_args() {
   [[ "$output" == *"Usage: install-client.sh"* ]]
 }
 
-@test "requires --server-url" {
-  plan --enrolment-token T --supervised-user alice
+@test "a real run requires --server-url" {
+  plan_strict --enrolment-token T --supervised-user alice
   [ "$status" -ne 0 ]
   [[ "$output" == *"missing --server-url"* ]]
 }
 
-@test "requires --enrolment-token" {
-  plan --server-url https://dash.lan --supervised-user alice
+@test "a real run requires --enrolment-token" {
+  plan_strict --server-url https://dash.lan --supervised-user alice
   [ "$status" -ne 0 ]
   [[ "$output" == *"missing --enrolment-token"* ]]
 }
 
-@test "requires at least one supervised user" {
-  plan --server-url https://dash.lan --enrolment-token T
+@test "a real run requires at least one supervised user" {
+  plan_strict --server-url https://dash.lan --enrolment-token T
   [ "$status" -ne 0 ]
   [[ "$output" == *"no supervised users given"* ]]
+}
+
+@test "a dry-run preview fills placeholders for missing inputs (CI smoke contract)" {
+  # Mirrors .github/workflows/integration.yml: a minimal-deps container runs the
+  # script with only PCT_SERVER_URL + PCT_DRY_RUN and expects a clean exit.
+  PCT_SERVER_URL=http://mock.local run env bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"placeholder"* ]]
+  [[ "$output" == *"client enrolment complete for: exampleuser"* ]]
 }
 
 @test "rejects an unknown argument" {
@@ -162,15 +178,15 @@ ok_args() {
 @test "builds an enrol body with the supervised user mapping" {
   ok_args
   [ "$status" -eq 0 ]
-  [[ "$output" == *'"sshUser": "pct-agent"'* ]]
-  [[ "$output" == *'"linuxUsername": "alice"'* ]]
+  [[ "$output" == *'"sshUser":"pct-agent"'* ]]
+  [[ "$output" == *'"linuxUsername":"alice"'* ]]
   [[ "$output" == *'"linuxUid":'* ]]
 }
 
 @test "--ssh-user overrides the SSH principal in the enrol body" {
   ok_args --ssh-user customagent
   [ "$status" -eq 0 ]
-  [[ "$output" == *'"sshUser": "customagent"'* ]]
+  [[ "$output" == *'"sshUser":"customagent"'* ]]
 }
 
 # --- enrol response handling ----------------------------------------------
@@ -191,12 +207,13 @@ ok_args() {
   [[ "$output" == *"authorize it for pct-agent later"* ]]
 }
 
-@test "persists the per-client bearer token credential" {
+@test "persists the per-client bearer token credential (0600 from birth)" {
   export PCT_FAKE_ENROL_RESPONSE='{"clientId":7,"hostname":"h","sshUser":"pct-agent","bearerToken":"BEARER-XYZ","sshPublicKey":null,"supervisedUsers":[]}'
   ok_args
   [ "$status" -eq 0 ]
-  [[ "$output" == *"write ${PCT_STATE_DIR}/pct-client.env"* ]]
-  [[ "$output" == *"chmod 0600 ${PCT_STATE_DIR}/pct-client.env"* ]]
+  # The plan creates the file 0600 before writing the secret (no world-readable
+  # window), not a post-hoc chmod.
+  [[ "$output" == *"install -m 0600 ${PCT_STATE_DIR}/pct-client.env"* ]]
   [[ "$output" == *"client credentials stored at ${PCT_STATE_DIR}/pct-client.env"* ]]
 }
 
@@ -215,6 +232,46 @@ ok_args() {
   PCT_SELF_TEST="$selftest" ok_args
   [ "$status" -eq 0 ]
   [[ "$output" == *"${selftest}"* ]]
+}
+
+# --- real enrol request (function-level, with a curl stub) -----------------
+
+@test "a failed enrol request aborts with a clear error (real run)" {
+  local stub="${TMP}/curl-fail"
+  printf '#!/usr/bin/env bash\nexit 22\n' >"$stub"
+  chmod +x "$stub"
+  # Source the (guarded) orchestrator and drive pct_orch_enrol directly so we
+  # exercise the real-run path without needing root for the earlier steps.
+  run env -u PCT_DRY_RUN bash -c '
+    PCT_CURL="'"$stub"'"
+    source "'"$SCRIPT"'"
+    pct_orch_enrol https://dash.lan TOK host pct-agent alice 1000
+  '
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"enrolment request to https://dash.lan/api/clients/enrol failed"* ]]
+}
+
+@test "the enrolment token is sent via stdin config, never on the curl argv" {
+  local stub="${TMP}/curl-echo"
+  cat >"$stub" <<'EOS'
+#!/usr/bin/env bash
+echo "ARGV: $*"
+echo "STDIN: $(cat)"
+EOS
+  chmod +x "$stub"
+  run env -u PCT_DRY_RUN bash -c '
+    PCT_CURL="'"$stub"'"
+    source "'"$SCRIPT"'"
+    pct_orch_enrol https://dash.lan SECRETTOKEN host pct-agent alice 1000
+  '
+  [ "$status" -eq 0 ]
+  local argv_line stdin_line
+  argv_line="$(printf '%s\n' "$output" | grep '^ARGV:')"
+  stdin_line="$(printf '%s\n' "$output" | grep '^STDIN:')"
+  # The secret must not appear in the argv curl received (ps-visibility) ...
+  [[ "$argv_line" != *SECRETTOKEN* ]]
+  # ... but must be delivered through the stdin config file.
+  [[ "$stdin_line" == *"Authorization: Bearer SECRETTOKEN"* ]]
 }
 
 # --- dry-run guarantee -----------------------------------------------------

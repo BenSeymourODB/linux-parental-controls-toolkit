@@ -64,10 +64,9 @@ PCT_SSH_USER="${PCT_SSH_USER:-${PCT_AGENT_USER:-pct-agent}}"
 # Where the per-client credential hand-off file is written. The Phase-8b
 # pct-client-bridge (#101) reads this; overridable so tests don't touch /etc.
 PCT_STATE_DIR="${PCT_STATE_DIR:-/etc/pct}"
-# JSON interpreter used to build the enrol request and parse its response.
-# python3 ships on every Mint/Ubuntu desktop; kept overridable for tests.
-PCT_PYTHON="${PCT_PYTHON:-python3}"
-# curl binary, overridable for tests.
+# curl binary, overridable for tests. curl is the only external tool the
+# orchestrator itself needs (the enrol request/response JSON is handled in pure
+# bash — see pct_orch_build_enrol_body / pct_orch_json_*).
 PCT_CURL="${PCT_CURL:-curl}"
 
 # --- usage -----------------------------------------------------------------
@@ -114,13 +113,11 @@ pct_orch_require_root() {
   fi
 }
 
-# Confirm the external tools the orchestrator itself needs are on PATH.
+# Confirm the external tools the orchestrator itself needs are on PATH. curl is
+# the only one (JSON is handled in pure bash); it ships with Mint/Ubuntu.
 pct_orch_require_tools() {
-  local missing=()
-  command -v "$PCT_CURL" >/dev/null 2>&1 || missing+=("$PCT_CURL")
-  command -v "$PCT_PYTHON" >/dev/null 2>&1 || missing+=("$PCT_PYTHON")
-  if [ "${#missing[@]}" -ne 0 ]; then
-    pct_err "missing required tool(s): ${missing[*]} (curl and python3 ship with Mint; install them and retry)"
+  if ! command -v "$PCT_CURL" >/dev/null 2>&1; then
+    pct_err "missing required tool: ${PCT_CURL} (install it and retry)"
     return 1
   fi
 }
@@ -162,36 +159,48 @@ pct_orch_resolve_uid() {
 # --- enrolment -------------------------------------------------------------
 
 # Build the JSON body for POST /api/clients/enrol from the hostname, ssh user,
-# and a flat list of (username uid) pairs. Uses python3 so usernames are escaped
-# correctly and the UID is emitted as a number, matching the zod DTO (#77).
+# and a flat list of (username uid) pairs, matching the zod DTO (#77):
+# {hostname, sshUser, supervisedUsers:[{linuxUsername, linuxUid:<number>}]}.
+#
+# Built in pure bash (no JSON library): safe here because every interpolated
+# value is a constrained token — a Linux username (validated [<=32], the usual
+# [a-z_][a-z0-9_-]* charset), a hostname (RFC-1035 charset), or an integer UID —
+# none of which can contain a '"' or '\' to break out of the JSON string. The
+# orchestrator's CLI parsing is the trust boundary; this is not a general JSON
+# encoder and must not be reused for free-form input.
 pct_orch_build_enrol_body() {
   local hostname="$1" sshuser="$2"
   shift 2
-  "$PCT_PYTHON" -c '
-import json, sys
-hostname, sshuser = sys.argv[1], sys.argv[2]
-rest = sys.argv[3:]
-users = [
-    {"linuxUsername": rest[i], "linuxUid": int(rest[i + 1])}
-    for i in range(0, len(rest), 2)
-]
-sys.stdout.write(json.dumps({
-    "hostname": hostname,
-    "sshUser": sshuser,
-    "supervisedUsers": users,
-}))
-' "$hostname" "$sshuser" "$@"
+  local users_json="" sep=""
+  while [ "$#" -ge 2 ]; do
+    users_json="${users_json}${sep}{\"linuxUsername\":\"$1\",\"linuxUid\":$2}"
+    sep=","
+    shift 2
+  done
+  printf '{"hostname":"%s","sshUser":"%s","supervisedUsers":[%s]}' \
+    "$hostname" "$sshuser" "$users_json"
 }
 
-# Read a top-level field from a JSON document on stdin, printing its value (the
-# empty string for null or a missing key). Strings are emitted verbatim.
-pct_orch_json_field() {
-  "$PCT_PYTHON" -c '
-import json, sys
-doc = json.load(sys.stdin)
-value = doc.get(sys.argv[1])
-sys.stdout.write("" if value is None else str(value))
-' "$1"
+# Extract a top-level JSON string field's value from stdin, or the empty string
+# for null / a missing key. The enrol response's string fields (bearerToken,
+# sshPublicKey) never contain a '"', so a non-greedy "up to the next quote"
+# match is exact; null yields no match -> empty (the graceful-degrade signal).
+pct_orch_json_string() {
+  local field="$1" json
+  json="$(cat)"
+  if [[ "$json" =~ \"$field\"[[:space:]]*:[[:space:]]*\"([^\"]*)\" ]]; then
+    printf '%s' "${BASH_REMATCH[1]}"
+  fi
+}
+
+# Extract a top-level JSON integer field's value from stdin, or the empty string
+# if absent (e.g. clientId).
+pct_orch_json_number() {
+  local field="$1" json
+  json="$(cat)"
+  if [[ "$json" =~ \"$field\"[[:space:]]*:[[:space:]]*([0-9]+) ]]; then
+    printf '%s' "${BASH_REMATCH[1]}"
+  fi
 }
 
 # POST the enrolment request and echo the raw JSON response on stdout. Logs go to
@@ -217,12 +226,18 @@ pct_orch_enrol() {
     return 0
   fi
 
-  if ! "$PCT_CURL" --fail --silent --show-error --max-time 30 \
-    --request POST \
-    --header "Authorization: Bearer ${token}" \
-    --header "Content-Type: application/json" \
-    --data "$body" \
-    "$url"; then
+  # Feed the Authorization header through `curl --config -` on stdin so the
+  # secret enrolment token never appears in this process's argv (and thus not in
+  # `ps`). The token is base64url, so the config-file quoting is safe. The body
+  # is not secret, so it stays on argv. --fail makes a non-2xx an error; the
+  # endpoint returns 201 on success.
+  if ! printf 'header = "Authorization: Bearer %s"\n' "$token" |
+    "$PCT_CURL" --config - \
+      --fail --silent --show-error --max-time 30 \
+      --request POST \
+      --header "Content-Type: application/json" \
+      --data "$body" \
+      "$url"; then
     pct_err "enrolment request to ${url} failed (the token may be expired or already used; mint a fresh one)"
     return 1
   fi
@@ -230,16 +245,29 @@ pct_orch_enrol() {
 
 # Persist the per-client credentials the enrolment produced. This is the hand-off
 # artifact the Phase-8b pct-client-bridge (#101) will read to authenticate to
-# /api/events/stream; we only persist what registration returned. Written 0600
-# root:root because the bearer token is a secret. Dry-run prints the plan.
+# /api/events/stream; we only persist what registration returned. Dry-run prints
+# the plan.
 pct_orch_persist_credentials() {
   local server="$1" client_id="$2" bearer="$3"
   local target="${PCT_STATE_DIR}/pct-client.env"
-  printf '# Managed by pct install-client.sh (#76). The Phase-8b pct-client-bridge\n# reads these to authenticate to the dashboard. Do not edit by hand.\nPCT_SERVER_URL=%s\nPCT_CLIENT_ID=%s\nPCT_CLIENT_BEARER_TOKEN=%s\n' \
-    "$server" "$client_id" "$bearer" |
-    pct_write_file "$target"
-  pct_run chmod 0600 "$target"
-  pct_run chown root:root "$target"
+  local content
+  content="$(printf '# Managed by pct install-client.sh (#76). The Phase-8b pct-client-bridge\n# reads these to authenticate to the dashboard. Do not edit by hand.\nPCT_SERVER_URL=%s\nPCT_CLIENT_ID=%s\nPCT_CLIENT_BEARER_TOKEN=%s\n' \
+    "$server" "$client_id" "$bearer")"
+
+  if pct_is_dry_run; then
+    printf '%s %s\n' "$PCT_DRYRUN_PREFIX" "install -m 0600 ${target} (then write PCT_CLIENT_BEARER_TOKEN)" >&2
+    pct_ok "client credentials stored at ${target}"
+    return 0
+  fi
+
+  mkdir -p "$(dirname "$target")"
+  # Create the file 0600-from-birth BEFORE writing the secret, so there is no
+  # window in which the bearer token is world-readable (a post-hoc chmod on a
+  # default-umask 0644 file leaves exactly such a window). `install` makes a
+  # fresh 0600 copy of the empty /dev/null, replacing any prior file.
+  install -m 0600 /dev/null "$target"
+  printf '%s' "$content" >"$target"
+  chown root:root "$target"
   pct_ok "client credentials stored at ${target}"
 }
 
@@ -333,9 +361,9 @@ pct_install_client() {
   pct_step "Register this client with the dashboard"
   local response client_id bearer ssh_pubkey
   response="$(pct_orch_enrol "$server_url" "$enrol_token" "$hostname" "$ssh_user" "${pairs[@]}")"
-  client_id="$(printf '%s' "$response" | pct_orch_json_field clientId)"
-  bearer="$(printf '%s' "$response" | pct_orch_json_field bearerToken)"
-  ssh_pubkey="$(printf '%s' "$response" | pct_orch_json_field sshPublicKey)"
+  client_id="$(printf '%s' "$response" | pct_orch_json_number clientId)"
+  bearer="$(printf '%s' "$response" | pct_orch_json_string bearerToken)"
+  ssh_pubkey="$(printf '%s' "$response" | pct_orch_json_string sshPublicKey)"
   pct_ok "enrolled as client #${client_id:-?} (host '${hostname}', ssh user '${ssh_user}')"
 
   # Step: authorize the dashboard SSH key + persist the client bearer token.
@@ -425,20 +453,40 @@ pct_orch_main() {
     esac
   done
 
+  # A real run hard-requires the server URL, a one-time token, and at least one
+  # supervised user. A dry run is a side-effect-free PREVIEW: it fills clearly
+  # labelled placeholders for anything missing so it can always render the full
+  # plan (this is also what the minimal CI smoke test exercises — no token, no
+  # user, just PCT_SERVER_URL).
   if [ -z "$server_url" ]; then
-    pct_err "missing --server-url (or PCT_SERVER_URL)"
-    pct_orch_usage
-    return 2
+    if pct_is_dry_run; then
+      server_url="https://dashboard.example"
+      pct_warn "no --server-url given; using placeholder '${server_url}' for the dry-run preview"
+    else
+      pct_err "missing --server-url (or PCT_SERVER_URL)"
+      pct_orch_usage
+      return 2
+    fi
   fi
   if [ -z "$enrol_token" ]; then
-    pct_err "missing --enrolment-token (or PCT_ENROLMENT_TOKEN)"
-    pct_orch_usage
-    return 2
+    if pct_is_dry_run; then
+      enrol_token="DRY-RUN-PLACEHOLDER-TOKEN"
+      pct_warn "no --enrolment-token given; using a placeholder for the dry-run preview"
+    else
+      pct_err "missing --enrolment-token (or PCT_ENROLMENT_TOKEN)"
+      pct_orch_usage
+      return 2
+    fi
   fi
   if [ "${#users[@]}" -eq 0 ]; then
-    pct_err "no supervised users given (pass --supervised-user or PCT_SUPERVISED_USERS)"
-    pct_orch_usage
-    return 2
+    if pct_is_dry_run; then
+      users=(exampleuser)
+      pct_warn "no --supervised-user given; using placeholder 'exampleuser' for the dry-run preview"
+    else
+      pct_err "no supervised users given (pass --supervised-user or PCT_SUPERVISED_USERS)"
+      pct_orch_usage
+      return 2
+    fi
   fi
 
   pct_install_client "$server_url" "$enrol_token" "$ssh_user" "${users[@]}"
