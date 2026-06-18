@@ -136,6 +136,29 @@ run_selftest() { run env bash "$SCRIPT" "$@"; }
   [[ "$output" == *"[error] sshd is active"* ]]
 }
 
+@test "world-traversable .ssh directory -> SSH key check fails on perms" {
+  chmod 755 "${STUB_AGENT_HOME}/.ssh"
+  run_selftest --supervised-user alice
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"should be mode 0700"* ]]
+}
+
+@test "inactive Timekpr-nExT daemon -> failure" {
+  STUB_INACTIVE_UNIT=timekpr.service run_selftest --supervised-user alice
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"[error] Timekpr-nExT daemon is active"* ]]
+}
+
+@test "sudoers naming a different timekpra path -> failure" {
+  chmod u+w "${PCT_SUDOERS_DIR}/pct-agent"
+  printf '# header\npct-agent ALL=(root) NOPASSWD: /usr/local/bin/timekpra\n' \
+    >"${PCT_SUDOERS_DIR}/pct-agent"
+  chmod 440 "${PCT_SUDOERS_DIR}/pct-agent"
+  run_selftest --supervised-user alice
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"expected exactly"* ]]
+}
+
 @test "missing sudoers drop-in -> failure" {
   rm -f "${PCT_SUDOERS_DIR}/pct-agent"
   run_selftest --supervised-user alice
@@ -144,7 +167,12 @@ run_selftest() { run env bash "$SCRIPT" "$@"; }
 }
 
 @test "broader sudoers grant -> failure" {
+  # The fixture is 0440 (read-only even for its owner under a non-root CI
+  # runner), so make it writable to append, then restore 0440 — the script
+  # must still detect the extra rule on a correctly-moded drop-in.
+  chmod u+w "${PCT_SUDOERS_DIR}/pct-agent"
   printf 'pct-agent ALL=(ALL) NOPASSWD: ALL\n' >>"${PCT_SUDOERS_DIR}/pct-agent"
+  chmod 440 "${PCT_SUDOERS_DIR}/pct-agent"
   run_selftest --supervised-user alice
   [ "$status" -eq 1 ]
   [[ "$output" == *"[error] pct-agent sudoers scoped to timekpra only"* ]]
@@ -195,6 +223,14 @@ run_selftest() { run env bash "$SCRIPT" "$@"; }
   run_selftest --supervised-user alice
   [ "$status" -eq 1 ]
   [[ "$output" == *"no PCT_CLIENT_BEARER_TOKEN"* ]]
+}
+
+@test "enrolment record without client id -> failure" {
+  printf 'PCT_CLIENT_BEARER_TOKEN=deadbeef\n' >"${PCT_STATE_DIR}/pct-client.env"
+  chmod 600 "${PCT_STATE_DIR}/pct-client.env"
+  run_selftest --supervised-user alice
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"no PCT_CLIENT_ID"* ]]
 }
 
 @test "world-readable enrolment record -> failure on perms" {
