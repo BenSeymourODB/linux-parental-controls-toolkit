@@ -63,9 +63,9 @@ export async function drainClient(
   let drained = 0;
   let failed = 0;
 
-  for (let index = 0; index < pending.length; index += 1) {
-    const row = pending[index];
-    if (row === undefined) continue;
+  // `.entries()` yields a defined `row` (unlike `pending[index]` under
+  // noUncheckedIndexedAccess), so there's no dead undefined-guard branch.
+  for (const [index, row] of pending.entries()) {
     try {
       await executor(toAction(row));
       markDrained(db, row.id);
