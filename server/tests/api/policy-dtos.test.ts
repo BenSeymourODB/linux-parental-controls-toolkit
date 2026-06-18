@@ -30,6 +30,7 @@ describe("policy DTO mappers", () => {
       id: 2,
       hostname: "mint-01",
       sshUser: "pct-agent",
+      bearerTokenHash: null,
       enrolledAt: new Date("2026-06-17T00:00:00.000Z"),
       lastSeen: new Date("2026-06-17T08:30:00.000Z"),
     };
@@ -47,6 +48,7 @@ describe("policy DTO mappers", () => {
       id: 3,
       hostname: "mint-02",
       sshUser: "pct-agent",
+      bearerTokenHash: null,
       enrolledAt: new Date("2026-06-17T00:00:00.000Z"),
       lastSeen: null,
     };

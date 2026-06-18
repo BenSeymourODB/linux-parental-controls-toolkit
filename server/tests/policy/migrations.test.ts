@@ -63,6 +63,7 @@ const EXPECTED_TABLES = [
   "admin_credentials",
   "budgets",
   "clients",
+  "enrolment_tokens",
   "exceptions",
   "grants",
   "integration_tokens",

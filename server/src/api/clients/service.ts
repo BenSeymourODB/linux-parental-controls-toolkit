@@ -1,0 +1,179 @@
+/**
+ * Enrolment orchestration (#77): the logic the `clients` routes delegate to,
+ * sitting between the HTTP layer and the policy store. It validates inputs
+ * against existing policy state, hashes the bearer secrets, and maps failures
+ * onto {@link ApiError}s in the shared envelope. Persistence lives in
+ * `policy/enrolment.ts`; token hashing in `auth/secret-token.ts`.
+ *
+ * License boundary: none touched — plain TypeScript + zod + Drizzle.
+ */
+import type { FastifyBaseLogger } from "fastify";
+
+import { generateToken, hashToken } from "../../auth/secret-token.js";
+import type { PolicyDb } from "../../policy/db.js";
+import * as enrolmentRepo from "../../policy/enrolment.js";
+import * as repo from "../../policy/repository.js";
+import { ApiError } from "../errors.js";
+import type { EnrolClientRequest, MintEnrolmentTokenRequest } from "./dtos.js";
+import { loadServerSshPublicKey } from "./ssh-identity.js";
+
+/** What {@link mintEnrolmentToken} hands back to the route (token shown once). */
+export interface MintResult {
+  id: number;
+  token: string;
+  expiresAt: Date;
+}
+
+/** What {@link enrolClient} hands back to the route (bearer token shown once). */
+export interface EnrolResult {
+  clientId: number;
+  hostname: string;
+  sshUser: string;
+  bearerToken: string;
+  sshPublicKey: string | null;
+  supervisedUsers: { userId: number; linuxUsername: string; linuxUid: number }[];
+}
+
+/**
+ * Mint a single-use enrolment token bound to `input.supervisedUsers`. Every
+ * referenced policy `userId` must already exist (404 otherwise) so the admin
+ * can't bind a token to a phantom user. Returns the plaintext token once; only
+ * its hash is persisted.
+ */
+export function mintEnrolmentToken(db: PolicyDb, input: MintEnrolmentTokenRequest): MintResult {
+  for (const entry of input.supervisedUsers) {
+    if (repo.getUser(db, entry.userId) === undefined) {
+      throw new ApiError(404, "not_found", `User ${entry.userId} not found`);
+    }
+  }
+
+  const token = generateToken();
+  const expiresAt = new Date(Date.now() + input.ttlSeconds * 1000);
+  const row = enrolmentRepo.createEnrolmentToken(db, {
+    tokenHash: hashToken(token),
+    hostname: input.hostname ?? null,
+    supervisedUsers: input.supervisedUsers,
+    expiresAt,
+  });
+
+  return { id: row.id, token, expiresAt: row.expiresAt };
+}
+
+/** Options threaded into {@link enrolClient} from the route. */
+export interface EnrolOptions {
+  /** Path to the server's SSH public key (`settings.sshPublicKeyPath`). */
+  sshPublicKeyPath: string;
+  /** Request logger, used to warn if the SSH key is present but unreadable. */
+  log: FastifyBaseLogger;
+}
+
+/**
+ * Redeem an enrolment token and register the client. The bearer enrolment token
+ * (from the `Authorization` header) is validated by hash lookup; a missing,
+ * expired, or already-consumed token is a `401`. The request's supervised-user
+ * set must exactly match the set the token was minted for (`400` otherwise),
+ * and every bound user must still exist (`409` if one was deleted since mint).
+ * On success the client + links are created and the token consumed in one
+ * transaction, a per-client bearer token is issued (returned once), and the
+ * server SSH public key is included when available.
+ */
+export function enrolClient(
+  db: PolicyDb,
+  bearerEnrolmentToken: string,
+  input: EnrolClientRequest,
+  options: EnrolOptions,
+): EnrolResult {
+  const tokenRow = enrolmentRepo.findEnrolmentTokenByHash(db, hashToken(bearerEnrolmentToken));
+  if (tokenRow === undefined) {
+    throw new ApiError(401, "enrolment_token_invalid", "Unknown or invalid enrolment token");
+  }
+  if (tokenRow.consumedAt !== null) {
+    throw new ApiError(401, "enrolment_token_used", "This enrolment token has already been used");
+  }
+  if (tokenRow.expiresAt.getTime() <= Date.now()) {
+    throw new ApiError(401, "enrolment_token_expired", "This enrolment token has expired");
+  }
+
+  // Join the minted mapping (userId ↔ linuxUsername) with the request's
+  // (linuxUsername ↔ linuxUid) on linuxUsername; the sets must match exactly so
+  // the client can neither drop a bound user nor smuggle in an extra one.
+  const requestByName = new Map(input.supervisedUsers.map((entry) => [entry.linuxUsername, entry]));
+  const minted = tokenRow.supervisedUsers;
+  const mismatch =
+    minted.length !== input.supervisedUsers.length ||
+    minted.some((entry) => !requestByName.has(entry.linuxUsername));
+  if (mismatch) {
+    throw new ApiError(
+      400,
+      "enrolment_user_mismatch",
+      "Supervised users do not match the ones this enrolment token was minted for",
+    );
+  }
+
+  const links: enrolmentRepo.EnrolLink[] = minted.map((entry) => {
+    const requested = requestByName.get(entry.linuxUsername);
+    if (requested === undefined) {
+      // Unreachable given the exact-match check above, but keeps the map access
+      // total without a non-null assertion.
+      throw new ApiError(400, "enrolment_user_mismatch", "Supervised user set mismatch");
+    }
+    if (repo.getUser(db, entry.userId) === undefined) {
+      throw new ApiError(409, "user_no_longer_exists", `User ${entry.userId} no longer exists`);
+    }
+    return {
+      userId: entry.userId,
+      linuxUsername: entry.linuxUsername,
+      linuxUid: requested.linuxUid,
+    };
+  });
+
+  const bearerToken = generateToken();
+  let result: enrolmentRepo.EnrolResult;
+  try {
+    result = enrolmentRepo.consumeTokenAndEnrol(db, tokenRow.id, {
+      hostname: input.hostname,
+      sshUser: input.sshUser,
+      bearerTokenHash: hashToken(bearerToken),
+      links,
+    });
+  } catch (err) {
+    if (repo.isUniqueViolation(err)) {
+      throw new ApiError(
+        409,
+        "conflict",
+        `Client "${input.hostname}" is already enrolled, or a Linux UID is duplicated for it`,
+      );
+    }
+    throw err;
+  }
+
+  return {
+    clientId: result.client.id,
+    hostname: result.client.hostname,
+    sshUser: result.client.sshUser,
+    bearerToken,
+    sshPublicKey: readSshPublicKey(options),
+    supervisedUsers: result.links.map((link) => ({
+      userId: link.userId,
+      linuxUsername: link.linuxUsername,
+      linuxUid: link.linuxUid,
+    })),
+  };
+}
+
+/**
+ * Read the server SSH public key, degrading to `null` on any failure so a key
+ * problem never breaks an otherwise-valid enrolment. A genuinely unexpected
+ * read error (not "file absent") is logged at warn level for the operator.
+ */
+function readSshPublicKey(options: EnrolOptions): string | null {
+  try {
+    return loadServerSshPublicKey(options.sshPublicKeyPath);
+  } catch (err) {
+    options.log.warn(
+      { err, path: options.sshPublicKeyPath },
+      "could not read server SSH public key for enrolment; returning null",
+    );
+    return null;
+  }
+}

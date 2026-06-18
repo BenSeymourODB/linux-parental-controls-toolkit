@@ -49,6 +49,19 @@ export {
   type UserResponse,
 } from "./policy/index.js";
 
+// Client-enrolment DTOs (#77): the admin token-mint + install-script enrol
+// contract. Schemas live in `./clients/dtos.ts` next to the routes.
+export {
+  enrolClientSchema,
+  enrolResponseSchema,
+  mintEnrolmentTokenSchema,
+  enrolmentTokenResponseSchema,
+  type EnrolClientRequest,
+  type EnrolResponse,
+  type MintEnrolmentTokenRequest,
+  type EnrolmentTokenResponse,
+} from "./clients/index.js";
+
 // Auth DTOs (#52). Re-exported here so the frontend imports the auth contract
 // from the same `/api` surface as every other DTO; the schemas themselves live
 // in `../auth/dtos.ts` next to the routes that use them.
