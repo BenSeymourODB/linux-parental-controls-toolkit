@@ -124,6 +124,21 @@ sudoers_file() {
   [ ! -f "$(sudoers_file)" ]
 }
 
+@test "rendered sudoers content passes the real visudo validator" {
+  # Validate against the *real* visudo (not the stub on PATH), so we prove the
+  # generated grammar is actually valid sudoers, not just that the abort wiring
+  # works. Skips where visudo isn't installed; the CI bats runner has it.
+  local real_visudo
+  real_visudo="$(PATH=/usr/sbin:/usr/bin:/sbin:/bin command -v visudo || true)"
+  [ -n "${real_visudo}" ] || skip "visudo not installed"
+  # shellcheck disable=SC1090
+  source "${SCRIPT}"
+  local rendered="${TESTDIR}/rendered-sudoers"
+  pct_render_sudoers >"${rendered}"
+  run "${real_visudo}" -cf "${rendered}"
+  [ "${status}" -eq 0 ]
+}
+
 @test "authorizes an inline SSH key with 0700/.ssh and 0600/authorized_keys" {
   local key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA dashboard@pct"
   run bash "${SCRIPT}" --ssh-key-string "${key}"
