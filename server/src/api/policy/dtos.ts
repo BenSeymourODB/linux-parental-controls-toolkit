@@ -24,7 +24,11 @@ import {
   scheduleActionSchema,
   scopeSchema,
 } from "../../policy/enums.js";
-import { scheduleRecurrenceSchema } from "../../policy/recurrence.js";
+import {
+  scheduleRecurrenceSchema,
+  minuteOfDaySchema,
+  weekdayMaskSchema,
+} from "../../policy/recurrence.js";
 import type {
   ActivityGroupRow,
   ActivityRow,
@@ -318,9 +322,11 @@ export const updateScheduleSchema = z
     targetKind: scopeSchema.optional(),
     targetId: targetIdSchema.optional(),
     action: scheduleActionSchema.optional(),
-    recurrenceDays: z.number().int().min(1).max(127).nullable().optional(),
-    recurrenceStartMinute: z.number().int().min(0).max(1440).nullable().optional(),
-    recurrenceEndMinute: z.number().int().min(0).max(1440).nullable().optional(),
+    // Reuse the single-source recurrence bounds (recurrence.ts), so the PATCH
+    // per-field checks can't drift from the create path or the storage CHECK.
+    recurrenceDays: weekdayMaskSchema.nullable().optional(),
+    recurrenceStartMinute: minuteOfDaySchema.nullable().optional(),
+    recurrenceEndMinute: minuteOfDaySchema.nullable().optional(),
     effectiveFrom: z.string().datetime().nullable().optional(),
     effectiveTo: z.string().datetime().nullable().optional(),
     ordinal: z.number().int().min(0).optional(),

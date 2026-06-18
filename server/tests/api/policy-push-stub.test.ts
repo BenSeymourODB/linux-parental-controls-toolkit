@@ -272,6 +272,54 @@ describe("stub transport push on policy change (#54)", () => {
     expect(pushed[0]).toMatchObject({ clientId, userId, reason: "budget.deleted" });
   });
 
+  it("logs a budget.updated push carrying the budget id to each linked client", async () => {
+    const { userId, clientId } = await linkedUser();
+    const budget = (
+      await auth({
+        method: "POST",
+        url: "/api/budgets",
+        payload: { userId, scope: "overall", window: "daily", secondsAllowed: 7200 },
+      })
+    ).json();
+
+    await auth({
+      method: "PATCH",
+      url: `/api/budgets/${budget.id}`,
+      payload: { secondsAllowed: 3600 },
+    });
+
+    const pushed = pushLines("budget.updated");
+    expect(pushed).toHaveLength(1);
+    expect(pushed[0]).toMatchObject({
+      clientId,
+      userId,
+      reason: "budget.updated",
+      detail: { budgetId: budget.id, secondsAllowed: 3600 },
+    });
+  });
+
+  it("logs a schedule.deleted push (clients resolved before the row is gone)", async () => {
+    const { userId, clientId } = await linkedUser();
+    const schedule = (
+      await auth({
+        method: "POST",
+        url: "/api/schedules",
+        payload: { userId, targetKind: "overall", action: "deny" },
+      })
+    ).json();
+
+    await auth({ method: "DELETE", url: `/api/schedules/${schedule.id}` });
+
+    const pushed = pushLines("schedule.deleted");
+    expect(pushed).toHaveLength(1);
+    expect(pushed[0]).toMatchObject({
+      clientId,
+      userId,
+      reason: "schedule.deleted",
+      detail: { scheduleId: schedule.id },
+    });
+  });
+
   it("logs schedule.created and exception.created pushes to the linked client", async () => {
     const { userId, clientId } = await linkedUser();
     await auth({
