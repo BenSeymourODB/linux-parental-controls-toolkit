@@ -152,6 +152,14 @@ describe("policy repository — user/client links", () => {
     expect(repo.deleteLink(db, userId, clientId)).toBe(true);
     expect(repo.deleteLink(db, userId, clientId)).toBe(false);
   });
+
+  it("listUserClientIds returns the linked client ids ascending, [] when none", () => {
+    expect(repo.listUserClientIds(db, userId)).toEqual([]);
+    const second = repo.createClient(db, { hostname: "mint-02", sshUser: "pct-agent" }).id;
+    repo.upsertLink(db, userId, second, { linuxUsername: "alice", linuxUid: 1002 });
+    repo.upsertLink(db, userId, clientId, { linuxUsername: "alice", linuxUid: 1001 });
+    expect(repo.listUserClientIds(db, userId)).toEqual([clientId, second].sort((a, b) => a - b));
+  });
 });
 
 describe("isUniqueViolation", () => {
