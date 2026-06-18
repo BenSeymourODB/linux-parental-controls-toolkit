@@ -459,6 +459,25 @@ describe("SshTransport.withPortForward", () => {
     expect(state.instances[0]?.forwardOuts[0]).toMatchObject({ dstIP: "10.0.0.5", dstPort: 5600 });
   });
 
+  it("destroys the forwarded SSH channel on teardown (no channel leak)", async () => {
+    const transport = new SshTransport();
+
+    await transport.withPortForward(target, { port: 5600 }, async (local) => {
+      // Hold the connection open (never end it) so the channel can't close
+      // from EOF — only the teardown can destroy it. The echoed byte confirms
+      // the socket↔channel↔socket loop is wired before the window ends.
+      await new Promise<void>((resolve, reject) => {
+        const socket = connect(local.port, "127.0.0.1", () => socket.write("ping"));
+        socket.once("data", () => resolve());
+        socket.on("error", reject);
+      });
+    });
+
+    const channel = state.instances[0]?.forwardChannels[0];
+    expect(channel).toBeDefined();
+    expect(channel?.destroyed).toBe(true);
+  });
+
   it("drops a connection whose forward fails without sinking the window", async () => {
     state.forward = { err: new Error("forward refused") };
     const transport = new SshTransport();

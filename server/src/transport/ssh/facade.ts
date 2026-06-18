@@ -256,11 +256,12 @@ export class SshTransport {
     const client = await this.#connect(resolved);
 
     const remoteHost = remote.host ?? LOOPBACK_HOST;
-    const open = new Set<Socket>();
+    const openSockets = new Set<Socket>();
+    const openChannels = new Set<ClientChannel>();
 
     const server = createServer((socket: Socket) => {
-      open.add(socket);
-      socket.on("close", () => open.delete(socket));
+      openSockets.add(socket);
+      socket.on("close", () => openSockets.delete(socket));
       // One broken forwarded connection must not take down the whole window.
       socket.on("error", () => socket.destroy());
 
@@ -274,6 +275,11 @@ export class SshTransport {
             socket.destroy();
             return;
           }
+          // Track the channel too: `socket.pipe(channel)` does not propagate a
+          // socket `destroy()` to the SSH channel, so without this the channel
+          // would linger half-open on the pooled connection across passes.
+          openChannels.add(channel);
+          channel.on("close", () => openChannels.delete(channel));
           channel.on("error", () => socket.destroy());
           socket.pipe(channel);
           channel.pipe(socket);
@@ -285,7 +291,8 @@ export class SshTransport {
       const port = await listenLoopback(server, options.localPort ?? 0);
       return await fn({ host: LOOPBACK_HOST, port });
     } finally {
-      for (const socket of open) socket.destroy();
+      for (const socket of openSockets) socket.destroy();
+      for (const channel of openChannels) channel.destroy();
       await closeServer(server);
     }
   }

@@ -159,6 +159,9 @@ export async function runTelemetryPull(deps: TelemetryPullDeps): Promise<Telemet
     }
   });
 
+  // Spread into a fresh object: a TS interface has no implicit index
+  // signature, so `result` itself isn't assignable to the logger's
+  // Record<string, unknown> parameter.
   deps.logger.info({ ...result }, "telemetry pull pass complete");
   return result;
 }
