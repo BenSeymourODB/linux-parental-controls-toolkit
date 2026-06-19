@@ -1,16 +1,21 @@
 /**
- * A minimal in-memory rate limiter for failed logins (#52).
+ * A minimal in-memory fixed-window rate limiter for failed attempts.
  *
  * Scope-appropriate for a single-admin homelab dashboard: a fixed-window count
- * of *failed* attempts per key (client IP), held in process memory. It is not a
- * distributed limiter and does not need to be — there is one admin and one
- * process. A successful login clears the key; the window otherwise resets once
- * it elapses. The clock is injectable so the behaviour is testable without
- * real time.
+ * of *failed* attempts per key (typically the client IP), held in process
+ * memory. It is not a distributed limiter and does not need to be — there is
+ * one process. A success clears the key; the window otherwise resets once it
+ * elapses. The clock is injectable so the behaviour is testable without real
+ * time.
+ *
+ * Used for failed-login throttling (#52, `auth/routes.ts`) and for the
+ * unauthenticated-by-session enrol surface (#154, `api/clients/routes.ts`) —
+ * one mechanism, two call sites with their own thresholds and limiter
+ * instances, rather than a second implementation.
  *
  * Deliberately not a dependency: `@fastify/rate-limit` targets per-route
- * request-rate limiting across a cluster, which is far more than the
- * "basic login rate-limiting" this issue calls for.
+ * request-rate limiting across a cluster, which is far more than the basic
+ * per-IP failed-attempt throttling these surfaces call for.
  */
 
 /** A failed-attempt window for one key. */
@@ -20,8 +25,8 @@ interface Window {
   startedAt: number;
 }
 
-/** Options for {@link LoginRateLimiter}. */
-export interface LoginRateLimiterOptions {
+/** Options for {@link FixedWindowRateLimiter}. */
+export interface FixedWindowRateLimiterOptions {
   /** Failed attempts allowed within a window before the key is blocked. */
   maxAttempts?: number;
   /** Window length in milliseconds. */
@@ -30,14 +35,14 @@ export interface LoginRateLimiterOptions {
   now?: () => number;
 }
 
-/** Fixed-window failed-login limiter keyed by an arbitrary string (e.g. IP). */
-export class LoginRateLimiter {
+/** Fixed-window failed-attempt limiter keyed by an arbitrary string (e.g. IP). */
+export class FixedWindowRateLimiter {
   private readonly maxAttempts: number;
   private readonly windowMs: number;
   private readonly now: () => number;
   private readonly windows = new Map<string, Window>();
 
-  constructor(options: LoginRateLimiterOptions = {}) {
+  constructor(options: FixedWindowRateLimiterOptions = {}) {
     this.maxAttempts = options.maxAttempts ?? 5;
     this.windowMs = options.windowMs ?? 15 * 60 * 1000;
     this.now = options.now ?? Date.now;
@@ -70,7 +75,7 @@ export class LoginRateLimiter {
     }
   }
 
-  /** Clear any recorded failures for `key` (called on a successful login). */
+  /** Clear any recorded failures for `key` (called on a successful attempt). */
   recordSuccess(key: string): void {
     this.windows.delete(key);
   }
