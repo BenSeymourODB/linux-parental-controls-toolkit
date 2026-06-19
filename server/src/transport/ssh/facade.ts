@@ -20,6 +20,8 @@
  * {@link SshUnreachableError} is the offline-queue's signal (#84), whereas an
  * {@link SshCommandError} means the box was reached and the *command* failed.
  */
+import { createServer, type Server, type Socket } from "node:net";
+
 import { Client } from "ssh2";
 import type { ClientChannel, ConnectConfig } from "ssh2";
 import type { ZodType } from "zod";
@@ -71,6 +73,30 @@ export interface ExecResult {
   code: number | null;
   /** Terminating signal name, or `null` if the process exited normally. */
   signal: string | null;
+}
+
+/**
+ * A remote endpoint on the enrolled client to forward a local port to.
+ *
+ * `host` defaults to loopback because the services we tunnel (notably
+ * `aw-server`, #86) bind `127.0.0.1` on the client and must never be
+ * network-exposed — the SSH tunnel is the *only* path to them.
+ */
+export interface PortForwardTarget {
+  /** Remote host as resolved on the client. Defaults to `127.0.0.1`. */
+  host?: string;
+  /** Remote TCP port to forward to (e.g. `aw-server`'s `5600`). */
+  port: number;
+}
+
+/** Per-invocation overrides for {@link SshTransport.withPortForward}. */
+export interface PortForwardOptions {
+  /**
+   * Local TCP port to listen on. Defaults to `0` — an OS-assigned ephemeral
+   * port, which is what callers want (the chosen port is handed to the
+   * callback). Pinning a port is only useful in tests.
+   */
+  localPort?: number;
 }
 
 /** Per-invocation overrides for {@link SshTransport.exec}. */
@@ -125,6 +151,9 @@ interface ResolvedTarget {
   ref: SshTargetRef;
   connectConfig: ConnectConfig;
 }
+
+/** The only address a forwarded port ever binds — never network-exposed. */
+const LOOPBACK_HOST = "127.0.0.1";
 
 const DEFAULT_READY_TIMEOUT_MS = 10_000;
 
@@ -197,6 +226,75 @@ export class SshTransport {
       throw new SshParseError(resolved.ref, argv, result.stdout, { cause: parsed.error });
     }
     return parsed.data;
+  }
+
+  /**
+   * Open a **local port-forward** to `remote` on the target, run `fn` with the
+   * loopback `{ host, port }` it can be reached at, then tear the forward down.
+   *
+   * A `127.0.0.1`-bound TCP listener is opened on an ephemeral local port;
+   * each connection to it is forwarded over the pooled SSH session to
+   * `remote` on the client (`ssh2`'s `forwardOut`). This is the inbound
+   * transport window for the telemetry pull (#86): `fn` typically drives the
+   * REST-only {@link ../activitywatch} client against
+   * `http://127.0.0.1:<port>` to reach the client's `aw-server` — whose API is
+   * unauthenticated and must never be network-exposed, hence loopback-only.
+   *
+   * The listener (and any in-flight sockets) are always closed when `fn`
+   * settles, so a forward can't leak past its window. A connect failure
+   * rejects with {@link SshUnreachableError} (the offline-queue's signal,
+   * #84); a single forwarded connection that fails is dropped without sinking
+   * the window. `fn`'s result is returned and its rejection propagates.
+   */
+  async withPortForward<T>(
+    target: SshTarget,
+    remote: PortForwardTarget,
+    fn: (local: { host: string; port: number }) => Promise<T>,
+    options: PortForwardOptions = {},
+  ): Promise<T> {
+    const resolved = this.#resolve(target);
+    const client = await this.#connect(resolved);
+
+    const remoteHost = remote.host ?? LOOPBACK_HOST;
+    const openSockets = new Set<Socket>();
+    const openChannels = new Set<ClientChannel>();
+
+    const server = createServer((socket: Socket) => {
+      openSockets.add(socket);
+      socket.on("close", () => openSockets.delete(socket));
+      // One broken forwarded connection must not take down the whole window.
+      socket.on("error", () => socket.destroy());
+
+      client.forwardOut(
+        LOOPBACK_HOST,
+        addressPort(server),
+        remoteHost,
+        remote.port,
+        (err: Error | undefined, channel: ClientChannel) => {
+          if (err !== undefined) {
+            socket.destroy();
+            return;
+          }
+          // Track the channel too: `socket.pipe(channel)` does not propagate a
+          // socket `destroy()` to the SSH channel, so without this the channel
+          // would linger half-open on the pooled connection across passes.
+          openChannels.add(channel);
+          channel.on("close", () => openChannels.delete(channel));
+          channel.on("error", () => socket.destroy());
+          socket.pipe(channel);
+          channel.pipe(socket);
+        },
+      );
+    });
+
+    try {
+      const port = await listenLoopback(server, options.localPort ?? 0);
+      return await fn({ host: LOOPBACK_HOST, port });
+    } finally {
+      for (const socket of openSockets) socket.destroy();
+      for (const channel of openChannels) channel.destroy();
+      await closeServer(server);
+    }
   }
 
   /** {@link execChecked} against an already-resolved target (resolve once). */
@@ -365,4 +463,34 @@ export class SshTransport {
       connectConfig,
     };
   }
+}
+
+/** The bound TCP port of a listening server (0 before it is listening). */
+function addressPort(server: Server): number {
+  const address = server.address();
+  return typeof address === "object" && address !== null ? address.port : 0;
+}
+
+/** Resolve once `server` is listening on loopback `port`, with its actual port. */
+function listenLoopback(server: Server, port: number): Promise<number> {
+  return new Promise<number>((resolve, reject) => {
+    const onError = (err: Error): void => reject(err);
+    server.once("error", onError);
+    server.listen(port, LOOPBACK_HOST, () => {
+      server.removeListener("error", onError);
+      // Swallow late operational errors so a transient socket fault on the
+      // loopback listener can't surface as an unhandled 'error' that crashes
+      // the process; the forward is best-effort and its consumer reports
+      // failures of its own.
+      server.on("error", () => undefined);
+      resolve(addressPort(server));
+    });
+  });
+}
+
+/** Close `server`, resolving once it has stopped accepting connections. */
+function closeServer(server: Server): Promise<void> {
+  return new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
 }

@@ -30,8 +30,14 @@ export const PUSH_STUB_COMPONENT = "transport/stub";
 export const PUSH_STUB_MESSAGE = "stub transport: would push policy change to client";
 
 /**
- * Which policy mutation triggered a would-be push. Mirrors the #51 CRUD
+ * Which policy mutation triggered a would-be push. Mirrors the #51/#148 CRUD
  * operations one-to-one so a log reader can trace a line back to its cause.
+ *
+ * `budget.*`, `schedule.*`, and `exception.*` are user-scoped (#148): they
+ * change what is enforced for one supervised user, so a real transport would
+ * push to every client that user is linked to — exactly like `user.*`.
+ * Activity / ActivityGroup / membership are *definitions* with no per-client
+ * effect until a budget or schedule references them, so they do not push.
  */
 export type PolicyPushReason =
   | "user.created"
@@ -41,7 +47,16 @@ export type PolicyPushReason =
   | "client.updated"
   | "client.deleted"
   | "link.upserted"
-  | "link.deleted";
+  | "link.deleted"
+  | "budget.created"
+  | "budget.updated"
+  | "budget.deleted"
+  | "schedule.created"
+  | "schedule.updated"
+  | "schedule.deleted"
+  | "exception.created"
+  | "exception.updated"
+  | "exception.deleted";
 
 /**
  * The intended effect of one policy mutation on **one** client — the unit a
@@ -62,8 +77,15 @@ export interface PolicyPushCommand {
   readonly detail: Readonly<Record<string, unknown>>;
 }
 
-/** A user-scoped change reason (affects every client the user is linked to). */
-export type UserPushReason = Extract<PolicyPushReason, `user.${string}`>;
+/**
+ * A change reason that affects every client a single user is linked to: the
+ * `user.*` account changes plus the user-scoped policy changes (`budget.*`,
+ * `schedule.*`, `exception.*`). All fan out the same way.
+ */
+export type UserPushReason = Extract<
+  PolicyPushReason,
+  `user.${string}` | `budget.${string}` | `schedule.${string}` | `exception.${string}`
+>;
 /** A client-scoped change reason (affects that one client). */
 export type ClientPushReason = Extract<PolicyPushReason, `client.${string}`>;
 /** A link-scoped change reason (affects that one user/client pair). */
@@ -73,8 +95,10 @@ export type LinkPushReason = Extract<PolicyPushReason, `link.${string}`>;
  * Commands for a user-level change: one per client the user is linked to.
  *
  * `clientIds` must be resolved by the caller *before* a delete, since the
- * `UserOnClient` links cascade away with the user. A user with no links yields
- * an empty list (nothing is enforced anywhere yet → no push).
+ * `UserOnClient` links cascade away with the user (and a budget/schedule/
+ * exception delete needs its owner's clients resolved before the row is gone).
+ * A user with no links yields an empty list (nothing is enforced anywhere yet →
+ * no push).
  */
 export function userPushCommands(
   reason: UserPushReason,

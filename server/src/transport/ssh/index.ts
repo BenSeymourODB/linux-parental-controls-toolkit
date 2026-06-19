@@ -25,5 +25,7 @@ export {
   type ExecResult,
   type ExecOptions,
   type SshTransportOptions,
+  type PortForwardTarget,
+  type PortForwardOptions,
 } from "./facade.js";
 export { shellQuoteCommand } from "./shell-quote.js";
