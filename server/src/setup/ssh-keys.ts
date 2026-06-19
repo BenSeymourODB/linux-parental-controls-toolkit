@@ -20,7 +20,7 @@
  * elsewhere), no `ssh-keygen` binary is added to the image, no subprocess or
  * REST boundary is involved.
  */
-import { generateKeyPairSync, type JsonWebKey, randomBytes } from "node:crypto";
+import { generateKeyPairSync, randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
@@ -134,8 +134,9 @@ export function generateOpenSshEd25519KeyPair(
   comment: string = DEFAULT_KEY_COMMENT,
 ): OpenSshKeyPair {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
-  const pubJwk = publicKey.export({ format: "jwk" }) as JsonWebKey;
-  const privJwk = privateKey.export({ format: "jwk" }) as JsonWebKey;
+  // Node types `export({ format: "jwk" })` as `JsonWebKey`, so no cast needed.
+  const pubJwk = publicKey.export({ format: "jwk" });
+  const privJwk = privateKey.export({ format: "jwk" });
 
   const publicRaw = rawFromJwkField(pubJwk.x, "x");
   const seed = rawFromJwkField(privJwk.d, "d");
@@ -176,7 +177,9 @@ export interface SshKeyBootstrapResult {
  *
  * Idempotent: once the **private** key file exists this is a no-op — the key is
  * never regenerated, because that would invalidate the public key already
- * authorized on every enrolled client. A genuine filesystem error (e.g. an
+ * authorized on every enrolled client. (Existence is keyed on the private key
+ * alone; a lost-but-not-private `.pub` is not re-derived here, since the pair is
+ * always written together.) A genuine filesystem error (e.g. an
  * unwritable data volume) is thrown rather than swallowed, since it is a real
  * misconfiguration the operator must fix; the caller (`main.ts`) decides
  * whether to degrade or crash.
@@ -190,8 +193,12 @@ export function ensureServerSshKeyPair(options: EnsureSshKeyPairOptions): SshKey
   }
 
   // The key directory holds private material; create it (and any parents)
-  // owner-only. The entrypoint also pre-creates it, so this is usually a no-op.
-  mkdirSync(dirname(privateKeyPath), { recursive: true, mode: 0o700 });
+  // owner-only. `mkdir`'s `mode` is ignored when the directory already exists —
+  // and the entrypoint pre-creates it under the default umask (0755) — so chmod
+  // afterwards to enforce 0700 in that common path too.
+  const keyDir = dirname(privateKeyPath);
+  mkdirSync(keyDir, { recursive: true, mode: 0o700 });
+  chmodSync(keyDir, 0o700);
 
   const pair = generateOpenSshEd25519KeyPair(comment);
 

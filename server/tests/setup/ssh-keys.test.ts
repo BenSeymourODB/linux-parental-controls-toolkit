@@ -5,7 +5,15 @@
  * generated key with `ssh2`'s own parser — the same library the transport
  * facade authenticates with — so we never assert against a live SSH server.
  */
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -50,9 +58,13 @@ describe("generateOpenSshEd25519KeyPair", () => {
     expect(blob).toBe(derivedBlob);
   });
 
-  it("honours a custom comment", () => {
-    const { publicKey } = generateOpenSshEd25519KeyPair("admin@homelab");
+  it("honours a custom comment in both the public line and the private blob", () => {
+    const { privateKey, publicKey } = generateOpenSshEd25519KeyPair("admin@homelab");
     expect(publicKey.trim().endsWith(" admin@homelab")).toBe(true);
+
+    const parsed = parseOrThrow(privateKey);
+    const key = Array.isArray(parsed) ? parsed[0] : parsed;
+    expect(key.comment).toBe("admin@homelab");
   });
 
   it("generates a distinct key on each call", () => {
@@ -101,6 +113,19 @@ describe("ensureServerSshKeyPair", () => {
       publicKeyPath: join(nested, "id_ed25519.pub"),
     });
     expect(result.generated).toBe(true);
+    expect(statSync(nested).mode & 0o777).toBe(0o700);
+  });
+
+  it("tightens a pre-existing loose key directory to 0700", () => {
+    // The entrypoint pre-creates the dir under the default umask (e.g. 0755);
+    // the bootstrap must still end up at 0700.
+    const nested = join(dir, "secrets", "ssh");
+    mkdirSync(nested, { recursive: true });
+    chmodSync(nested, 0o755);
+    ensureServerSshKeyPair({
+      privateKeyPath: join(nested, "id_ed25519"),
+      publicKeyPath: join(nested, "id_ed25519.pub"),
+    });
     expect(statSync(nested).mode & 0o777).toBe(0o700);
   });
 
