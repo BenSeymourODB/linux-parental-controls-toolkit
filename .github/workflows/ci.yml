@@ -101,10 +101,20 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Install server deps (for shared /api types)
+        # The frontend consumes the inferred zod DTO types from server/src via
+        # type-only imports (CLAUDE.md → "Validation / DTOs"; #53). `svelte-check`
+        # resolves the server graph's bare imports (zod, drizzle-orm) from
+        # server/node_modules, so the server package must be installed first.
+        run: |
+          if [ -f server/package.json ]; then
+            cd server && npm ci
+          fi
+
       - name: Build SvelteKit frontend (/admin + /app)
         run: |
           if [ -f server/frontend/package.json ]; then
-            cd server/frontend && npm ci && npm run build
+            cd server/frontend && npm ci && npm test && npm run build
           else
             echo "Frontend not yet scaffolded — skipping"
           fi
