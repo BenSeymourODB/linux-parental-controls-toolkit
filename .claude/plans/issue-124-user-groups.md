@@ -31,16 +31,18 @@ Roadmap: `docs/roadmap.md` → Phase 2. Builds on #51 (policy CRUD), #63
   409 on name collision, 404 on missing.
 - Route tests via `app.inject()`.
 
-### Phase 3 — group-targeting on Schedule/Exception + resolution helper
+### Phase 3 — group-targeting on Schedule/Exception + resolution helper — DEFERRED → #182
+Deferred out of this PR. The user-over-group resolver should compose with the
+effective-policy resolution engine (#143), which is in-flight as **PR #176**;
+the roadmap builds that engine precisely so downstream work "isn't coded
+against an interim contract." Building the group resolver now would couple it
+to that interim contract, so it lands after #176 merges. Tracked in **#182**:
 - Migration B: relax `schedules.user_id` / `exceptions.user_id` to nullable;
-  add nullable `user_group_id` FK; CHECK exactly-one-of(user_id, user_group_id);
-  add `(user_group_id, ordinal)` / `(user_group_id, expires_at)` indexes.
-- Repository: `listGroupSchedules`, group-scoped create; extend
-  `ScheduleCreate`/`ExceptionCreate` with `userGroupId` (XOR userId).
+  add nullable `user_group_id` FK; CHECK exactly-one-of(user_id, user_group_id)
+  (or a separate `group_schedules` table — the open design call in #182).
 - `gatherUserScheduleRules(db, userId)` → merged precedence-ordered list
-  (own rules first, then inherited group rules), re-sequenced ordinals so it
-  drops straight into `resolveEffectiveRule`. Tagged with `source`
-  (user vs group) for the deferred inherited-vs-local UI.
+  (own rules first, then inherited group rules), re-sequenced so it drops
+  straight into `resolveEffectiveRule`, tagged with `source` (user vs group).
 - DTO/route extension to create group-targeted rules; tests.
 
 ## Deferred (tracked)
