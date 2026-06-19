@@ -164,12 +164,22 @@ describe("AuditingTransport.exec", () => {
     expect(sink.entries[0]).toMatchObject({ outcome: "ok", exitCode: 0 });
   });
 
-  it("records 'failed' for a non-zero exit (exec does not throw)", async () => {
+  it("records 'failed' with a synthesised diagnostic for a non-zero exit (exec does not throw)", async () => {
     const { inner, sink, transport } = setup();
-    inner.execResult = { stdout: "", stderr: "no", code: 1, signal: null };
+    inner.execResult = { stdout: "", stderr: "boom", code: 1, signal: null };
     const result = await transport.exec(TARGET, ["false"]);
     expect(result.code).toBe(1);
-    expect(sink.entries[0]).toMatchObject({ outcome: "failed", exitCode: 1, errorMessage: null });
+    expect(sink.entries[0]).toMatchObject({ outcome: "failed", exitCode: 1, signal: null });
+    expect(sink.entries[0]?.errorMessage).toContain("exit code 1");
+    expect(sink.entries[0]?.errorMessage).toContain("boom");
+  });
+
+  it("records a signal-kill (code null) with the signal in the diagnostic", async () => {
+    const { inner, sink, transport } = setup();
+    inner.execResult = { stdout: "", stderr: "", code: null, signal: "SIGKILL" };
+    await transport.exec(TARGET, ["sleep"]);
+    expect(sink.entries[0]).toMatchObject({ outcome: "failed", exitCode: null, signal: "SIGKILL" });
+    expect(sink.entries[0]?.errorMessage).toContain("SIGKILL");
   });
 
   it("forwards exec options to the inner transport", async () => {

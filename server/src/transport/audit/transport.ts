@@ -66,10 +66,27 @@ interface AuditOutcomeFields {
   readonly errorMessage: string | null;
 }
 
-/** Truncate an error's message for storage, never throwing on a weird `err`. */
-function errorMessage(err: unknown): string {
-  const message = err instanceof Error ? err.message : String(err);
+/** Truncate a message for storage at {@link MAX_ERROR_MESSAGE}. */
+function truncate(message: string): string {
   return message.length > MAX_ERROR_MESSAGE ? `${message.slice(0, MAX_ERROR_MESSAGE)}…` : message;
+}
+
+/** Stringify-and-truncate an error message, never throwing on a weird `err`. */
+function errorMessage(err: unknown): string {
+  return truncate(err instanceof Error ? err.message : String(err));
+}
+
+/**
+ * A diagnostic for a non-zero `exec()` result. `exec()` does not throw on a
+ * failing command, so its `failed` audit entry would otherwise carry no
+ * context; this captures the exit status plus any stderr, matching the message
+ * every other `failed` row gets from {@link fromError}.
+ */
+function nonZeroExitMessage(result: ExecResult): string {
+  const status = result.code !== null ? `exit code ${result.code}` : `signal ${result.signal}`;
+  const stderr = result.stderr.trim();
+  const base = `Command exited non-zero (${status})`;
+  return truncate(stderr.length > 0 ? `${base}: ${stderr}` : base);
 }
 
 /** Map a thrown transport error to its audit outcome + captured exit status. */
@@ -129,16 +146,18 @@ export class AuditingTransport implements AuditableTransport {
   ): Promise<ExecResult> {
     return this.#run(target, argv, async () => {
       const result = await this.#inner.exec(target, argv, options);
-      return {
-        value: result,
-        fields: {
-          // exec() does not throw on a non-zero exit, so classify from the code.
-          outcome: result.code === 0 ? "ok" : "failed",
-          exitCode: result.code,
-          signal: result.signal,
-          errorMessage: null,
-        },
-      };
+      // exec() does not throw on a non-zero exit, so classify from the code and
+      // synthesise a diagnostic so a failed unchecked command isn't context-free.
+      const fields: AuditOutcomeFields =
+        result.code === 0
+          ? { outcome: "ok", exitCode: 0, signal: result.signal, errorMessage: null }
+          : {
+              outcome: "failed",
+              exitCode: result.code,
+              signal: result.signal,
+              errorMessage: nonZeroExitMessage(result),
+            };
+      return { value: result, fields };
     });
   }
 

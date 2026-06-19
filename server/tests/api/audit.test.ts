@@ -119,6 +119,16 @@ describe("GET /api/audit", () => {
     expect(second.json().entries.map((e: { reason: string }) => e.reason)).toEqual(["r2", "r1"]);
   });
 
+  it("returns an empty page with a null cursor past the end of the log", async () => {
+    seed(2, (i) => ({ context: { reason: `r${i}` } }));
+    const all = await auth({ method: "GET", url: "/api/audit" });
+    const oldestId = all.json().entries.at(-1).id;
+    const past = await auth({ method: "GET", url: `/api/audit?before=${oldestId}` });
+    const body = past.json();
+    expect(body.entries).toEqual([]);
+    expect(body.nextCursor).toBeNull();
+  });
+
   it("filters by clientId", async () => {
     sink.record(entry({ context: { clientId: 1 } }));
     sink.record(entry({ context: { clientId: 2 } }));
