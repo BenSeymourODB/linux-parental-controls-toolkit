@@ -15,6 +15,19 @@ export {
   ActivityWatchUnreachableError,
 } from "./errors.js";
 export {
+  runTelemetryPull,
+  scheduleTelemetryPull,
+  probeAwServer,
+  isValidCronPattern,
+  type TelemetryLogger,
+  type TelemetryClient,
+  type TelemetryConsumer,
+  type TelemetryConsumeContext,
+  type TelemetryPullDeps,
+  type TelemetryPullResult,
+  type TelemetryScheduleOptions,
+} from "./telemetry.js";
+export {
   awAfkDataSchema,
   awBucketSchema,
   awBucketsResponseSchema,

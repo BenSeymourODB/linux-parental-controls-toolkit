@@ -17,6 +17,7 @@ describe("loadSettings", () => {
     expect(settings.secretKey).toBeUndefined();
     expect(settings.ansibleDir).toBe("/data/ansible");
     expect(settings.adguard).toEqual({ mode: "disabled" });
+    expect(settings.telemetry).toEqual({ pullCron: "*/5 * * * *", pullConcurrency: 4 });
   });
 
   it("honours an explicit PCT_ANSIBLE_DIR", () => {
@@ -186,6 +187,30 @@ describe("loadSettings", () => {
           PCT_ADGUARD_ADMIN_PORT: "not-a-port",
         }),
       ).toThrow(SettingsError);
+    });
+  });
+
+  describe("PCT_TELEMETRY_*", () => {
+    it("honours an explicit cron pattern and concurrency", () => {
+      const settings = loadSettings({
+        PCT_TELEMETRY_PULL_CRON: "0 */2 * * *",
+        PCT_TELEMETRY_PULL_CONCURRENCY: "8",
+      });
+
+      expect(settings.telemetry).toEqual({ pullCron: "0 */2 * * *", pullConcurrency: 8 });
+    });
+
+    it("rejects an invalid cron pattern with a readable error", () => {
+      expect(() => loadSettings({ PCT_TELEMETRY_PULL_CRON: "not a cron" })).toThrow(SettingsError);
+      expect(() => loadSettings({ PCT_TELEMETRY_PULL_CRON: "not a cron" })).toThrow(
+        /valid cron pattern/,
+      );
+    });
+
+    it("rejects a non-positive or non-numeric concurrency", () => {
+      expect(() => loadSettings({ PCT_TELEMETRY_PULL_CONCURRENCY: "0" })).toThrow(SettingsError);
+      expect(() => loadSettings({ PCT_TELEMETRY_PULL_CONCURRENCY: "-3" })).toThrow(SettingsError);
+      expect(() => loadSettings({ PCT_TELEMETRY_PULL_CONCURRENCY: "many" })).toThrow(SettingsError);
     });
   });
 });
