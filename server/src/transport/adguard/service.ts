@@ -236,7 +236,15 @@ export class AdGuardService {
     return this.status;
   }
 
-  /** Build the REST client once (lazily), resolving credentials on first use. */
+  /**
+   * Build the REST client once (lazily), resolving credentials on first use.
+   *
+   * Credentials are captured at first successful build and cached for the
+   * service's lifetime, so a rotated `PCT_ADGUARD_*_FILE` is only picked up on
+   * process restart — there is no live secret reload here. (A *failed*
+   * resolution is not cached: the throw precedes the assignment, so the next
+   * preflight retries the read.) The ongoing-use consumer (#97) inherits this.
+   */
   async #ensureClient(adguard: ExternalAdGuardSettings): Promise<AdGuardHomeClient> {
     if (this.#client !== null) return this.#client;
     const auth = await resolveAdGuardAuth(adguard, {

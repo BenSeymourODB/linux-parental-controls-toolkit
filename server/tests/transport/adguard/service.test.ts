@@ -134,16 +134,22 @@ describe("AdGuardService — external preflight", () => {
     expect(logger.error).toHaveBeenCalledTimes(1);
   });
 
-  it("auth_failed: a 401 maps to auth_failed", async () => {
+  it("auth_failed: a 401 maps to auth_failed and is logged loudly", async () => {
+    const logger = recordingLogger();
     const svc = createAdGuardService(external(), deps(statusFetch({}, { ok: false, status: 401 })));
-    const status = await svc.runPreflight();
+    const status = await svc.runPreflight(logger);
     expect(status.health).toBe("auth_failed");
+    expect(status.detail).toBeTypeOf("string");
+    expect(logger.error).toHaveBeenCalledTimes(1);
   });
 
-  it("error: a malformed status body maps to error", async () => {
+  it("error: a malformed status body maps to error and is logged loudly", async () => {
+    const logger = recordingLogger();
     const svc = createAdGuardService(external(), deps(statusFetch({ not: "a status" })));
-    const status = await svc.runPreflight();
+    const status = await svc.runPreflight(logger);
     expect(status.health).toBe("error");
+    expect(status.detail).toBeTypeOf("string");
+    expect(logger.error).toHaveBeenCalledTimes(1);
   });
 
   it("error: an unreadable credential file maps to error and builds no client", async () => {
