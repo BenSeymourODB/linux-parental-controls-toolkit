@@ -771,7 +771,9 @@ export function registerPolicyRoutes(scope: FastifyInstance): void {
       if (existing === undefined) {
         throw new ApiError(404, "not_found", `Group schedule ${request.params.id} not found`);
       }
-      // Resolve members before deleting so the push still fans out.
+      // Build the fan-out from the row's group before the delete (members are
+      // unaffected by a rule delete, so order is not strictly required here —
+      // kept ahead of the write to mirror the user-DELETE pattern).
       const commands = groupMemberPushCommands(scope.db, "schedule.deleted", existing.userGroupId, {
         groupScheduleId: existing.id,
         userGroupId: existing.userGroupId,
