@@ -112,4 +112,32 @@ describe("resolveWeeklyAllowedWindows", () => {
     expect(monday.get(1)).toEqual([{ start: 540, end: 720 }]);
     expect(sunday.get(1)).toEqual([{ start: 540, end: 720 }]);
   });
+
+  it("anchors and projects correctly across a spring-forward DST week", () => {
+    // 2024-03-10 is the US spring-forward day; the reference is the Sunday of
+    // that ISO week (Mon 2024-03-04 … Sun 2024-03-10). Wall-clock windows are
+    // DST-independent, so the keying and windows must be unaffected.
+    const schedules: ScheduleRule[] = [
+      mkRule({
+        id: 1,
+        ordinal: 0,
+        action: "allow",
+        recurrenceDays: WEEKDAYS,
+        recurrenceStartMinute: 16 * 60,
+        recurrenceEndMinute: 18 * 60,
+      }),
+      mkRule({ id: 2, ordinal: 1, action: "deny" }),
+    ];
+    const byWeekday = resolveWeeklyAllowedWindows({
+      schedules,
+      tz: "America/New_York",
+      reference: new Date("2024-03-10T16:00:00Z"), // after the 02:00→03:00 jump
+    });
+    expect([...byWeekday.keys()].sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    for (const weekday of [1, 2, 3, 4, 5]) {
+      expect(byWeekday.get(weekday)).toEqual([{ start: 960, end: 1080 }]);
+    }
+    expect(byWeekday.get(6)).toEqual([]);
+    expect(byWeekday.get(7)).toEqual([]);
+  });
 });
