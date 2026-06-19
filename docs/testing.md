@@ -404,7 +404,8 @@ services:
       - PGID=1000
       - USER_NAME=pctagent
       - PUBLIC_KEY_FILE=/pubkey/id_ed25519.pub
-    ports: ["2222:22"]
+    # linuxserver/openssh-server's sshd listens on 2222 inside the container.
+    ports: ["2222:2222"]
     volumes:
       - ./server/tests/stubs:/usr/local/bin:ro
       - ./.int-ssh-key:/pubkey:ro
