@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Admin · Grant ledger</title>
+<link rel="stylesheet" href="../assets/styles.css" />
+<style>
+  .filters { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .seg { display:flex; background:var(--surface-3); border-radius:8px; padding:3px; }
+  .seg a { padding:5px 12px; border-radius:6px; font-size:12.5px; font-weight:600; color:var(--muted); }
+  .seg a.active { background:var(--surface); color:var(--text); box-shadow:var(--shadow); }
+  .src-cal { color:var(--grape); font-weight:600; }
+  .grant-panel { width:330px; flex:none; }
+</style>
+</head>
+<body>
+<div class="mock-bar"><span class="tag">MOCK-UP</span><span>Admin · Grant ledger (immutable) &nbsp;·&nbsp; <a href="../index.html">↑ all mock-ups</a></span></div>
+<div class="admin">
+  <nav class="admin-nav">
+    <div class="brand"><span class="logo">🛡️</span> ParentCtl</div>
+    <a href="dashboard.html"><span class="ic">▦</span> Overview</a>
+    <a href="user-detail.html"><span class="ic">👤</span> Users</a>
+    <a href="policy-editor.html"><span class="ic">⚖︎</span> Policies</a>
+    <a class="active" href="grants-ledger.html"><span class="ic">🎁</span> Grants</a>
+    <a href="clients.html"><span class="ic">🖥️</span> Clients</a>
+    <div class="nav-sec">Configure</div>
+    <a href="integrations.html"><span class="ic">🔌</span> Integrations</a>
+    <a href="integrations.html"><span class="ic">🔔</span> Notifications</a>
+    <a href="integrations.html"><span class="ic">🌐</span> DNS / AdGuard</a>
+  </nav>
+
+  <div class="admin-main">
+    <header class="admin-top">
+      <div><div class="crumb">Grants</div><h1>Grant ledger</h1></div>
+      <div class="row ai-center"><div class="search">🔍 <input placeholder="Search source_ref, reason…" /></div><button class="btn primary">＋ Grant time</button></div>
+    </header>
+
+    <div class="admin-content row" style="align-items:flex-start;">
+      <div class="grow col gap-24">
+
+        <div class="row gap-8" style="flex-wrap:wrap;">
+          <div class="card pad stat" style="flex:1;"><div class="lbl">Granted today</div><div class="num">+1h 15m</div></div>
+          <div class="card pad stat" style="flex:1;"><div class="lbl">Active grants</div><div class="num">3</div></div>
+          <div class="card pad stat" style="flex:1;"><div class="lbl">From calendar</div><div class="num src-cal">2</div></div>
+          <div class="card pad stat" style="flex:1;"><div class="lbl">Revoked (30d)</div><div class="num">1</div></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <div class="filters">
+              <div class="seg"><a class="active">All</a><a>Active</a><a>Expired</a><a>Revoked</a></div>
+              <span class="seg"><a class="active">Everyone</a><a>Alice</a><a>Bob</a></span>
+            </div>
+            <span class="sub">append-only · revocation = new row, never an edit</span>
+          </div>
+          <table class="tbl">
+            <thead><tr><th>When</th><th>User</th><th>Scope</th><th>Amount</th><th>Source</th><th>Reason / source_ref</th><th>Expires</th><th>State</th><th></th></tr></thead>
+            <tbody>
+              <tr>
+                <td class="nowrap">16 Jun 14:32</td>
+                <td><span class="pill brand" style="padding:1px 8px;">Alice</span></td>
+                <td>overall</td>
+                <td><strong>+30m</strong></td>
+                <td><span class="src-cal">📅 calendar</span></td>
+                <td>Cleaned room<br><span class="mono muted">calendar:chore:42a9c…</span></td>
+                <td class="nowrap">23:59</td>
+                <td><span class="pill ok"><span class="dot"></span>active</span></td>
+                <td><button class="btn ghost sm danger">revoke</button></td>
+              </tr>
+              <tr>
+                <td class="nowrap">16 Jun 12:10</td>
+                <td><span class="pill brand" style="padding:1px 8px;">Bob</span></td>
+                <td>activity · YouTube</td>
+                <td><strong>+45m</strong></td>
+                <td><span class="src-cal">📅 calendar</span></td>
+                <td>Finished homework<br><span class="mono muted">calendar:chore:7d11b…</span></td>
+                <td class="nowrap">23:59</td>
+                <td><span class="pill ok"><span class="dot"></span>active</span></td>
+                <td><button class="btn ghost sm danger">revoke</button></td>
+              </tr>
+              <tr>
+                <td class="nowrap">16 Jun 09:05</td>
+                <td><span class="pill brand" style="padding:1px 8px;">Alice</span></td>
+                <td>group · Games</td>
+                <td><strong>+15m</strong></td>
+                <td>👤 admin</td>
+                <td>“just because” <span class="muted">— Mum</span></td>
+                <td class="nowrap">23:59</td>
+                <td><span class="pill ok"><span class="dot"></span>active</span></td>
+                <td><button class="btn ghost sm danger">revoke</button></td>
+              </tr>
+              <tr style="opacity:0.6;">
+                <td class="nowrap">15 Jun 19:40</td>
+                <td><span class="pill" style="padding:1px 8px;">Bob</span></td>
+                <td>overall</td>
+                <td>+30m</td>
+                <td>👤 admin</td>
+                <td>movie night</td>
+                <td class="nowrap">15 Jun 23:59</td>
+                <td><span class="pill"><span class="dot"></span>expired</span></td>
+                <td></td>
+              </tr>
+              <tr style="opacity:0.6;">
+                <td class="nowrap">15 Jun 16:22</td>
+                <td><span class="pill" style="padding:1px 8px;">Alice</span></td>
+                <td>activity · YouTube</td>
+                <td><s>+20m</s></td>
+                <td><span class="src-cal">📅 calendar</span></td>
+                <td>duplicate chore submit<br><span class="mono muted">revoked 16:24 by admin</span></td>
+                <td class="nowrap">—</td>
+                <td><span class="pill bad"><span class="dot"></span>revoked</span></td>
+                <td></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="muted" style="font-size:12px;">Idempotency: a repeated <span class="mono">source_ref</span> from the calendar is a no-op, so a retried webhook never double-grants. See <span class="mono">docs/architecture.md</span> → External integrations.</p>
+      </div>
+
+      <!-- grant panel -->
+      <div class="card grant-panel">
+        <div class="card-head"><h3>＋ Grant time</h3></div>
+        <div class="card-body col">
+          <div class="col" style="gap:5px;"><label style="font-size:11.5px;font-weight:700;text-transform:uppercase;color:var(--faint);">User</label>
+            <div class="row gap-8"><button class="btn sm primary">Alice</button><button class="btn sm">Bob</button><button class="btn sm">Chloe</button></div>
+          </div>
+          <div class="col" style="gap:5px;"><label style="font-size:11.5px;font-weight:700;text-transform:uppercase;color:var(--faint);">Scope</label>
+            <select class="btn" style="width:100%;"><option>Overall screen time</option><option>Games (group)</option><option>YouTube (domain)</option></select>
+          </div>
+          <div class="col" style="gap:5px;"><label style="font-size:11.5px;font-weight:700;text-transform:uppercase;color:var(--faint);">Amount</label>
+            <div class="row gap-8"><button class="btn sm">+15m</button><button class="btn sm primary">+30m</button><button class="btn sm">+1h</button></div>
+          </div>
+          <div class="col" style="gap:5px;"><label style="font-size:11.5px;font-weight:700;text-transform:uppercase;color:var(--faint);">Expires</label>
+            <select class="btn" style="width:100%;"><option>End of today (23:59)</option><option>End of week</option></select>
+          </div>
+          <div class="col" style="gap:5px;"><label style="font-size:11.5px;font-weight:700;text-transform:uppercase;color:var(--faint);">Reason</label>
+            <input class="btn" style="width:100%;text-align:left;font-weight:400;" placeholder="optional note (shows in child's toast)" />
+          </div>
+          <button class="btn primary" style="justify-content:center;">Grant +30m to Alice</button>
+          <p class="muted" style="font-size:11.5px;">Recomputes today's budget, pushes via timekpra, and fires a <span class="mono">grant.applied</span> toast on Alice's desktop.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

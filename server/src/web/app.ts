@@ -5,13 +5,29 @@
  * construct isolated instances and exercise routes via `app.inject()`
  * without binding a socket — see docs/testing.md → "HTTP routes".
  *
- * This is the minimal Phase 1 slice: a "hello, no policy yet" landing
- * route and a `/healthz` probe, plus the shared pino logging configuration
- * (#11). The policy/api/integrations mounts land in later phases.
+ * Beyond the Phase 1 slice — a "hello, no policy yet" landing route and a
+ * `/healthz` probe, plus the shared pino logging configuration (#11) — this
+ * now also mounts the JSON API at `/api` (#50) and the prerendered SvelteKit
+ * build at `/admin` and `/app` (#40). The policy/integrations routes land on
+ * top of the `/api` conventions in later phases.
  */
 import Fastify, { type FastifyInstance } from "fastify";
+import { registerApi } from "../api/index.js";
 import { loadSettings, type Settings } from "../config.js";
+import { createDb, type PolicyDb } from "../policy/db.js";
+import { registerFrontend } from "./frontend.js";
 import { REQUEST_ID_HEADER, buildLoggerOptions, genRequestId, type LogStream } from "./logger.js";
+
+declare module "fastify" {
+  interface FastifyInstance {
+    /**
+     * The shared policy-store connection (#49). Routes and the policy service
+     * read and write through this single Drizzle handle. Created from settings
+     * (migrated on boot) unless one is injected via {@link BuildAppOptions.db}.
+     */
+    db: PolicyDb;
+  }
+}
 
 /** Options for {@link buildApp}. */
 export interface BuildAppOptions {
@@ -22,6 +38,13 @@ export interface BuildAppOptions {
    * precedence over the `pino-pretty` transport.
    */
   loggerStream?: LogStream;
+  /**
+   * Inject a policy-store handle (tests pass the in-memory `testDb()`). When
+   * omitted, {@link buildApp} opens and migrates one from `settings` via
+   * {@link createDb} and owns its lifecycle — closing it on `app.close()`. An
+   * injected handle is left open; its owner closes it.
+   */
+  db?: PolicyDb;
 }
 
 /**
@@ -42,6 +65,16 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     genReqId: genRequestId,
   });
 
+  // Open (and migrate) the policy store unless a handle was injected. buildApp
+  // owns only the handle it creates: that one is closed on shutdown; an
+  // injected handle's lifecycle belongs to its provider (no double-close).
+  const db = options.db ?? createDb(settings);
+  const ownsDb = options.db === undefined;
+  app.decorate("db", db);
+  app.addHook("onClose", async () => {
+    if (ownsDb) db.$client.close();
+  });
+
   app.get("/", async (_request, reply) => {
     return reply.type("text/plain").send("hello, no policy yet");
   });
@@ -49,6 +82,18 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   app.get("/healthz", async () => {
     return { status: "ok" };
   });
+
+  // Mount the JSON API at /api (#50). Encapsulated: the zod validation hook,
+  // the shared error envelope, and the /api not-found envelope apply only
+  // within this prefix, leaving /, /healthz, /admin and /app untouched. Auth
+  // (#52) is wired inside this scope and needs the settings (PCT_SECRET_KEY,
+  // first-admin bootstrap) threaded through.
+  registerApi(app, settings);
+
+  // Serve the prerendered SvelteKit build at /admin and /app (#40). Skipped
+  // (with a warning) when the build directory is absent, so /, /healthz, and
+  // unknown routes are unaffected.
+  registerFrontend(app, settings);
 
   return app;
 }

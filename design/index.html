@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Design mock-ups · Parental Controls Toolkit</title>
+<link rel="stylesheet" href="assets/styles.css" />
+<style>
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 40px 24px 80px; }
+  .hero h1 { font-size: 30px; }
+  .hero p { color: var(--muted); max-width: 64ch; margin-top: 10px; }
+  .surface-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 10px; }
+  .tile { display: block; padding: 16px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--surface); }
+  .tile:hover { border-color: var(--border-strong); text-decoration: none; box-shadow: var(--shadow); }
+  .tile .nm { font-weight: 650; color: var(--text); }
+  .tile .ds { font-size: 12.5px; color: var(--muted); margin-top: 3px; }
+  .surface-head { display: flex; align-items: baseline; gap: 10px; margin: 34px 0 12px; }
+  .surface-head h2 { font-size: 18px; }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); }
+  @media (max-width: 760px){ .surface-grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="mock-bar">
+  <span class="tag">MOCK-UP</span>
+  <span>Static HTML design studies — not the shipping product. See <a href="../README.md">repo README</a> &amp; <code>design/README.md</code>.</span>
+</div>
+
+<div class="wrap">
+  <div class="hero">
+    <span class="pill brand">Parental Controls Toolkit</span>
+    <h1 style="margin-top:12px;">UI / UX design mock-ups</h1>
+    <p>
+      Three consumer surfaces feed one Fastify dashboard and one policy store
+      (see <code>docs/architecture.md</code>). These plain-HTML studies explore
+      what each surface should look like and feel like before the SvelteKit and
+      desktop-app work lands. The supervised-user <strong>client dashboard</strong>
+      is new territory — proposed here for the first time and written up in
+      <code>design/README.md</code>.
+    </p>
+  </div>
+
+  <div class="surface-head">
+    <h2>1 · Admin</h2><span class="pill info">/admin · desktop · SvelteKit</span>
+    <span class="muted" style="font-size:12.5px;">Roadmap Phase 2 / 5 / 10</span>
+  </div>
+  <div class="surface-grid">
+    <a class="tile" href="admin/dashboard.html"><div class="nm">Overview dashboard</div><div class="ds">All supervised users at a glance, live burndown, client &amp; agent health.</div></a>
+    <a class="tile" href="admin/user-detail.html"><div class="nm">User detail</div><div class="ds">Per-user burndown charts + ActivityWatch usage timeline + budgets.</div></a>
+    <a class="tile" href="admin/policy-editor.html"><div class="nm">Policy editor</div><div class="ds">Budgets, schedules, activity groups, drag-to-order rules.</div></a>
+    <a class="tile" href="admin/grants-ledger.html"><div class="nm">Grant ledger</div><div class="ds">Immutable record of every grant; grant time; revoke.</div></a>
+    <a class="tile" href="admin/clients.html"><div class="nm">Clients</div><div class="ds">Enrolled machines, agent liveness, enrol-a-client flow.</div></a>
+    <a class="tile" href="admin/integrations.html"><div class="nm">Integrations &amp; DNS</div><div class="ds">Calendar API tokens, AdGuard mode, notification defaults.</div></a>
+  </div>
+
+  <div class="surface-head">
+    <h2>2 · App (PWA)</h2><span class="pill grape">/app · mobile · SvelteKit PWA</span>
+    <span class="muted" style="font-size:12.5px;">Roadmap Phase 9</span>
+  </div>
+  <div class="surface-grid">
+    <a class="tile" href="app/parent-home.html"><div class="nm">Parent home</div><div class="ds">All kids on one phone screen; tap to grant time fast.</div></a>
+    <a class="tile" href="app/grant.html"><div class="nm">Grant time</div><div class="ds">Touch-friendly: pick child, scope, amount, reason.</div></a>
+    <a class="tile" href="app/child-status.html"><div class="nm">Child status</div><div class="ds">PIN-scoped view of just my own time left today.</div></a>
+  </div>
+
+  <div class="surface-head">
+    <h2>3 · Client</h2><span class="pill ok">supervised desktop · Cinnamon · TS app</span>
+    <span class="muted" style="font-size:12.5px;">NEW — proposed, see README</span>
+  </div>
+  <div class="surface-grid">
+    <a class="tile" href="client/dashboard.html"><div class="nm">My Time (dashboard)</div><div class="ds">The new piece: what the child sees — time left across apps/categories, today's timeline, schedule, rewards.</div></a>
+    <a class="tile" href="client/notifications.html"><div class="nm">Toasts &amp; countdown</div><div class="ds">The notification states from docs/client-notifications.md.</div></a>
+  </div>
+
+  <div class="card pad" style="margin-top:36px;">
+    <div class="section-title">Design principles carried through every surface</div>
+    <div class="legend" style="margin-top:12px;">
+      <span>🟢 <strong>No surprises</strong> — the child can always see the rules and what's coming.</span>
+      <span>🤝 <strong>Not punitive</strong> — framed as "time left", "earn more", never "blocked / denied".</span>
+      <span>🔭 <strong>Orchestration, not enforcement</strong> — UI reflects upstream tools, doesn't reinvent them.</span>
+      <span>📱 <strong>One API</strong> — every surface reads/writes the same <code>/api/*</code> contract.</span>
+    </div>
+  </div>
+</div>
+</body>
+</html>

@@ -48,7 +48,10 @@ and, later, the PWA and external integrators).
 
 - Implement the SQLite schema for `User`, `Client`, `UserOnClient`,
   `Activity`, `ActivityGroup`, `Budget`, `Schedule`, `Exception`,
-  `Grant`, `IntegrationToken`.
+  `Grant`, `IntegrationToken`. `User` carries a nullable `tz` column
+  (timezone strategy decided in
+  [`docs/adr/0001-budget-timezone.md`](adr/0001-budget-timezone.md);
+  UTC internally, server-default TZ with per-user overrides).
 - drizzle-kit migrations.
 - Single-admin local password auth (Argon2) for the admin UI.
 - **`/api/*` JSON endpoints** for the full policy model (the admin UI
@@ -58,6 +61,19 @@ and, later, the PWA and external integrators).
   budgets, schedules. Talks only to `/api/*` — the same contract the
   PWA and integrators use (no privileged in-process shortcuts).
 - No transport integration yet; all "push" actions are stubbed to log.
+- **Recurrence + date-scoping decision (foundational).** Settle *how*
+  time-varying policy is represented before the schedule/budget CRUD and
+  editors are built against the uniform-only model — captured as
+  `docs/adr/0005-recurrence-and-date-scoping.md`
+  ([#139](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/139)).
+  Then **reserve the schema columns** it implies (recurrence representation
+  on `Schedule`; `effective_from`/`effective_to` on `Exception`), with
+  "no recurrence = always-on" as the degenerate default so there is no
+  later migration
+  ([#146](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/146)).
+  Only the *decision* and column reservation live here; the *implementation*
+  of recurring/date-specific behaviour is Phase 4 and Phase 13. (Pulled
+  forward from Phase 13 because it shapes the most central tables.)
 
 ## Phase 3 — Client install script (Linux Mint)
 
@@ -68,6 +84,11 @@ Goal: enrolling a fresh Mint client is one command.
 - `pct-agent` user provisioning + scoped sudoers.
 - ActivityWatch + Timekpr-nExT + e2guardian install and baseline config.
 - Self-test that runs at the end of the script.
+- Report the installed `pct-client` agent version and managed-tool
+  versions in the enrol payload, and reserve the version columns on
+  `Client`, so the fleet-update work has a version inventory to diff
+  against from day one (pulled forward from Phase 14;
+  [#164](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/164)).
 
 ## Phase 4 — SSH + `timekpra` transport
 
@@ -76,9 +97,25 @@ Goal: dashboard pushes overall session limits to clients.
 - ssh2-based transport facade.
 - `timekpra` invocations for: set daily/weekly/monthly limits, set
   allowed hours, set PlayTime configuration.
-- Offline-queue: changes for offline clients persisted and replayed on
-  next reachable probe.
+- [x] Offline-queue: changes for offline clients persisted and replayed on
+  next reachable probe
+  ([#84](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/84)).
+  The durable store + coalescing + drain/replay loop + croner scheduler land
+  here against injected SSH executor/probe seams; the live wiring activates
+  with the `timekpra` push (#83) and the entrypoint's SSH-key bootstrap (#39).
 - Audit log of every command issued.
+- Recurring day-of-week time-windows on `Schedule` (allow/deny/extend on
+  chosen weekdays between start/end times), pushed as Timekpr-nExT
+  allowed-hours (and e2guardian window swaps in Phase 6)
+  ([#140](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/140)).
+- Effective-policy resolution engine + `GET /api/.../effective?date=…`
+  preview — the single "what applies for user U on day D" computation that
+  enforcement, the burndown views, and the save-and-push diff all read;
+  built here so time-window enforcement isn't coded against an interim
+  contract, and extended later by weekday budgets and date overrides
+  ([#143](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/143)).
+  (Both pulled forward from Phase 13; they depend only on the Phase 2
+  decision + column reservation.)
 
 ## Phase 5 — ActivityWatch telemetry pull
 
@@ -167,6 +204,12 @@ expiry, lock + grant-unlock on overall-screen-time expiry.
   the client with the rest of policy.
 - Admin UI under `/admin/notifications` to set the per-user sound
   profile, master enable/disable, and grace-period override.
+- Bake a **version handshake + N-1 compatibility window** into the bridge
+  ↔ `/api/events/stream` handshake (aligned with `/api/meta`'s
+  `apiVersion`), so a later upgraded server can keep talking to clients
+  that haven't updated yet. Cheap in the handshake now, impossible to
+  retrofit onto already-deployed clients (pulled forward from Phase 14;
+  [#165](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/165)).
 
 ## Phase 8c — Lockout / grant-unlock flow
 
@@ -225,10 +268,171 @@ so chore/calendar completions can grant screen-time rewards.
 ## Phase 11 — Hardening and polish
 
 - Reverse-proxy + TLS instructions for non-LAN deployments.
-- Multi-admin / OIDC option.
-- Backup/restore utility script.
+- Multi-admin / OIDC option. This is the first step beyond the
+  single-admin Argon2 model of Phase 2; evaluate a managed TypeScript
+  auth library (e.g. [Better-auth](https://www.better-auth.com/),
+  Fastify-compatible, Drizzle adapter) here rather than extending the
+  hand-rolled single-admin login. See `docs/server-deployment.md` →
+  "Authentication" and stretch epic #24 → #26.
+- Backup/restore utility script. Extend it with an **automatic
+  pre-migration DB snapshot** taken on boot whenever migrations are
+  pending, so a regretted server upgrade is recoverable — the safety net
+  the current `docker pull` + restart path lacks (supports Phase 14;
+  [#166](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/166)).
 - Documentation pass: per-feature how-tos.
 - Optional: tamper-resistance review and AppArmor hardening pass.
+
+## Phase 12 — Supervised-user "My Time" client dashboard
+
+Goal: a read-only desktop surface the supervised user can open any time to
+see how much time they have left (overall + per app/category), what they
+did today, what's coming up, and what rewards they've earned — the
+complement to the toast/interrupt channel in
+[`client-notifications.md`](client-notifications.md).
+
+Depends on Phase 5 (usage data), Phase 8b (`pct-client-agent` + cached
+budget), and Phase 9 (reuses the `/app` child-status Svelte view); it can
+land alongside Phase 10/11 rather than strictly last. Tracked in
+[#61](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/61);
+data model and rendering-shell decisions are fixed in
+[`docs/adr/0002-client-dashboard-shell.md`](adr/0002-client-dashboard-shell.md).
+
+- Agent exposes a localhost-only, uid-scoped, **read-only** data endpoint
+  (cached budget + `localhost:5600` usage), so the view ticks live and
+  works offline; `/api/*` supplies week/month/rewards history when online.
+- Auth from the Linux session (`linux-uid → User`), not the Phase 9 PIN.
+- Rendering shell: installed-browser app mode for the MVP, with Tauri v2
+  as the upgrade path (per ADR 0002).
+- Read-only — all adjustment controls stay on `/admin` and `/app`; no new
+  enforcement, no new license surface. Designed in
+  [`design/client/dashboard.html`](../design/client/dashboard.html).
+
+## Phase 13 — Calendar-based scheduling/budgeting extensions
+
+Goal: round out the time-variation model with the remaining calendar-style
+capabilities, on top of the foundation decided in Phase 2 and built in
+Phase 4.
+
+> **Sequencing note.** This area began life as a single late "Phase 13",
+> but its *foundational* parts were pulled earlier because the
+> schedule/budget schema, the editors, and the enforcement push all depend
+> on them:
+>
+> - The **recurrence + date-scoping decision** (ADR 0005) and the
+>   **schema column reservation** moved to **Phase 2**
+>   ([#139](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/139),
+>   [#146](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/146)) —
+>   a decision is cheap now and a migration is expensive later.
+> - **Recurring day-of-week windows** and the **effective-policy
+>   resolution engine** moved to **Phase 4**
+>   ([#140](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/140),
+>   [#143](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/143)),
+>   alongside the transport that enforces them, so enforcement isn't coded
+>   against an interim contract.
+>
+> What remains in Phase 13 is additive capability that *extends* that
+> foundation without reshaping it.
+
+- Day-of-week-varying budgets (e.g. weekday vs. weekend quotas), composing
+  with group-level budgets; plugs into the resolution engine as a layer
+  ([#141](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/141)).
+- Date-specific / future-dated overrides (`effective_from` /
+  `effective_to`) for specific days or ranges; extends the resolution
+  engine and surfaces in the "coming up" views
+  ([#142](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/142)).
+
+Both build on the Phase 2 column reservation
+([#146](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/146))
+and the Phase 4 resolver
+([#143](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/143)) —
+they add composition layers, not new tables — and compose with grants
+(Phase 10) and the user-group / group-budget work. The Phase 4
+recurring-windows capability
+([#140](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/140))
+is also the foundation the calendar-driven-schedules stretch goal
+([#125](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/125))
+builds on.
+
+The resolve-vs-materialize choice in ADR 0005 also bounds how much the
+data-retention work in
+[#135](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/135)
+has to purge: rule-based resolution means retention targets only *dated*
+data — usage samples, grants, audit, and date-specific overrides — not the
+recurrence rules themselves.
+
+## Phase 14 — Fleet updates & lifecycle management
+
+Goal: update a *running* deployment in place — both the server and the
+fleet of enrolled clients — safely, observably, and (for clients)
+server-orchestrated. Tracked by the epic
+[#163](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/163).
+
+> **Where we start from.** The server already has a happy-path upgrade
+> story (`docs/server-deployment.md` → "Upgrade path": `docker pull` a
+> newer tag, restart, migrations apply in-process on boot, Ansible venv
+> reconciles per release), and `client/install-client.sh` is idempotent.
+> What's missing is the *unhappy* path and the *fleet* path: a migration
+> safety net and rollback for the server, a server↔client version
+> compatibility contract, an inventory of what each client runs, and any
+> way for the server to **push** a client update rather than the admin
+> re-running the install script by hand.
+
+> **Two channels, one division of labour.** The server cannot push a
+> client update today, but two existing channels make it tractable:
+> the **Ansible runner (SSH, Phase 6)** does the *privileged install/
+> reconcile* step (`apt`/`dpkg`, service restart) — matching the license
+> boundary and the periodic-reapply model — while the **event stream /
+> `pct-client-bridge` (Phase 8b)** only *notifies and coordinates* (an
+> `update.*` event), never performing privileged installs beyond its
+> narrow sudoers scope.
+
+Foundational pieces are pulled earlier (cheap now, expensive to retrofit
+once clients are deployed):
+
+- Client version reporting at enrolment + heartbeat → **Phase 3**
+  ([#164](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/164)).
+- Version handshake + N-1 compatibility window on the event stream →
+  **Phase 8b**
+  ([#165](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/165)).
+- Automatic pre-migration DB backup, on the backup utility → **Phase 11**
+  ([#166](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/166)).
+
+Phase 14 itself:
+
+- ADR: client update distribution channel — dashboard-hosted apt repo vs
+  GitHub Release fetch vs dashboard-proxied; license-boundary note (our
+  agent `.deb` is ours to host; GPL tools stay upstream)
+  ([#167](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/167)).
+- Publish the `pct-client` agent `.deb` from `release.yml` over the chosen
+  channel, version-stamped to the release tag
+  ([#168](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/168)).
+- `client-update` Ansible playbook: install/pin the target version,
+  reconcile config, restart services gracefully
+  ([#169](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/169)).
+- Server-driven update orchestration API + `/admin` UI: per-client / fleet,
+  staged (canary) rollout, offline-queue + replay, audit log — reusing the
+  Phase 4 transport patterns
+  ([#170](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/170)).
+- Session-aware update scheduling: never interrupt an active supervised
+  session, a grace countdown, or an in-flight force-close; maintenance
+  window + override
+  ([#171](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/171)).
+- `update.*` event types + a low-key user-facing "updating" notification,
+  reusing the client-notifications channel
+  ([#172](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/172)).
+- Server self-update runbook: health-gated boot, documented rollback, and
+  the per-release fleet compatibility matrix
+  ([#173](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/173)).
+- Fleet version dashboard: per-client version drift, "N behind",
+  `update_required`, one-click update
+  ([#174](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/174)).
+
+Constraints carried from elsewhere in the project: the license boundary is
+unchanged (our agent `.deb` is permissive and ours to distribute; GPL
+client tools keep coming from the distro/PPA/upstream — `CLAUDE.md`,
+`docs/licensing-analysis.md`), and the tamper-resistance ceiling is
+unchanged (these are *operations* features, not hardening —
+`docs/client-install.md`).
 
 ## Out of scope (for now)
 

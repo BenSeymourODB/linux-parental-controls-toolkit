@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Client · My Time</title>
+<link rel="stylesheet" href="../assets/styles.css" />
+<style>
+  .hero { display:grid; grid-template-columns: auto 1fr; gap:24px; align-items:center; }
+  .now-card { border-radius:14px; padding:16px 18px; background:linear-gradient(135deg,var(--primary-soft),var(--teal-soft)); }
+  .cat-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:12px; }
+  .cat { display:flex; align-items:center; gap:12px; border:1px solid var(--border); border-radius:12px; padding:12px; }
+  .cat .ic { width:38px;height:38px;border-radius:11px;display:grid;place-items:center;font-size:18px;background:var(--surface-3);flex:none; }
+  .cat .bar2 { height:7px;border-radius:999px;background:var(--surface-3);overflow:hidden;margin-top:6px; }
+  .cat .bar2 span { display:block;height:100%;border-radius:999px; }
+  .week { display:flex; align-items:flex-end; gap:10px; height:120px; padding-top:8px; }
+  .week .d { flex:1; display:flex; flex-direction:column; align-items:center; gap:6px; height:100%; justify-content:flex-end; }
+  .week .col2 { width:60%; border-radius:6px 6px 0 0; position:relative; }
+  .week .budget-line { width:80%; height:2px; background:var(--border-strong); }
+  .next-list .n { display:flex; gap:11px; padding:10px 0; border-bottom:1px dashed var(--border); font-size:13px; }
+  .next-list .n:last-child { border-bottom:none; }
+  .nt { width:26px;height:26px;border-radius:8px;display:grid;place-items:center;flex:none;font-size:13px; }
+  .reward { background:var(--green-soft); border-radius:12px; padding:12px 14px; font-size:13px; display:flex; gap:9px; }
+  .statusrow { display:flex; align-items:center; gap:14px; flex-wrap:wrap; font-size:12px; color:var(--muted); border-top:1px solid var(--border); padding-top:14px; }
+</style>
+</head>
+<body>
+<div class="mock-bar"><span class="tag">MOCK-UP</span><span>Client · supervised-user desktop dashboard (NEW) &nbsp;·&nbsp; <a href="../index.html">↑ all mock-ups</a> &nbsp;·&nbsp; <a href="notifications.html">toasts →</a></span></div>
+
+<div class="desk-stage">
+  <div class="win">
+    <!-- window titlebar -->
+    <div class="win-bar">
+      <div class="traffic"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></div>
+      <div class="title">🛡️ My Time <span class="muted" style="color:#9aa2c6;font-weight:400;">— Parental Controls</span></div>
+      <div class="spacer"></div>
+      <span class="pill ok" style="background:#26405e;color:#9be7b6;"><span class="dot"></span>connected</span>
+    </div>
+
+    <div class="win-body">
+      <!-- left nav -->
+      <nav class="win-nav">
+        <a class="active">⏱ Today</a>
+        <a>📈 This week</a>
+        <a>📅 Schedule</a>
+        <a>🎁 Rewards</a>
+        <a>🌐 What's filtered</a>
+        <div class="grow"></div>
+        <a>❓ Help</a>
+      </nav>
+
+      <!-- content -->
+      <div class="win-content col gap-24">
+
+        <!-- HERO: time left now + what's happening -->
+        <div class="hero">
+          <div class="ring-wrap">
+            <svg width="150" height="150" viewBox="0 0 150 150">
+              <circle class="track" cx="75" cy="75" r="62" stroke-width="13"/>
+              <circle class="value warn" cx="75" cy="75" r="62" stroke-width="13" stroke-dasharray="389.6" stroke-dashoffset="107" transform="rotate(-90 75 75)"/>
+            </svg>
+            <div class="ring-center"><div style="font-size:32px;font-weight:700;">35m</div><div class="muted" style="font-size:11px;">screen time<br>left today</div></div>
+          </div>
+          <div class="col" style="gap:12px;">
+            <div>
+              <h2 style="font-size:21px;">Hi Alice 👋 — you've got <span style="color:var(--amber);">35 minutes</span> left today</h2>
+              <p class="muted" style="font-size:13px;margin-top:3px;">Used 1h 55m of 2h 30m. Your time resets at midnight. You'll get a heads-up at 15, 5, and 1 minute left.</p>
+            </div>
+            <div class="now-card row ai-center between">
+              <div><div class="section-title" style="color:var(--primary-600);">Right now</div><div style="font-weight:650;margin-top:2px;">🟢 Free time</div><div class="muted" style="font-size:12px;">Games &amp; YouTube allowed · Social is off during school hours</div></div>
+              <div class="center"><div style="font-size:12px;" class="muted">next change</div><strong>15:00</strong></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- per-app / per-category budgets -->
+        <div>
+          <div class="row between ai-center" style="margin-bottom:10px;"><div class="section-title">Time left by app &amp; category</div><span class="muted" style="font-size:11.5px;">live · updated from your activity</span></div>
+          <div class="cat-grid">
+            <div class="cat">
+              <div class="ic">🎮</div>
+              <div class="grow"><div class="row between"><strong>Games</strong><span style="color:var(--red);font-weight:700;">3m left</span></div><div class="bar2"><span style="width:94%;background:var(--red);"></span></div><div class="muted" style="font-size:11px;margin-top:4px;">Minecraft, Steam · 57m of 1h used</div></div>
+            </div>
+            <div class="cat">
+              <div class="ic">▶️</div>
+              <div class="grow"><div class="row between"><strong>YouTube</strong><span style="color:var(--green);font-weight:700;">27m left</span></div><div class="bar2"><span style="width:40%;background:var(--green);"></span></div><div class="muted" style="font-size:11px;margin-top:4px;">18m of 45m used</div></div>
+            </div>
+            <div class="cat">
+              <div class="ic">💬</div>
+              <div class="grow"><div class="row between"><strong>Social</strong><span class="muted" style="font-weight:700;">off</span></div><div class="bar2"><span style="width:100%;background:var(--surface-3);"></span></div><div class="muted" style="font-size:11px;margin-top:4px;">Discord, TikTok · back on at 15:00</div></div>
+            </div>
+            <div class="cat">
+              <div class="ic">💻</div>
+              <div class="grow"><div class="row between"><strong>School</strong><span style="color:var(--sky);font-weight:700;">no limit</span></div><div class="bar2"><span style="width:30%;background:var(--sky);"></span></div><div class="muted" style="font-size:11px;margin-top:4px;">LibreOffice, Zoom, Khan Academy</div></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- today's timeline (rendered from ActivityWatch data) -->
+        <div class="card">
+          <div class="card-head"><div><h3>What you did today</h3><div class="sub">your own activity, on your device</div></div>
+            <div class="row gap-8" style="font-size:11px;color:var(--muted);">
+              <span class="row ai-center" style="gap:5px;"><span class="swatch c-school"></span>School</span>
+              <span class="row ai-center" style="gap:5px;"><span class="swatch c-web"></span>Web</span>
+              <span class="row ai-center" style="gap:5px;"><span class="swatch c-games"></span>Games</span>
+              <span class="row ai-center" style="gap:5px;"><span class="swatch c-idle"></span>Away</span>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="tl">
+              <div class="tl-row"><span class="tl-label"><span class="swatch c-school"></span>School</span><div class="tl-track"><span class="tl-seg c-school" style="left:4%;width:14%;"></span><span class="tl-seg c-school" style="left:22%;width:7%;"></span></div></div>
+              <div class="tl-row"><span class="tl-label"><span class="swatch c-web"></span>Web / YT</span><div class="tl-track"><span class="tl-seg c-web" style="left:20%;width:5%;"></span><span class="tl-seg c-web" style="left:52%;width:9%;"></span></div></div>
+              <div class="tl-row"><span class="tl-label"><span class="swatch c-games"></span>Games</span><div class="tl-track"><span class="tl-seg c-games" style="left:38%;width:11%;"></span><span class="tl-seg c-games" style="left:62%;width:18%;"></span></div></div>
+              <div class="tl-row"><span class="tl-label"><span class="swatch c-idle"></span>Away</span><div class="tl-track"><span class="tl-seg c-idle" style="left:30%;width:7%;"></span><span class="tl-seg c-idle" style="left:80%;width:6%;"></span></div></div>
+            </div>
+            <div class="tl-axis" style="margin-top:8px;"><span></span><div class="ticks"><span>7am</span><span>10am</span><span>1pm</span><span>4pm</span><span>7pm</span><span>9pm</span></div></div>
+            <p class="muted" style="font-size:11px;margin-top:10px;">Powered by ActivityWatch on this computer. <a href="#">Open the full ActivityWatch view →</a></p>
+          </div>
+        </div>
+
+        <!-- this week + what's coming -->
+        <div class="row" style="align-items:stretch;">
+          <div class="card pad grow">
+            <div class="section-title">This week</div>
+            <div class="week">
+              <div class="d"><div class="col2" style="height:55%;background:var(--green);"></div><span class="muted" style="font-size:10px;">M</span></div>
+              <div class="d"><div class="col2" style="height:70%;background:var(--green);"></div><span class="muted" style="font-size:10px;">T</span></div>
+              <div class="d"><div class="col2" style="height:48%;background:var(--green);"></div><span class="muted" style="font-size:10px;">W</span></div>
+              <div class="d"><div class="col2" style="height:62%;background:var(--green);"></div><span class="muted" style="font-size:10px;">T</span></div>
+              <div class="d"><div class="col2" style="height:95%;background:var(--amber);"></div><span style="font-size:10px;font-weight:700;">F</span></div>
+              <div class="d"><div class="col2" style="height:30%;background:var(--surface-3);"></div><span class="muted" style="font-size:10px;">S</span></div>
+              <div class="d"><div class="col2" style="height:30%;background:var(--surface-3);"></div><span class="muted" style="font-size:10px;">S</span></div>
+            </div>
+            <p class="muted" style="font-size:11.5px;margin-top:8px;">Daily limit ~2h. You're a bit over today — nearly all used up. 💪</p>
+          </div>
+
+          <div class="card pad" style="width:320px;flex:none;">
+            <div class="section-title">Coming up today</div>
+            <div class="next-list">
+              <div class="n"><span class="nt" style="background:var(--sky-soft);">💬</span><div><strong>Social unlocks</strong> at 15:00<div class="muted" style="font-size:11px;">Discord &amp; TikTok become available</div></div></div>
+              <div class="n"><span class="nt" style="background:var(--grape-soft);">🌙</span><div><strong>Wind-down</strong> at 19:00<div class="muted" style="font-size:11px;">calmer apps only</div></div></div>
+              <div class="n"><span class="nt" style="background:#e6e8f0;">🔒</span><div><strong>Bedtime lock</strong> at 21:00<div class="muted" style="font-size:11px;">you'll get warnings before</div></div></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- rewards + earn more -->
+        <div class="reward">🎁 <div><strong>+30 minutes</strong> added today for <strong>cleaning your room</strong>. <a href="#">See all rewards →</a><div class="muted" style="font-size:11.5px;">Finish chores in the Family Calendar to earn more screen time.</div></div></div>
+
+        <!-- status footer -->
+        <div class="statusrow">
+          <span class="pill ok"><span class="dot"></span>Agent connected</span>
+          <span>Last updated just now</span>
+          <span>·</span>
+          <span>🌐 Some websites are filtered to keep things safe — <a href="#">what's filtered?</a></span>
+          <span class="grow"></span>
+          <span>Need more time or think a limit is wrong? <a href="#">Ask a parent</a></span>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

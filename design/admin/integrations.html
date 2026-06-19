@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Admin · Integrations &amp; DNS</title>
+<link rel="stylesheet" href="../assets/styles.css" />
+<style>
+  .mode { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; }
+  .mode .opt { border:1px solid var(--border); border-radius:11px; padding:14px; cursor:pointer; }
+  .mode .opt.sel { border-color:var(--primary); box-shadow:0 0 0 2px var(--primary-soft); }
+  .mode .opt h4 { font-size:14px; }
+  .mode .opt p { font-size:12px; color:var(--muted); margin-top:5px; }
+  .scope-chip { font-size:11px; padding:2px 8px; border-radius:6px; background:var(--surface-3); font-weight:600; color:var(--muted); }
+</style>
+</head>
+<body>
+<div class="mock-bar"><span class="tag">MOCK-UP</span><span>Admin · Integrations &amp; DNS &nbsp;·&nbsp; <a href="../index.html">↑ all mock-ups</a></span></div>
+<div class="admin">
+  <nav class="admin-nav">
+    <div class="brand"><span class="logo">🛡️</span> ParentCtl</div>
+    <a href="dashboard.html"><span class="ic">▦</span> Overview</a>
+    <a href="user-detail.html"><span class="ic">👤</span> Users</a>
+    <a href="policy-editor.html"><span class="ic">⚖︎</span> Policies</a>
+    <a href="grants-ledger.html"><span class="ic">🎁</span> Grants</a>
+    <a href="clients.html"><span class="ic">🖥️</span> Clients</a>
+    <div class="nav-sec">Configure</div>
+    <a class="active" href="integrations.html"><span class="ic">🔌</span> Integrations</a>
+    <a href="integrations.html"><span class="ic">🔔</span> Notifications</a>
+    <a href="integrations.html"><span class="ic">🌐</span> DNS / AdGuard</a>
+  </nav>
+
+  <div class="admin-main">
+    <header class="admin-top"><div><div class="crumb">Configure</div><h1>Integrations &amp; DNS</h1></div></header>
+
+    <div class="admin-content col gap-24">
+
+      <!-- Integration tokens -->
+      <div class="card">
+        <div class="card-head"><div><h3>🔌 External integration tokens</h3><div class="sub">scoped · revocable · rate-limited · all inbound traffic via /api/integrations/*</div></div><button class="btn primary sm">＋ New token</button></div>
+        <table class="tbl">
+          <thead><tr><th>Name</th><th>Scopes</th><th>Created</th><th>Last used</th><th>Rate</th><th>State</th><th></th></tr></thead>
+          <tbody>
+            <tr>
+              <td><strong>next-digital-wall-calendar</strong><div class="muted" style="font-size:11.5px;">family calendar · chore rewards</div></td>
+              <td><span class="scope-chip">grants:write</span> <span class="scope-chip">policy:read</span></td>
+              <td>02 Jun 2026</td>
+              <td>4m ago</td>
+              <td class="muted">12 / 60 min</td>
+              <td><span class="pill ok"><span class="dot"></span>active</span></td>
+              <td><button class="btn ghost sm danger">revoke</button></td>
+            </tr>
+            <tr style="opacity:0.6;">
+              <td><strong>home-assistant</strong><div class="muted" style="font-size:11.5px;">test token</div></td>
+              <td><span class="scope-chip">policy:read</span></td>
+              <td>20 May 2026</td>
+              <td>14 days ago</td>
+              <td class="muted">0 / 60 min</td>
+              <td><span class="pill warn"><span class="dot"></span>idle</span></td>
+              <td><button class="btn ghost sm danger">revoke</button></td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="card-body" style="border-top:1px solid var(--border);background:var(--surface-2);font-size:12.5px;">
+          <strong>How the calendar grants time →</strong> <span class="muted">child completes a chore → calendar POSTs</span>
+          <span class="mono">/api/integrations/grants</span> <span class="muted">with a</span> <span class="mono">source_ref</span> <span class="muted">→ dashboard records a Grant, recomputes today, pushes via timekpra, toasts the child. Retries are idempotent.</span>
+        </div>
+      </div>
+
+      <!-- AdGuard / DNS -->
+      <div class="card">
+        <div class="card-head"><h3>🌐 DNS filtering · AdGuard Home</h3><span class="sub">PCT_ADGUARD_MODE</span></div>
+        <div class="card-body col">
+          <div class="mode">
+            <div class="opt"><h4>Disabled</h4><p>No DNS layer. e2guardian still does per-user HTTP/S filtering on the client.</p></div>
+            <div class="opt sel"><h4>External ✓</h4><p>Point at the AdGuard Home you already run. Writes confined to a <span class="mono">pct:</span>-prefixed client set.</p></div>
+            <div class="opt"><h4>Managed</h4><p>Dashboard fetches &amp; supervises AdGuard on first run into the data volume.</p></div>
+          </div>
+          <div class="row wrap gap-8" style="align-items:center;">
+            <span class="pill ok"><span class="dot"></span>reachable</span>
+            <span class="muted mono" style="font-size:12.5px;">https://adguard.lan · user pct-writer · v0.107</span>
+            <button class="btn sm">Test connection</button>
+          </div>
+          <div class="muted" style="font-size:12px;">Per-client domain blocklists with schedule support land in Phase 7. This surface shows where DNS rules end up so it's never a mystery.</div>
+        </div>
+      </div>
+
+      <!-- Notification defaults -->
+      <div class="card">
+        <div class="card-head"><h3>🔔 Notification defaults</h3><span class="sub">household-wide defaults · per-user override in the policy editor</span></div>
+        <div class="card-body row wrap gap-24">
+          <div class="stat"><div class="lbl">Default sound profile</div><div class="num" style="font-size:18px;">subtle</div></div>
+          <div class="stat"><div class="lbl">Default grace period</div><div class="num" style="font-size:18px;">15s</div></div>
+          <div class="stat"><div class="lbl">Parent push (Phase 9)</div><div class="num" style="font-size:18px;">on</div><div class="muted" style="font-size:11.5px;">“5 min left”, “time's up”</div></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+</body>
+</html>

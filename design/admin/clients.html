@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Admin · Clients</title>
+<link rel="stylesheet" href="../assets/styles.css" />
+<style>
+  .client-card { display:grid; grid-template-columns: 1fr; gap:14px; }
+  .kv { display:flex; justify-content:space-between; font-size:12.5px; padding:4px 0; border-bottom:1px dashed var(--border); }
+  .kv:last-child { border-bottom:none; }
+  .comp { display:flex; align-items:center; gap:8px; font-size:12.5px; padding:6px 0; }
+  .enrol { background:#0f1222; color:#cdd2e6; border-radius:12px; padding:18px 20px; }
+  .enrol code { display:block; background:#000; color:#9be7b6; padding:10px 12px; border-radius:8px; font-size:12px; margin-top:8px; overflow:auto; }
+</style>
+</head>
+<body>
+<div class="mock-bar"><span class="tag">MOCK-UP</span><span>Admin · Clients &amp; agents &nbsp;·&nbsp; <a href="../index.html">↑ all mock-ups</a></span></div>
+<div class="admin">
+  <nav class="admin-nav">
+    <div class="brand"><span class="logo">🛡️</span> ParentCtl</div>
+    <a href="dashboard.html"><span class="ic">▦</span> Overview</a>
+    <a href="user-detail.html"><span class="ic">👤</span> Users</a>
+    <a href="policy-editor.html"><span class="ic">⚖︎</span> Policies</a>
+    <a href="grants-ledger.html"><span class="ic">🎁</span> Grants</a>
+    <a class="active" href="clients.html"><span class="ic">🖥️</span> Clients</a>
+    <div class="nav-sec">Configure</div>
+    <a href="integrations.html"><span class="ic">🔌</span> Integrations</a>
+    <a href="integrations.html"><span class="ic">🔔</span> Notifications</a>
+    <a href="integrations.html"><span class="ic">🌐</span> DNS / AdGuard</a>
+  </nav>
+
+  <div class="admin-main">
+    <header class="admin-top">
+      <div><div class="crumb">Clients</div><h1>Enrolled machines</h1></div>
+      <button class="btn primary">＋ Enrol a client</button>
+    </header>
+
+    <div class="admin-content col gap-24">
+      <div class="grid" style="grid-template-columns:repeat(2,1fr);">
+
+        <!-- client 1 -->
+        <div class="card pad client-card">
+          <div class="row between ai-center">
+            <div class="row ai-center gap-8"><span style="font-size:22px;">🖥️</span><div><div style="font-weight:650;">mint-livingroom</div><div class="muted mono" style="font-size:11.5px;">192.168.1.24 · Linux Mint 21.3</div></div></div>
+            <span class="pill ok"><span class="dot"></span>live</span>
+          </div>
+          <div>
+            <div class="kv"><span class="muted">Supervised users</span><span>Alice (uid 1001), Bob (uid 1002)</span></div>
+            <div class="kv"><span class="muted">SSH</span><span class="mono">pct-agent@ · key OK · 8ms</span></div>
+            <div class="kv"><span class="muted">Last AW pull</span><span>2m ago · 41 samples</span></div>
+            <div class="kv"><span class="muted">Last Ansible apply</span><span>48m ago · no drift</span></div>
+          </div>
+          <div style="border-top:1px solid var(--border);padding-top:8px;">
+            <div class="section-title">Client components</div>
+            <div class="comp"><span class="pill ok" style="padding:1px 7px;"><span class="dot"></span></span> Timekpr-nExT <span class="muted">daemon active</span></div>
+            <div class="comp"><span class="pill ok" style="padding:1px 7px;"><span class="dot"></span></span> ActivityWatch <span class="muted">:5600 reachable (via tunnel)</span></div>
+            <div class="comp"><span class="pill ok" style="padding:1px 7px;"><span class="dot"></span></span> e2guardian + iptables redirect</div>
+            <div class="comp"><span class="pill ok" style="padding:1px 7px;"><span class="dot"></span></span> pct-client-bridge <span class="muted">WS connected · 0.4.1</span></div>
+            <div class="comp"><span class="pill ok" style="padding:1px 7px;"><span class="dot"></span></span> pct-client-agent <span class="muted">×2 user sessions</span></div>
+          </div>
+          <div class="row gap-8"><button class="btn sm">Re-apply config</button><button class="btn sm">Probe now</button><button class="btn ghost sm">Logs</button></div>
+        </div>
+
+        <!-- client 2 offline -->
+        <div class="card pad client-card" style="border-color:#efd99a;">
+          <div class="row between ai-center">
+            <div class="row ai-center gap-8"><span style="font-size:22px;">💻</span><div><div style="font-weight:650;">chloe-laptop</div><div class="muted mono" style="font-size:11.5px;">last seen 192.168.1.51 · Linux Mint 22</div></div></div>
+            <span class="pill warn"><span class="dot"></span>offline 3h</span>
+          </div>
+          <div>
+            <div class="kv"><span class="muted">Supervised users</span><span>Chloe (uid 1001)</span></div>
+            <div class="kv"><span class="muted">SSH</span><span class="mono" style="color:var(--amber);">unreachable — retrying</span></div>
+            <div class="kv"><span class="muted">Bridge</span><span style="color:var(--amber);">disconnected 3h ago</span></div>
+            <div class="kv"><span class="muted">Queued changes</span><span><span class="pill warn" style="padding:1px 8px;">1 pending</span> overall 1h→1h30</span></div>
+          </div>
+          <div class="card" style="background:var(--amber-soft);border-color:#efd99a;padding:10px 12px;font-size:12.5px;">
+            ⚠ Change queued — will replay on next successful SSH probe. The laptop keeps enforcing its last-known policy while offline (server is control plane, not data plane).
+          </div>
+          <div class="row gap-8"><button class="btn sm">Probe now</button><button class="btn ghost sm">View queued diff</button></div>
+        </div>
+      </div>
+
+      <!-- enrol flow -->
+      <div class="card">
+        <div class="card-head"><h3>＋ Enrol a new client</h3><span class="sub">one-time token · short TTL · single use</span></div>
+        <div class="card-body row" style="align-items:flex-start;">
+          <div class="grow col">
+            <div class="row gap-8 ai-center">
+              <span class="pill brand">1</span> Generate an enrolment token, scoped to the supervised user(s) you'll create.
+            </div>
+            <div class="row gap-8 ai-center"><span class="pill brand">2</span> Run the installer on the fresh Mint machine. It installs the GPL tools via <span class="mono">apt</span>, provisions <span class="mono">pct-agent</span>, drops the SSH key, and self-tests.</div>
+            <div class="row gap-8 ai-center"><span class="pill brand">3</span> The client POSTs to <span class="mono">/api/clients/enrol</span> and appears here.</div>
+          </div>
+          <div class="enrol" style="width:420px;flex:none;">
+            <div style="font-size:12px;color:#9097ad;">Run on the client (token expires in 15:00):</div>
+            <code>curl -fsSL https://parentalcontrols.lan/install-client.sh \
+  | sudo bash -s -- \
+    --enrolment-token PCT-9f2a-7c1e-d40b \
+    --supervised-user chloe</code>
+            <div class="row gap-8" style="margin-top:12px;"><button class="btn sm primary">Copy command</button><button class="btn sm" style="color:#cdd2e6;border-color:#3a4063;background:transparent;">Regenerate token</button></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

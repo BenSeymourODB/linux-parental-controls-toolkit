@@ -104,9 +104,25 @@ entities (final schema lives in `server/src/policy/schema.ts`
 once implementation begins):
 
 ```
-User          (id, display_name)
-Client        (id, hostname, ssh_user, enrolled_at, last_seen)
+User          (id, display_name, tz?)
+              --  tz is a nullable IANA timezone (e.g. America/New_York);
+              --  NULL means "inherit the server default" (PCT_DEFAULT_TZ).
+              --  The user's effective TZ defines daily/weekly/monthly
+              --  budget rollover. See docs/adr/0001-budget-timezone.md.
+Client        (id, hostname, ssh_user, bearer_token_hash?, enrolled_at,
+                last_seen)
+              --  bearer_token_hash is the SHA-256 of the per-client bearer
+              --  token issued at enrolment (the /api/events/stream credential);
+              --  NULL for a client created via admin CRUD, set at enrol time.
 UserOnClient  (user_id, client_id, linux_username, linux_uid)
+
+EnrolmentToken (id, token_hash, hostname?, supervised_users[],
+                expires_at, created_at, consumed_at?, consumed_client_id?)
+              --  single-use, expiring client-enrolment credential (#77).
+              --  Admin mints one bound to the policy-user ↔ Linux-account
+              --  mapping; POST /api/clients/enrol redeems it (creating the
+              --  Client + UserOnClient rows) and marks it consumed. Only the
+              --  SHA-256 token_hash is stored, never the plaintext.
 
 Activity      (id, kind=app|app_group|domain|domain_group, matcher)
 ActivityGroup (id, name)  --  many-to-many with Activity
@@ -116,9 +132,18 @@ Budget        (id, user_id, scope=overall|activity|group,
                 seconds_allowed)
 
 Schedule      (id, user_id, target_kind, target_id?,
-                cron_or_window, action=allow|deny|extend)
+                <recurrence>, action=allow|deny|extend, ordinal,
+                effective_from?, effective_to?)
+              --  Evaluated ascending by ordinal; first active rule wins.
+              --  See docs/adr/0004-schedule-precedence.md.
+              --  <recurrence> = day-of-week + intra-day window; NULL = always-on.
+              --  effective_from/to date-scope the rule. Recurrence grammar and
+              --  date scoping per docs/adr/0005-recurrence-and-date-scoping.md
+              --  (columns reserved by #146; resolver is Phase 4 / #143).
 
-Exception     (id, user_id, ...,  expires_at)
+Exception     (id, user_id, ...,  effective_from?, expires_at)
+              --  effective_from pre-schedules the override; expires_at is the
+              --  effective end. See docs/adr/0005-recurrence-and-date-scoping.md.
 
 UsageSample   (user_id, client_id, activity_id, started_at, ended_at)
               --  populated from ActivityWatch pulls
@@ -142,6 +167,48 @@ NotificationPolicy (user_id, enabled, sound_profile,
                   (see docs/client-notifications.md)
 ```
 
+### Recurrence and date-scoping
+
+Time-varying policy — "no Discord weekdays 16:00–18:00", "extra hour during
+spring break" — is represented as **rules**, not materialised per-day rows, and
+"what applies on day *D*" is resolved on the fly. `Schedule` carries a
+purpose-built recurrence (a day-of-week set plus an intra-day start/end window,
+not cron or RRULE) and an optional `effective_from`/`effective_to` date range;
+`Exception` gains an optional `effective_from` (its `expires_at` is the
+effective end). A rule with no recurrence and no effective window is the
+degenerate **always-on** case, identical to today's uniform rule. Recurrence
+weekdays and times, and the date gates, are all evaluated in the user's
+effective timezone (the same rule as budget rollover, above). This grammar is
+the "is this rule active at instant *T*?" predicate that
+[ADR 0004](adr/0004-schedule-precedence.md) deferred; first-match-wins
+precedence then ranks the rules that are active. The full decision —
+grammar, date anchoring, resolve-vs-materialise, retention interaction, and the
+reserved column shape — is in
+[`docs/adr/0005-recurrence-and-date-scoping.md`](adr/0005-recurrence-and-date-scoping.md).
+The columns are reserved in Phase 2 (#146); the resolver and editors land in
+Phase 4 (#143/#140) and Phase 13 (#141/#142).
+
+### Timezones and budget rollover
+
+All timestamps are stored, computed, logged, and transmitted in **UTC** —
+`UsageSample` times, `Grant` times, audit entries, `last_seen`, and the
+JSON API / event-stream payloads. Local time enters in exactly one place:
+deciding when a daily/weekly/monthly budget *rolls over*. That boundary is
+computed in the user's **effective timezone** — `User.tz` if set,
+otherwise the server default `PCT_DEFAULT_TZ` — so "how much does Alice
+have left today?" has a precise answer without ever storing local-time
+strings.
+
+The mid-window case (a user changing timezone partway through a day, e.g.
+moving house or on vacation) is resolved by
+[`docs/adr/0003-mid-window-timezone-change.md`](adr/0003-mid-window-timezone-change.md):
+the in-flight window is **pinned to the timezone in effect when it opened**,
+so a `tz` change takes effect only from the next window boundary and a
+budget edge never shifts under the user mid-window. The shared budget-window
+helper (`server/src/policy/budget-window.ts`) applies this rule for every
+rollup. The original storage decision, with the options weighed, is in
+[`docs/adr/0001-budget-timezone.md`](adr/0001-budget-timezone.md).
+
 Key derived views the dashboard renders:
 
 - **Per-user budget burndown**: how much of each budget has been consumed
@@ -163,6 +230,14 @@ Key derived views the dashboard renders:
    the client inventory.
 5. If a client is offline, the change is queued; an Ansible run is
    scheduled on next reconnect (detected by SSH probe).
+
+In **Phase 2** (`docs/roadmap.md`) none of the transport in steps 3–5 exists
+yet: every mutating policy write instead runs through a **stub transport**
+(`server/src/transport/stub.ts`, #54) that computes the intended per-client
+effect and *logs* it (`component: "transport/stub"`) rather than dispatching
+it. The logged command is shaped like the real per-client transport command,
+so Phase 4 (SSH + `timekpra`) and Phase 6 (Ansible) swap the log for a real
+dispatch without changing the call sites.
 
 ### Inbound (client → server) — telemetry pull
 
@@ -255,6 +330,37 @@ calendar that a budget was exceeded) is out of scope for now but stays
 open: same pattern, the dashboard would hold a per-integration outbound
 webhook URL.
 
+## API conventions
+
+The `/api/*` surface is the single contract for both built-in frontends
+and external integrators, so its conventions are fixed once (issue #50)
+and every later route — policy CRUD, auth, integrations — builds on them.
+
+- **DTOs live in `server/src/api/`** as zod schemas; consumers import the
+  **inferred** types (`z.infer`) re-exported from `server/src/api/index.ts`.
+  This is the documented import surface for the SvelteKit frontend — there
+  are no hand-maintained interfaces and no runtime coupling between
+  frontend and backend.
+- **Request validation** is a zod-aware Fastify validator compiler: a route
+  declares `schema: { body, querystring, params, headers }` as zod schemas,
+  and a custom `ZodTypeProvider` infers the handler's `request.*` types from
+  them. Invalid input never reaches a handler.
+- **One error envelope.** Every `/api/*` error is serialized as
+  `{ "error": { "code", "message", "details"? } }`. `code` is a stable
+  machine-readable string (`validation_error`, `not_found`, …); `details`
+  carries one structured entry per rejected field for validation failures.
+  Unexpected errors collapse to a generic `internal_error` 500 — the real
+  error is logged, never leaked to the client. (We chose this small shape
+  over RFC 9457 `problem+json` for ease of typing and frontend consumption;
+  the envelope is itself a zod schema, `errorEnvelopeSchema`.)
+- **Encapsulation.** The validation hook, error handler, and not-found
+  handler are installed inside the `/api` plugin scope only, so `/`,
+  `/healthz`, and the static `/admin`·`/app` mounts keep their own
+  behaviour.
+
+`GET /api/meta` (`{ name, apiVersion }`) is the trivial route that proves
+the prefix and conventions are mounted.
+
 ## Failure modes the design must handle
 
 - **Client offline at policy-change time** — queue the change; replay on
@@ -263,6 +369,10 @@ webhook URL.
   means no consumption credited, not punitive deduction).
 - **Clock skew** — clients NTP-sync; budgets compute on the server clock
   but reconcile with `UsageSample` end-times reported by the client.
+  Both sides agree on UTC, so reconciliation is unambiguous; only the
+  budget *rollover* boundary is interpreted in the user's effective
+  timezone (see "Timezones and budget rollover" above and
+  [`docs/adr/0001-budget-timezone.md`](adr/0001-budget-timezone.md)).
 - **Tamper attempt on client** — periodic Ansible re-application of the
   desired state reverts unauthorised edits. Audit log records each
   reversion.

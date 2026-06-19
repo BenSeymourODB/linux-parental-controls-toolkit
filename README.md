@@ -7,11 +7,38 @@ clients (initial target: **Linux Mint with Cinnamon**) enforce the policy
 locally using established open-source tools (Timekpr-nExT, ActivityWatch,
 e2guardian, AdGuard Home).
 
-> **Status:** Design phase. No implementation has landed yet. This repository
-> currently contains the architecture and licensing analyses that the
-> implementation will follow. See [`docs/roadmap.md`](docs/roadmap.md) for the
-> work breakdown and the [roadmap project](https://github.com/users/BenSeymourODB/projects/2)
-> for issue-level tracking.
+> **Status:** Early implementation (Phase 1). The architecture and licensing
+> analyses are complete and the dashboard skeleton is taking shape — a Fastify
+> app, settings loader, Docker image, and CI. Most features in
+> [`docs/roadmap.md`](docs/roadmap.md) are not built yet. See the roadmap for
+> the work breakdown and the
+> [roadmap project](https://github.com/users/BenSeymourODB/projects/2) for
+> issue-level tracking.
+
+## Quick start (local development)
+
+Run the dashboard from source with Docker Compose:
+
+```bash
+# (optional) override defaults — the dashboard runs without this file
+cp .env.example .env
+
+# build the image from ./server and start the dashboard
+docker compose up --build
+```
+
+The dashboard is then on <http://localhost:8000> (`GET /` serves a
+"hello, no policy yet" placeholder; `GET /healthz` is the liveness probe).
+Persistent state lives in a gitignored `./data` directory mounted at `/data`
+in the container (see [`docs/server-deployment.md`](docs/server-deployment.md)
+→ "Volume layout"). Configuration is read from `.env`; every setting and its
+default is documented in [`.env.example`](.env.example).
+
+This compose file builds from source for local development and deliberately
+omits DNS filtering (AdGuard Home is a Phase 7 concern). For production
+deployment on TrueNAS SCALE — using the published image and the AdGuard
+topologies — see the reference compose files in
+[`docs/server-deployment.md`](docs/server-deployment.md).
 
 ## What the product does
 
@@ -170,7 +197,9 @@ server. See [`docs/client-install.md`](docs/client-install.md).
 | [`docs/client-notifications.md`](docs/client-notifications.md) | Client-side toast/sound notifications, time-remaining cadence, grace period, and end-of-budget enforcement (`pct-client` agent design). |
 | [`docs/roadmap.md`](docs/roadmap.md) | Phased milestone plan; the basis for GitHub issues. |
 | [`docs/commercialization.md`](docs/commercialization.md) | Forward-looking notes on what taking this from a homelab tool to a commercial product would require (platform breadth, giving back to upstream, willingness-to-pay). Not committed scope. |
+| [`docs/adr/`](docs/adr/) | Architecture decision records. ADR 0001 fixes the timezone strategy (UTC internally, server-default TZ with per-user overrides). ADR 0002 fixes the client "My Time" dashboard's data model (hybrid, agent-first) and rendering shell (installed-browser app mode, with Tauri v2 as the upgrade path). |
 | [`CLAUDE.md`](CLAUDE.md) | Guidance for AI coding agents working in this repo. |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | Local dev loop: setup, pre-commit hooks, the quality gate, tests, the frontend loop, and branch/PR conventions. |
 
 ## License
 

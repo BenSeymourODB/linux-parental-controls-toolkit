@@ -173,34 +173,32 @@ Test the following error cases for every REST client:
 
 ### Policy model
 
-Use an in-memory SQLite database via a shared helper. better-sqlite3
-supports `:memory:` natively, and the Drizzle migrations run against it
-in milliseconds:
+Use an in-memory SQLite database via the shared `testDb()` helper
+(`tests/helpers/db.ts`). better-sqlite3 supports `:memory:` natively, and the
+Drizzle migrations run against it in milliseconds:
 
 ```ts
-import Database from "better-sqlite3";
-import { drizzle } from "drizzle-orm/better-sqlite3";
-import { migrate } from "drizzle-orm/better-sqlite3/migrator";
+import { testDb } from "../helpers/db.js";
 
-export function testDb() {
-  const sqlite = new Database(":memory:");
-  const db = drizzle(sqlite);
-  migrate(db, { migrationsFolder: "drizzle" });
-  return db;
-}
+const db = testDb(); // fresh :memory: database with all migrations applied
 ```
 
+The helper resolves the committed migrations folder relative to itself (not
+the process cwd), so it works regardless of where the runner is invoked from.
+The underlying handle is reachable via `db.$client` (e.g. `db.$client.close()`).
 This keeps policy tests hermetic and fast — no file I/O, no leftover state.
 
 ### HTTP routes
 
-Use Fastify's built-in injection — no sockets, no port binding:
+Use Fastify's built-in injection — no sockets, no port binding. The
+`buildTestApp()` helper (`tests/helpers/app.ts`) builds the app with a silent
+logger and bundles a `testDb()`:
 
 ```ts
-import { buildApp } from "../src/web/app.js";
+import { buildTestApp } from "../helpers/app.js";
 
 it("grant endpoint is idempotent by source_ref", async () => {
-  const app = await buildApp({ db: testDb() });
+  const { app, db, close } = buildTestApp();
   const payload = { user: "alice", seconds: 1800, source_ref: "chore-abc-001" };
 
   const r1 = await app.inject({ method: "POST", url: "/api/grants", headers: authHeaders, payload });
@@ -209,8 +207,17 @@ it("grant endpoint is idempotent by source_ref", async () => {
   expect(r1.statusCode).toBe(201);
   expect(r2.statusCode).toBe(200); // idempotent: same grant, not a new one
   expect(r1.json().id).toBe(r2.json().id);
+
+  await close(); // closes the app and the in-memory db
 });
 ```
+
+`buildApp()` takes an optional `db` (#49): when omitted it opens and migrates
+one from `settings` via `createDb()` and closes it on `app.close()`; when
+injected (as `buildTestApp()` does with `testDb()`) the app uses that handle
+and leaves closing it to the provider. So `app.db`, the `db` returned by
+`buildTestApp()`, and the handle you passed in are all the same object, and
+`close()` tears down the app and then the database.
 
 ---
 
@@ -257,6 +264,28 @@ it("grant endpoint is idempotent by source_ref", async () => {
   guarantees this, but the test documents the expectation).
 - The migrated schema matches the Drizzle schema definition
   (`drizzle-kit check` is also run in CI to catch drift).
+
+### `tests/policy/migration-naming.test.ts`
+
+Migrations are **timestamp-prefixed** (`<YYYYMMDDHHmmss>_<slug>`), not
+sequentially numbered — `drizzle.config.ts` sets `migrations: { prefix:
+"timestamp" }` so two sessions branching off the same `main` don't generate
+colliding filenames (issue #133). Always generate with `npm run db:generate`
+so the prefix is applied; never hand-name a migration.
+
+- Every migration tag in `drizzle/meta/_journal.json` matches *either* the
+  legacy index prefix (`^[0-9]{4}_…`, grandfathered) or the timestamp
+  convention `^[0-9]{14}_[a-z0-9_]+$`; a hand-named or malformed tag fails.
+- No two timestamp migrations share the same second.
+- Each journal tag has its `<tag>.sql` and `<prefix>_snapshot.json`, with no
+  stray SQL files.
+
+This runs in the unit-test job. Legacy index migrations are accepted
+structurally (not via a hardcoded list) — the `prefix: "timestamp"` config is
+what prevents *new* index migrations, so the guard backstops timestamp
+well-formedness and same-second collisions. The `drizzle-kit check` drift gate
+above remains the backstop for *semantic* conflicts between two independent
+schema edits.
 
 ---
 

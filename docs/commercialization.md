@@ -225,5 +225,3 @@ tracked. If any of this moves from "notes" to "plan," update
 against the [roadmap project](https://github.com/users/BenSeymourODB/projects/2),
 and record the go/shelve decision in an ADR as #24's acceptance criteria already
 require.
-</content>
-</invoke>

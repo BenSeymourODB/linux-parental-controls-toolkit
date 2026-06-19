@@ -12,9 +12,16 @@ describe("loadSettings", () => {
     const settings = loadSettings({});
 
     expect(settings.databaseUrl).toBe("/data/policy.sqlite");
+    expect(settings.defaultTz).toBe("UTC");
     expect(settings.logLevel).toBe("info");
     expect(settings.secretKey).toBeUndefined();
+    expect(settings.ansibleDir).toBe("/data/ansible");
     expect(settings.adguard).toEqual({ mode: "disabled" });
+    expect(settings.telemetry).toEqual({ pullCron: "*/5 * * * *", pullConcurrency: 4 });
+  });
+
+  it("honours an explicit PCT_ANSIBLE_DIR", () => {
+    expect(loadSettings({ PCT_ANSIBLE_DIR: "/srv/ansible" }).ansibleDir).toBe("/srv/ansible");
   });
 
   it("round-trips explicit base values", () => {
@@ -30,8 +37,54 @@ describe("loadSettings", () => {
     expect(settings.secretKey).toBe("s3cret");
   });
 
+  // DATABASE_URL is accepted as a bare path or a libsql `file:` URL; both
+  // must resolve to the same bare better-sqlite3 path so drizzle-kit (CI /
+  // drizzle.config.ts) and the runtime connection never diverge. See #34.
+  describe("DATABASE_URL normalization", () => {
+    it("strips a file: scheme from an absolute path", () => {
+      expect(loadSettings({ DATABASE_URL: "file:/data/policy.sqlite" }).databaseUrl).toBe(
+        "/data/policy.sqlite",
+      );
+    });
+
+    it("strips a file: scheme from a relative path (the CI form)", () => {
+      expect(loadSettings({ DATABASE_URL: "file:./ci_migration_test.sqlite" }).databaseUrl).toBe(
+        "./ci_migration_test.sqlite",
+      );
+    });
+
+    it("leaves a bare path untouched", () => {
+      expect(loadSettings({ DATABASE_URL: "/srv/policy.sqlite" }).databaseUrl).toBe(
+        "/srv/policy.sqlite",
+      );
+    });
+
+    it("normalizes the default the same way (bare, no scheme to strip)", () => {
+      expect(loadSettings({}).databaseUrl).toBe("/data/policy.sqlite");
+    });
+  });
+
   it("rejects an invalid log level", () => {
     expect(() => loadSettings({ PCT_LOG_LEVEL: "verbose" })).toThrow(SettingsError);
+  });
+
+  describe("PCT_DEFAULT_TZ", () => {
+    it("defaults to UTC when unset", () => {
+      expect(loadSettings({}).defaultTz).toBe("UTC");
+    });
+
+    it("round-trips a valid IANA zone", () => {
+      expect(loadSettings({ PCT_DEFAULT_TZ: "America/New_York" }).defaultTz).toBe(
+        "America/New_York",
+      );
+    });
+
+    it("rejects an invalid IANA zone with a readable error", () => {
+      expect(() => loadSettings({ PCT_DEFAULT_TZ: "Mars/Olympus_Mons" })).toThrow(SettingsError);
+      expect(() => loadSettings({ PCT_DEFAULT_TZ: "Mars/Olympus_Mons" })).toThrow(
+        /valid IANA timezone/,
+      );
+    });
   });
 
   it("rejects an unknown AdGuard mode with a readable error", () => {
@@ -134,6 +187,30 @@ describe("loadSettings", () => {
           PCT_ADGUARD_ADMIN_PORT: "not-a-port",
         }),
       ).toThrow(SettingsError);
+    });
+  });
+
+  describe("PCT_TELEMETRY_*", () => {
+    it("honours an explicit cron pattern and concurrency", () => {
+      const settings = loadSettings({
+        PCT_TELEMETRY_PULL_CRON: "0 */2 * * *",
+        PCT_TELEMETRY_PULL_CONCURRENCY: "8",
+      });
+
+      expect(settings.telemetry).toEqual({ pullCron: "0 */2 * * *", pullConcurrency: 8 });
+    });
+
+    it("rejects an invalid cron pattern with a readable error", () => {
+      expect(() => loadSettings({ PCT_TELEMETRY_PULL_CRON: "not a cron" })).toThrow(SettingsError);
+      expect(() => loadSettings({ PCT_TELEMETRY_PULL_CRON: "not a cron" })).toThrow(
+        /valid cron pattern/,
+      );
+    });
+
+    it("rejects a non-positive or non-numeric concurrency", () => {
+      expect(() => loadSettings({ PCT_TELEMETRY_PULL_CONCURRENCY: "0" })).toThrow(SettingsError);
+      expect(() => loadSettings({ PCT_TELEMETRY_PULL_CONCURRENCY: "-3" })).toThrow(SettingsError);
+      expect(() => loadSettings({ PCT_TELEMETRY_PULL_CONCURRENCY: "many" })).toThrow(SettingsError);
     });
   });
 });

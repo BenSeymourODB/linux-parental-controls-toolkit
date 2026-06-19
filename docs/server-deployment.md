@@ -65,15 +65,36 @@ The dashboard's database schema, the read-only copy of playbooks shipped
 inside the image, and the drizzle-kit SQL migrations all live in the
 image and are reconciled into `/data` on each start.
 
+`DATABASE_URL` points at the policy store and defaults to
+`/data/policy.sqlite`. It accepts two interchangeable forms: a bare
+filesystem path (`/data/policy.sqlite`) and the libsql `file:` URL form
+(`file:/data/policy.sqlite`, the form CI's migration job and
+`drizzle.config.ts` use). `better-sqlite3` only understands bare paths, so
+both the settings loader and `drizzle.config.ts` strip a leading `file:` —
+drizzle-kit (migrate/check) and the runtime connection therefore always open
+the same file whichever form you set.
+
 ## First-run setup
 
-On container start, the entrypoint runs these steps idempotently:
+On container start, the entrypoint and the Node server run these steps
+idempotently:
 
-1. **Schema migration** — apply the committed drizzle-kit migrations
-   against `/data/policy.sqlite`.
+1. **Schema migration** — the Node server applies the committed migrations
+   **in-process on boot**, against `/data/policy.sqlite`, using drizzle-orm's
+   `better-sqlite3` migrator (not `drizzle-kit`, which stays a build-time-only
+   dev dependency and is never shipped in the runtime image). The migrator is
+   idempotent — it tracks applied migrations in its own journal — so the
+   entrypoint itself runs no migration step, and the runtime and migrations
+   always open the same `DATABASE_URL` file with no double-migration hazard
+   (issues #49, #39).
 2. **Ansible bootstrap** — if `/data/ansible/venv` is missing, create it
    and `pip install ansible-core` (downloaded from PyPI at runtime, not
-   from the image). Sync `playbooks/` from the image.
+   from the image). Sync `playbooks/` from the image. The directory root is
+   `PCT_ANSIBLE_DIR` (default `/data/ansible`); the Phase-6 runner
+   (`transport/ansible`) execs `ansible-playbook` from
+   `<PCT_ANSIBLE_DIR>/venv/bin/` against playbooks in
+   `<PCT_ANSIBLE_DIR>/playbooks/` — always as a subprocess, never linked
+   in-process (`docs/licensing-analysis.md`).
 3. **AdGuard Home bootstrap** — driven by `PCT_ADGUARD_MODE` (see
    "AdGuard Home deployment modes" below). In `managed` mode, the
    first-time fetch downloads the latest stable release from
@@ -86,7 +107,13 @@ On container start, the entrypoint runs these steps idempotently:
 4. **SSH key bootstrap** — if `/data/secrets/ssh/id_ed25519` is absent,
    generate one. The public key is shown in the dashboard's "Add client"
    flow for the admin to install on each new client (or, more commonly,
-   for the client install script to fetch via a one-time enrollment URL).
+   for the client install script to fetch via a one-time enrolment token).
+   Its path is configurable via `PCT_SSH_PUBLIC_KEY_PATH` (default
+   `/data/secrets/ssh/id_ed25519.pub`); the client-enrolment response
+   (`POST /api/clients/enrol`, #77) returns that public key so the client can
+   authorize the dashboard. Until this Phase-4 keygen step lands the file is
+   absent and the enrol response carries `sshPublicKey: null` — enrolment still
+   succeeds, the client just isn't handed a key to authorize yet.
 5. Start the Node server on `0.0.0.0:8000` (default).
 
 If any of the optional downloads fail (no network, etc.), the dashboard
@@ -224,8 +251,47 @@ behind authentication.
 
 - The dashboard ships with single-admin local password auth (Argon2
   hash) suitable for a home deployment behind a LAN.
+- **Scope boundary (deliberate).** This is *one* admin login, not a user
+  system. The policy-model `User` is a supervised person, not an auth
+  principal (see [`architecture.md`](architecture.md) → "Policy model"
+  and [`adr/0002-client-dashboard-shell.md`](adr/0002-client-dashboard-shell.md)).
+  Phase 2 auth is intentionally minimal — verify a single Argon2id hash,
+  set a signed session cookie keyed on `PCT_SECRET_KEY`, guard the
+  routes — implemented with `argon2` plus `@fastify/cookie` (see
+  issue #52). Do not pull in a multi-user auth framework for this;
+  accounts, roles, MFA, federation, and self-registration are explicitly
+  out of scope until the identity work below.
+- **First-admin bootstrap.** On first run, if no admin credential exists
+  yet and **both** `PCT_ADMIN_USERNAME` and `PCT_ADMIN_PASSWORD` are set,
+  the dashboard seeds the single admin row from them. The password is
+  Argon2id-hashed immediately on seeding and the plaintext is never
+  stored; only the hash is persisted (in the `admin_credentials` table,
+  a singleton enforced by a `CHECK (id = 1)` constraint). Seeding is
+  idempotent — once an admin exists it is never reseeded or overwritten,
+  so you can drop `PCT_ADMIN_PASSWORD` from the environment after the
+  first successful start. If the variables are absent and no admin
+  exists, the dashboard logs a warning and login stays disabled until an
+  admin is configured. Until `PCT_SECRET_KEY` is set the auth endpoints
+  and the admin guard fail closed with `503 auth_not_configured` (a
+  session cannot be signed without it), so set a long random
+  `PCT_SECRET_KEY` in any real deployment.
+- **Session cookie.** The session is a signed (`PCT_SECRET_KEY`),
+  `HttpOnly`, `SameSite=Strict` cookie carrying a small non-secret
+  payload; it expires after 7 days. `SameSite=Strict` closes off CSRF
+  against the cookie-authenticated mutating routes. The cookie is not
+  marked `Secure` (the default LAN deployment is plain HTTP on port
+  8000); when terminating TLS at a reverse proxy, that proxy is the
+  appropriate place to enforce HTTPS.
 - Future: optional OIDC integration so a household identity provider
-  (FreeIPA, Authentik) can be used.
+  (FreeIPA, Authentik) can be used. When that (Phase 11 multi-admin/OIDC)
+  or the larger centralised-identity work (stretch epic #24 → #26:
+  accounts, per-family roles, TOTP MFA, OIDC-as-RP, invite-co-parent)
+  is picked up, **evaluate a managed TypeScript auth library such as
+  [Better-auth](https://www.better-auth.com/) before hand-rolling** —
+  it is Fastify-compatible and has a Drizzle adapter, and that feature
+  set is exactly what such a library exists to provide. Reconcile its
+  managed tables with this repo's committed drizzle-kit migrations as
+  part of that evaluation.
 - Client SSH access uses a single dedicated key generated on first run;
   rotation is a one-click action in the dashboard that pushes a new key
   via the existing connection.
@@ -240,7 +306,7 @@ the image.
 
 ## Upgrade path
 
-`docker pull` a newer image tag and restart. The entrypoint's migration
-step applies any new drizzle-kit migrations. The Ansible venv inside
+`docker pull` a newer image tag and restart. The server applies any new
+migrations in-process on boot (see "First-run setup" step 1). The Ansible venv inside
 `/data/ansible/venv` is pinned per image release; upgrades reconcile it
 on first start under the new tag.
