@@ -33,6 +33,7 @@ import {
 
 import {
   activityKindValues,
+  auditOutcomeValues,
   budgetWindowValues,
   scheduleActionValues,
   scopeValues,
@@ -556,6 +557,62 @@ export const notificationPolicies = sqliteTable(
     >(),
   },
   (table) => [check("notification_policies_grace_check", sql`${table.graceSeconds} >= 0`)],
+);
+
+/**
+ * Append-only audit of every command the dashboard issues to a client over the
+ * SSH transport (timekpra now; Ansible runs and enforcement force-closes land
+ * here as their phases arrive) — the one place to answer "what did the system
+ * do to this client, and when" (#85, `docs/roadmap.md` → Phase 4).
+ *
+ * Immutability is a posture, not a trigger: the application layer only ever
+ * INSERTs (via the `transport/audit` recorder) and SELECTs; a row is never
+ * UPDATEd in place. Like the {@link grants} ledger, this is distinct data —
+ * that records *grants*, this records *commands issued to clients*.
+ *
+ * - `at` is UTC (ADR 0001 / `docs/architecture.md` → "audit entries"): epoch
+ *   seconds, offset-free.
+ * - `target_host` / `target_port` / `target_user` are recorded **verbatim** so
+ *   an entry stands alone — the `client_id`/`user_id` FKs are nullable and
+ *   `ON DELETE SET NULL`, so removing a client or user never erases the history
+ *   of what was done to it.
+ * - `actor` is who/what triggered the command — `system` (scheduled/internal),
+ *   `admin`, or `integration:<name>`; free text rather than an enum because the
+ *   integration names are open-ended. Defaults to `system`.
+ * - `command` is the **redacted** argv vector (JSON string array). No
+ *   credential is ever in argv — the SSH key lives in the target, not the
+ *   command — but the recorder redacts secret-bearing flags defensively
+ *   (`CLAUDE.md`-aligned "command summary (no secrets)").
+ * - `outcome` is derived from the SSH error taxonomy (see {@link auditOutcomeValues}).
+ *
+ * The `(at)` index serves the newest-first browse and the Phase-11 retention
+ * purge scan (#137/#138); `(client_id, at)` serves the per-client view (#81).
+ */
+export const auditLog = sqliteTable(
+  "audit_log",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    at: timestampNow("at"),
+    targetHost: text("target_host").notNull(),
+    targetPort: integer("target_port").notNull(),
+    targetUser: text("target_user").notNull(),
+    clientId: integer("client_id").references(() => clients.id, { onDelete: "set null" }),
+    userId: integer("user_id").references(() => users.id, { onDelete: "set null" }),
+    actor: text("actor").notNull().default("system"),
+    reason: text("reason"),
+    command: text("command", { mode: "json" }).$type<string[]>().notNull(),
+    outcome: text("outcome", { enum: auditOutcomeValues }).notNull(),
+    exitCode: integer("exit_code"),
+    signal: text("signal"),
+    durationMs: integer("duration_ms").notNull(),
+    errorMessage: text("error_message"),
+  },
+  (table) => [
+    index("audit_log_at_idx").on(table.at),
+    index("audit_log_client_at_idx").on(table.clientId, table.at),
+    check("audit_log_outcome_check", oneOf(table.outcome, auditOutcomeValues)),
+    check("audit_log_duration_check", sql`${table.durationMs} >= 0`),
+  ],
 );
 
 /**

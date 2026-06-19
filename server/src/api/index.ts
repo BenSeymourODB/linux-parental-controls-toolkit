@@ -108,6 +108,17 @@ export {
   type EnrolmentTokenResponse,
 } from "./clients/index.js";
 
+// Transport-audit DTOs (#85): the read-only contract for the admin audit view.
+// Schemas live in `./audit/dtos.ts` next to the route.
+export {
+  auditEntryResponseSchema,
+  auditListResponseSchema,
+  listAuditQuerySchema,
+  type AuditEntryResponse,
+  type AuditListResponse,
+  type ListAuditQuery,
+} from "./audit/index.js";
+
 // Auth DTOs (#52). Re-exported here so the frontend imports the auth contract
 // from the same `/api` surface as every other DTO; the schemas themselves live
 // in `../auth/dtos.ts` next to the routes that use them.
