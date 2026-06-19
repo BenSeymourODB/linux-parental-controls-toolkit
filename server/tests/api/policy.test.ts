@@ -360,3 +360,481 @@ describe("policy CRUD routes", () => {
     expect(again.statusCode).toBe(404);
   });
 });
+
+describe("policy CRUD routes — policy model (#148)", () => {
+  let harness: TestApp;
+  let cookie: string;
+
+  beforeEach(async () => {
+    harness = buildTestApp({ appOptions: { settings: configuredSettings() } });
+    await harness.app.ready();
+    const login = await harness.app.inject({
+      method: "POST",
+      url: "/api/auth/login",
+      payload: { username: "ben", password: "hunter2" },
+    });
+    cookie = sessionCookie(login);
+  });
+
+  afterEach(async () => {
+    await harness.close();
+  });
+
+  function auth(opts: InjectOptions) {
+    return harness.app.inject({ ...opts, headers: { ...opts.headers, cookie } });
+  }
+
+  async function makeUser(displayName = "Alice"): Promise<number> {
+    return (await auth({ method: "POST", url: "/api/users", payload: { displayName } })).json().id;
+  }
+
+  async function makeActivity(matcher = "firefox"): Promise<number> {
+    return (
+      await auth({ method: "POST", url: "/api/activities", payload: { kind: "app", matcher } })
+    ).json().id;
+  }
+
+  // --- auth guard ----------------------------------------------------------
+
+  it("rejects anonymous access to the new collections with a 401", async () => {
+    for (const url of [
+      "/api/activities",
+      "/api/activity-groups",
+      "/api/budgets",
+      "/api/schedules",
+      "/api/exceptions",
+    ]) {
+      const res = await harness.app.inject({ method: "GET", url });
+      expect(res.statusCode).toBe(401);
+      expect(res.json().error.code).toBe("unauthorized");
+    }
+  });
+
+  // --- activities ----------------------------------------------------------
+
+  it("CRUDs an activity", async () => {
+    const created = await auth({
+      method: "POST",
+      url: "/api/activities",
+      payload: { kind: "domain", matcher: "youtube.com" },
+    });
+    expect(created.statusCode).toBe(201);
+    const body = created.json();
+    expect(body).toMatchObject({ kind: "domain", matcher: "youtube.com" });
+
+    const patched = await auth({
+      method: "PATCH",
+      url: `/api/activities/${body.id}`,
+      payload: { matcher: "m.youtube.com" },
+    });
+    expect(patched.json().matcher).toBe("m.youtube.com");
+
+    expect((await auth({ method: "GET", url: "/api/activities" })).json()).toHaveLength(1);
+
+    const del = await auth({ method: "DELETE", url: `/api/activities/${body.id}` });
+    expect(del.statusCode).toBe(204);
+    expect((await auth({ method: "GET", url: `/api/activities/${body.id}` })).statusCode).toBe(404);
+  });
+
+  it("rejects an invalid activity kind (400) and an empty PATCH (400)", async () => {
+    const bad = await auth({
+      method: "POST",
+      url: "/api/activities",
+      payload: { kind: "nonsense", matcher: "x" },
+    });
+    expect(bad.statusCode).toBe(400);
+    expect(bad.json().error.code).toBe("validation_error");
+
+    const id = await makeActivity();
+    const empty = await auth({ method: "PATCH", url: `/api/activities/${id}`, payload: {} });
+    expect(empty.statusCode).toBe(400);
+  });
+
+  // --- activity groups + membership ----------------------------------------
+
+  it("CRUDs a group and manages its membership", async () => {
+    const group = (
+      await auth({ method: "POST", url: "/api/activity-groups", payload: { name: "Social" } })
+    ).json();
+    expect(group.name).toBe("Social");
+
+    const dup = await auth({
+      method: "POST",
+      url: "/api/activity-groups",
+      payload: { name: "Social" },
+    });
+    expect(dup.statusCode).toBe(409);
+
+    const fb = await makeActivity("facebook.com");
+    const put = await auth({
+      method: "PUT",
+      url: `/api/activity-groups/${group.id}/activities/${fb}`,
+    });
+    expect(put.statusCode).toBe(204);
+    // Idempotent re-add.
+    expect(
+      (await auth({ method: "PUT", url: `/api/activity-groups/${group.id}/activities/${fb}` }))
+        .statusCode,
+    ).toBe(204);
+
+    const members = await auth({
+      method: "GET",
+      url: `/api/activity-groups/${group.id}/activities`,
+    });
+    expect(members.json()).toHaveLength(1);
+    expect(members.json()[0].id).toBe(fb);
+
+    const del = await auth({
+      method: "DELETE",
+      url: `/api/activity-groups/${group.id}/activities/${fb}`,
+    });
+    expect(del.statusCode).toBe(204);
+    // Removing a non-membership 404s.
+    expect(
+      (await auth({ method: "DELETE", url: `/api/activity-groups/${group.id}/activities/${fb}` }))
+        .statusCode,
+    ).toBe(404);
+  });
+
+  it("404s membership ops against a missing group or activity", async () => {
+    const group = (
+      await auth({ method: "POST", url: "/api/activity-groups", payload: { name: "G" } })
+    ).json();
+    const activity = await makeActivity();
+    expect(
+      (await auth({ method: "GET", url: `/api/activity-groups/999/activities` })).statusCode,
+    ).toBe(404);
+    expect(
+      (await auth({ method: "PUT", url: `/api/activity-groups/999/activities/${activity}` }))
+        .statusCode,
+    ).toBe(404);
+    expect(
+      (await auth({ method: "PUT", url: `/api/activity-groups/${group.id}/activities/999` }))
+        .statusCode,
+    ).toBe(404);
+  });
+
+  // --- budgets -------------------------------------------------------------
+
+  it("creates an overall budget and reads it back, filtered by user", async () => {
+    const userId = await makeUser();
+    const created = await auth({
+      method: "POST",
+      url: "/api/budgets",
+      payload: { userId, scope: "overall", window: "daily", secondsAllowed: 7200 },
+    });
+    expect(created.statusCode).toBe(201);
+    const body = created.json();
+    expect(body).toMatchObject({ scope: "overall", targetId: null, secondsAllowed: 7200 });
+
+    const filtered = await auth({ method: "GET", url: `/api/budgets?userId=${userId}` });
+    expect(filtered.json()).toHaveLength(1);
+    expect((await auth({ method: "GET", url: `/api/budgets?userId=999` })).json()).toEqual([]);
+
+    const patched = await auth({
+      method: "PATCH",
+      url: `/api/budgets/${body.id}`,
+      payload: { secondsAllowed: 3600 },
+    });
+    expect(patched.json().secondsAllowed).toBe(3600);
+
+    expect((await auth({ method: "DELETE", url: `/api/budgets/${body.id}` })).statusCode).toBe(204);
+  });
+
+  it("creates an activity-scoped budget against an existing target", async () => {
+    const userId = await makeUser();
+    const activityId = await makeActivity("steam");
+    const res = await auth({
+      method: "POST",
+      url: "/api/budgets",
+      payload: {
+        userId,
+        scope: "activity",
+        targetId: activityId,
+        window: "weekly",
+        secondsAllowed: 3600,
+      },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toMatchObject({ scope: "activity", targetId: activityId });
+  });
+
+  it("enforces budget target coherence and referent existence (400)", async () => {
+    const userId = await makeUser();
+    const overallWithTarget = await auth({
+      method: "POST",
+      url: "/api/budgets",
+      payload: { userId, scope: "overall", targetId: 1, window: "daily", secondsAllowed: 1 },
+    });
+    expect(overallWithTarget.statusCode).toBe(400);
+
+    const activityNoTarget = await auth({
+      method: "POST",
+      url: "/api/budgets",
+      payload: { userId, scope: "activity", window: "daily", secondsAllowed: 1 },
+    });
+    expect(activityNoTarget.statusCode).toBe(400);
+
+    const danglingTarget = await auth({
+      method: "POST",
+      url: "/api/budgets",
+      payload: { userId, scope: "activity", targetId: 999, window: "daily", secondsAllowed: 1 },
+    });
+    expect(danglingTarget.statusCode).toBe(400);
+  });
+
+  it("404s a budget for a missing user and 400s a negative allowance", async () => {
+    const missingUser = await auth({
+      method: "POST",
+      url: "/api/budgets",
+      payload: { userId: 999, scope: "overall", window: "daily", secondsAllowed: 1 },
+    });
+    expect(missingUser.statusCode).toBe(404);
+
+    const userId = await makeUser();
+    const negative = await auth({
+      method: "POST",
+      url: "/api/budgets",
+      payload: { userId, scope: "overall", window: "daily", secondsAllowed: -1 },
+    });
+    expect(negative.statusCode).toBe(400);
+  });
+
+  it("re-checks budget coherence on PATCH against the merged row (400)", async () => {
+    const userId = await makeUser();
+    const activityId = await makeActivity("steam");
+    const budget = (
+      await auth({
+        method: "POST",
+        url: "/api/budgets",
+        payload: {
+          userId,
+          scope: "activity",
+          targetId: activityId,
+          window: "daily",
+          secondsAllowed: 60,
+        },
+      })
+    ).json();
+    const bad = await auth({
+      method: "PATCH",
+      url: `/api/budgets/${budget.id}`,
+      payload: { scope: "overall" },
+    });
+    expect(bad.statusCode).toBe(400);
+    const ok = await auth({
+      method: "PATCH",
+      url: `/api/budgets/${budget.id}`,
+      payload: { scope: "overall", targetId: null },
+    });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.json()).toMatchObject({ scope: "overall", targetId: null });
+  });
+
+  it("404s budget GET/PATCH/DELETE for a missing id", async () => {
+    expect((await auth({ method: "GET", url: "/api/budgets/999" })).statusCode).toBe(404);
+    expect(
+      (await auth({ method: "PATCH", url: "/api/budgets/999", payload: { secondsAllowed: 1 } }))
+        .statusCode,
+    ).toBe(404);
+    expect((await auth({ method: "DELETE", url: "/api/budgets/999" })).statusCode).toBe(404);
+  });
+
+  // --- schedules -----------------------------------------------------------
+
+  it("creates an always-on schedule and a recurring window", async () => {
+    const userId = await makeUser();
+    const alwaysOn = await auth({
+      method: "POST",
+      url: "/api/schedules",
+      payload: { userId, targetKind: "overall", action: "deny" },
+    });
+    expect(alwaysOn.statusCode).toBe(201);
+    expect(alwaysOn.json()).toMatchObject({
+      targetKind: "overall",
+      action: "deny",
+      recurrenceDays: null,
+      effectiveFrom: null,
+      ordinal: 0,
+    });
+
+    const window = await auth({
+      method: "POST",
+      url: "/api/schedules",
+      payload: {
+        userId,
+        targetKind: "overall",
+        action: "allow",
+        recurrenceDays: 31,
+        recurrenceStartMinute: 540,
+        recurrenceEndMinute: 1020,
+        effectiveFrom: "2026-09-01T00:00:00.000Z",
+      },
+    });
+    expect(window.statusCode).toBe(201);
+    expect(window.json()).toMatchObject({
+      recurrenceStartMinute: 540,
+      recurrenceEndMinute: 1020,
+      effectiveFrom: "2026-09-01T00:00:00.000Z",
+    });
+
+    expect(
+      (await auth({ method: "GET", url: `/api/schedules?userId=${userId}` })).json(),
+    ).toHaveLength(2);
+  });
+
+  it("rejects a half-open recurrence pair on create (400)", async () => {
+    const userId = await makeUser();
+    const res = await auth({
+      method: "POST",
+      url: "/api/schedules",
+      payload: { userId, targetKind: "overall", action: "allow", recurrenceStartMinute: 540 },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.code).toBe("validation_error");
+  });
+
+  it("enforces schedule coherence and a missing user", async () => {
+    const userId = await makeUser();
+    const incoherent = await auth({
+      method: "POST",
+      url: "/api/schedules",
+      payload: { userId, targetKind: "activity", action: "allow" },
+    });
+    expect(incoherent.statusCode).toBe(400);
+
+    const missingUser = await auth({
+      method: "POST",
+      url: "/api/schedules",
+      payload: { userId: 999, targetKind: "overall", action: "allow" },
+    });
+    expect(missingUser.statusCode).toBe(404);
+  });
+
+  it("PATCHes a schedule and backstops a merged-row recurrence break (400)", async () => {
+    const userId = await makeUser();
+    const schedule = (
+      await auth({
+        method: "POST",
+        url: "/api/schedules",
+        payload: { userId, targetKind: "overall", action: "deny" },
+      })
+    ).json();
+
+    const ok = await auth({
+      method: "PATCH",
+      url: `/api/schedules/${schedule.id}`,
+      payload: { action: "allow", ordinal: 3 },
+    });
+    expect(ok.json()).toMatchObject({ action: "allow", ordinal: 3 });
+
+    const halfOpen = await auth({
+      method: "PATCH",
+      url: `/api/schedules/${schedule.id}`,
+      payload: { recurrenceStartMinute: 540 },
+    });
+    expect(halfOpen.statusCode).toBe(400);
+
+    expect(
+      (await auth({ method: "DELETE", url: `/api/schedules/${schedule.id}` })).statusCode,
+    ).toBe(204);
+    expect((await auth({ method: "GET", url: `/api/schedules/${schedule.id}` })).statusCode).toBe(
+      404,
+    );
+  });
+
+  // --- exceptions ----------------------------------------------------------
+
+  it("creates an exception, reads it, and filters by user", async () => {
+    const userId = await makeUser();
+    const created = await auth({
+      method: "POST",
+      url: "/api/exceptions",
+      payload: {
+        userId,
+        targetKind: "overall",
+        action: "allow",
+        reason: "Birthday",
+        expiresAt: "2026-07-01T21:00:00.000Z",
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const body = created.json();
+    expect(body).toMatchObject({
+      reason: "Birthday",
+      expiresAt: "2026-07-01T21:00:00.000Z",
+      effectiveFrom: null,
+    });
+    expect(typeof body.createdAt).toBe("string");
+
+    expect(
+      (await auth({ method: "GET", url: `/api/exceptions?userId=${userId}` })).json(),
+    ).toHaveLength(1);
+    expect((await auth({ method: "GET", url: `/api/exceptions/${body.id}` })).statusCode).toBe(200);
+  });
+
+  it("rejects an exception whose window is empty (400) and a missing user (404)", async () => {
+    const userId = await makeUser();
+    const emptyWindow = await auth({
+      method: "POST",
+      url: "/api/exceptions",
+      payload: {
+        userId,
+        targetKind: "overall",
+        action: "allow",
+        effectiveFrom: "2026-07-02T00:00:00.000Z",
+        expiresAt: "2026-07-01T00:00:00.000Z",
+      },
+    });
+    expect(emptyWindow.statusCode).toBe(400);
+
+    const missingUser = await auth({
+      method: "POST",
+      url: "/api/exceptions",
+      payload: {
+        userId: 999,
+        targetKind: "overall",
+        action: "allow",
+        expiresAt: "2026-07-01T00:00:00.000Z",
+      },
+    });
+    expect(missingUser.statusCode).toBe(404);
+  });
+
+  it("PATCHes an exception and backstops a merged-row window break (400)", async () => {
+    const userId = await makeUser();
+    const exception = (
+      await auth({
+        method: "POST",
+        url: "/api/exceptions",
+        payload: {
+          userId,
+          targetKind: "overall",
+          action: "allow",
+          expiresAt: "2026-07-10T00:00:00.000Z",
+        },
+      })
+    ).json();
+
+    const ok = await auth({
+      method: "PATCH",
+      url: `/api/exceptions/${exception.id}`,
+      payload: { reason: "Updated" },
+    });
+    expect(ok.json().reason).toBe("Updated");
+
+    const bad = await auth({
+      method: "PATCH",
+      url: `/api/exceptions/${exception.id}`,
+      payload: { effectiveFrom: "2026-07-20T00:00:00.000Z" },
+    });
+    expect(bad.statusCode).toBe(400);
+
+    expect(
+      (await auth({ method: "DELETE", url: `/api/exceptions/${exception.id}` })).statusCode,
+    ).toBe(204);
+    expect((await auth({ method: "GET", url: `/api/exceptions/${exception.id}` })).statusCode).toBe(
+      404,
+    );
+  });
+});

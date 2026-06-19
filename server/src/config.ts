@@ -14,6 +14,7 @@
  */
 import { z } from "zod";
 import { isValidTimeZone } from "./policy/budget-window.js";
+import { isValidCronPattern } from "./transport/activitywatch/telemetry.js";
 
 /** pino log levels, in increasing severity, plus `silent`. */
 const LOG_LEVELS = ["trace", "debug", "info", "warn", "error", "fatal", "silent"] as const;
@@ -134,6 +135,27 @@ const settingsSchema = z
      * layout (`docs/server-deployment.md` → "Volume layout").
      */
     sshPublicKeyPath: z.string().min(1).default("/data/secrets/ssh/id_ed25519.pub"),
+    /**
+     * Phase-5 telemetry pull (#86): the croner schedule and per-pass
+     * concurrency for opening SSH port-forwards to each client's `aw-server`.
+     */
+    telemetry: z.object({
+      /**
+       * croner pattern for the pull pass (`PCT_TELEMETRY_PULL_CRON`). Validated
+       * here so a typo fails fast at startup rather than silently never
+       * running. Defaults to every five minutes.
+       */
+      pullCron: z
+        .string()
+        .min(1)
+        .default("*/5 * * * *")
+        .refine(isValidCronPattern, { message: "must be a valid cron pattern (e.g. */5 * * * *)" }),
+      /**
+       * Max clients tunnelled concurrently per pass
+       * (`PCT_TELEMETRY_PULL_CONCURRENCY`). Defaults to 4.
+       */
+      pullConcurrency: z.coerce.number().int().positive().default(4),
+    }),
     adguard: adguardSchema,
   })
   .superRefine((settings, ctx) => {
@@ -192,6 +214,10 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
     adminPassword: env.PCT_ADMIN_PASSWORD,
     ansibleDir: env.PCT_ANSIBLE_DIR,
     sshPublicKeyPath: env.PCT_SSH_PUBLIC_KEY_PATH,
+    telemetry: {
+      pullCron: env.PCT_TELEMETRY_PULL_CRON,
+      pullConcurrency: env.PCT_TELEMETRY_PULL_CONCURRENCY,
+    },
     adguard: {
       mode: env.PCT_ADGUARD_MODE ?? "disabled",
       url: env.PCT_ADGUARD_URL,
