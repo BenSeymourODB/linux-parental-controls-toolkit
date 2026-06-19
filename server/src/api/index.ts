@@ -23,10 +23,11 @@ export {
 export { metaResponseSchema, type MetaResponse } from "./meta.js";
 export type { ZodTypeProvider } from "./validation.js";
 
-// Policy CRUD DTOs (#51): the account/device-core contract shared with the
+// Policy CRUD DTOs (#51/#148): the policy-model contract shared with the
 // frontend and integrators. Schemas live in `./policy/dtos.ts` next to the
 // routes; surfaced here so the whole `/api` contract imports from one barrel.
 export {
+  // Account/device core (#51)
   clientResponseSchema,
   createClientSchema,
   createUserSchema,
@@ -47,6 +48,43 @@ export {
   type UpdateUserRequest,
   type UpsertLinkRequest,
   type UserResponse,
+  // Activities, groups + membership (#148)
+  activityResponseSchema,
+  createActivitySchema,
+  updateActivitySchema,
+  activityGroupResponseSchema,
+  createActivityGroupSchema,
+  updateActivityGroupSchema,
+  groupIdParamsSchema,
+  groupActivityParamsSchema,
+  type ActivityResponse,
+  type CreateActivityRequest,
+  type UpdateActivityRequest,
+  type ActivityGroupResponse,
+  type CreateActivityGroupRequest,
+  type UpdateActivityGroupRequest,
+  // Budgets (#148)
+  budgetResponseSchema,
+  createBudgetSchema,
+  updateBudgetSchema,
+  userIdQuerySchema,
+  type BudgetResponse,
+  type CreateBudgetRequest,
+  type UpdateBudgetRequest,
+  // Schedules (#148)
+  scheduleResponseSchema,
+  createScheduleSchema,
+  updateScheduleSchema,
+  type ScheduleResponse,
+  type CreateScheduleRequest,
+  type UpdateScheduleRequest,
+  // Exceptions (#148)
+  exceptionResponseSchema,
+  createExceptionSchema,
+  updateExceptionSchema,
+  type ExceptionResponse,
+  type CreateExceptionRequest,
+  type UpdateExceptionRequest,
 } from "./policy/index.js";
 
 // Client-enrolment DTOs (#77): the admin token-mint + install-script enrol
