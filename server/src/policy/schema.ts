@@ -95,7 +95,21 @@ export const users = sqliteTable("users", {
  * nullable because a client created through the admin CRUD (`POST /api/clients`,
  * #51) has not been through the enrolment exchange and so holds no bearer
  * token; only `POST /api/clients/enrol` sets it.
+ *
+ * The `*_version` columns (#164) record what each client is running so Phase 14
+ * (#163) has an inventory to diff against. They are nullable because a client
+ * that doesn't report versions (an older install script, an admin-CRUD client)
+ * still enrols; `versions_reported_at` is set only when at least one version is
+ * reported. `component_versions` is a JSON blob keyed by managed component.
  */
+export interface ComponentVersions {
+  // `| undefined` on each optional field so this lines up with the zod-inferred
+  // `componentVersionsSchema` shape under `exactOptionalPropertyTypes`.
+  timekpr?: string | undefined;
+  e2guardian?: string | undefined;
+  activitywatch?: string | undefined;
+}
+
 export const clients = sqliteTable(
   "clients",
   {
@@ -105,6 +119,9 @@ export const clients = sqliteTable(
     bearerTokenHash: text("bearer_token_hash"),
     enrolledAt: timestampNow("enrolled_at"),
     lastSeen: integer("last_seen", { mode: "timestamp" }),
+    agentVersion: text("agent_version"),
+    componentVersions: text("component_versions", { mode: "json" }).$type<ComponentVersions>(),
+    versionsReportedAt: integer("versions_reported_at", { mode: "timestamp" }),
   },
   (table) => [
     uniqueIndex("clients_hostname_unique").on(table.hostname),
