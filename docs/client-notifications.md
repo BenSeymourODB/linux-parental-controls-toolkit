@@ -282,7 +282,12 @@ of normal policy distribution:
   notifications. Lives in the `/admin` and `/app` frontends.
 - The exact wire format of the WebSocket frames — fix it during
   implementation, document it in a separate API reference once it
-  stabilises.
+  stabilises. The **version-compatibility contract** the frames must
+  carry (the `hello`/`accept`/`refuse` handshake, the `eventProtocol`
+  version axis, the N-1 support window, and capability advertisement) is
+  decided in
+  [`docs/adr/0006-event-stream-version-compatibility.md`](adr/0006-event-stream-version-compatibility.md);
+  the frame envelope is fixed against that contract.
 - Push notifications to the *parent*'s phone when a child's budget
   is running low. That's a feature of the `/app` PWA, covered in
   [`roadmap.md`](roadmap.md) Phase 9, not of this client-side agent.

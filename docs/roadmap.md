@@ -210,6 +210,12 @@ expiry, lock + grant-unlock on overall-screen-time expiry.
   that haven't updated yet. Cheap in the handshake now, impossible to
   retrofit onto already-deployed clients (pulled forward from Phase 14;
   [#165](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/165)).
+  The contract — two integer version axes (`apiVersion` + a new
+  `eventProtocol`), the N-1 window, the `hello`/`accept`/`refuse`
+  handshake, capability advertisement, and `update_required` semantics —
+  is decided in
+  [`docs/adr/0006-event-stream-version-compatibility.md`](adr/0006-event-stream-version-compatibility.md);
+  this phase implements it.
 
 ## Phase 8c — Lockout / grant-unlock flow
 
