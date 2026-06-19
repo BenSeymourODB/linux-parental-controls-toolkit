@@ -63,6 +63,14 @@ export {
   type ActivityGroupResponse,
   type CreateActivityGroupRequest,
   type UpdateActivityGroupRequest,
+  // User groups + membership (#124)
+  createUserGroupSchema,
+  updateUserGroupSchema,
+  userGroupResponseSchema,
+  userGroupMemberParamsSchema,
+  type CreateUserGroupRequest,
+  type UpdateUserGroupRequest,
+  type UserGroupResponse,
   // Budgets (#148)
   budgetResponseSchema,
   createBudgetSchema,

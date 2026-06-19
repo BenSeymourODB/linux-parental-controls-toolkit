@@ -78,6 +78,8 @@ const EXPECTED_TABLES = [
   "schedules",
   "transport_queue",
   "usage_samples",
+  "user_group_memberships",
+  "user_groups",
   "users",
   "users_on_clients",
 ];
