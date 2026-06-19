@@ -55,6 +55,20 @@ describe("allowedWindowsToAllowedHours", () => {
     ]);
   });
 
+  it("brackets a one-minute window", () => {
+    expect(allowedWindowsToAllowedHours([{ start: 0, end: 1 }])).toEqual([
+      { hour: 0, startMinute: 0, endMinute: 1 },
+    ]);
+  });
+
+  it("emits a bare last hour when a partial-first window ends exactly on an hour boundary", () => {
+    // 00:30 → 02:00 = [30, 120): h0 [30-60], h1 whole (ends exactly at 120).
+    expect(allowedWindowsToAllowedHours([{ start: 30, end: 120 }])).toEqual([
+      { hour: 0, startMinute: 30, endMinute: 60 },
+      { hour: 1 },
+    ]);
+  });
+
   it("emits ascending hours across two windows in different hours", () => {
     expect(
       allowedWindowsToAllowedHours([
@@ -93,6 +107,13 @@ describe("allowedWindowsToAllowedHours", () => {
       ],
     ],
     [
+      "adjacent (unmerged) windows",
+      [
+        { start: 0, end: 30 },
+        { start: 30, end: 60 },
+      ],
+    ],
+    [
       "descending windows",
       [
         { start: 120, end: 180 },
@@ -122,6 +143,11 @@ function weekly(
   }
   return map;
 }
+
+/** Allowed-hours list for a window ending at 21:00 (`[0, 1260)`): bare hours 0..20. */
+const HOURS_UNTIL_2100 = Array.from({ length: 21 }, (_, h) => h).join(";");
+/** Allowed-hours list for a window ending at 22:00 (`[0, 1320)`): bare hours 0..21. */
+const HOURS_UNTIL_2200 = Array.from({ length: 22 }, (_, h) => h).join(";");
 
 describe("buildWeeklyAllowedHoursCommands", () => {
   it("emits set-allowed-days then per-day allowed-hours for the allowed weekdays", () => {
@@ -182,6 +208,9 @@ describe("buildWeeklyAllowedHoursCommands", () => {
     expect(commands).toHaveLength(8);
     expect(commands[0]).toEqual(["--setalloweddays", USER, "1;2;3;4;5;6;7"]);
     expect(commands.slice(1).every((c) => c[2] !== "ALL")).toBe(true);
+    // The weekday and weekend days carry their own (differing) hour lists.
+    expect(commands[1]).toEqual(["--setallowedhours", USER, "1", HOURS_UNTIL_2100]);
+    expect(commands[6]).toEqual(["--setallowedhours", USER, "6", HOURS_UNTIL_2200]);
   });
 
   it("does not collapse to ALL when a day is denied even if allowed days match", () => {
@@ -193,6 +222,7 @@ describe("buildWeeklyAllowedHoursCommands", () => {
     expect(commands[0]).toEqual(["--setalloweddays", USER, "1;2;3;4;5"]);
     expect(commands).toHaveLength(6);
     expect(commands.slice(1).every((c) => c[2] !== "ALL")).toBe(true);
+    expect(commands[1]).toEqual(["--setallowedhours", USER, "1", HOURS_UNTIL_2100]);
   });
 
   it("throws when no day is allowed", () => {

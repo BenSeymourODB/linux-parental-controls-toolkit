@@ -62,12 +62,16 @@ export type WeeklyAllowedWindows = ReadonlyMap<IsoWeekday, readonly TimeWindow[]
 /**
  * Validate that `windows` are well-formed and in the contract the resolver
  * guarantees: each interval integer-valued with `0 ≤ start < end ≤ 1440`, and
- * the list ascending and non-overlapping. Defensive — the resolver already
- * emits this shape — so a hand-built or future caller fails loudly rather than
- * producing a silently wrong push.
+ * the list strictly ascending with **adjacent intervals already merged**
+ * (`start > prevEnd`, not merely `≥`). The resolver emits exactly this shape
+ * (it coalesces touching allowed segments into one maximal window), so
+ * requiring it here makes the contract match the producer and lets a hand-built
+ * or future caller fail loudly — with an accurate message — rather than
+ * producing a silently wrong push or tripping the fragmentation check below on
+ * what is really one representable window.
  */
 function assertWindows(windows: readonly TimeWindow[]): void {
-  let prevEnd = 0;
+  let prevEnd = -1;
   for (const { start, end } of windows) {
     if (!Number.isInteger(start) || !Number.isInteger(end)) {
       throw new TimekprArgumentError(
@@ -79,9 +83,9 @@ function assertWindows(windows: readonly TimeWindow[]): void {
         `timekpra: allowed window must satisfy 0 <= start < end <= ${MINUTES_PER_DAY}, got [${start}-${end}]`,
       );
     }
-    if (start < prevEnd) {
+    if (start <= prevEnd) {
       throw new TimekprArgumentError(
-        `timekpra: allowed windows must be ascending and non-overlapping, got [${start}-${end}] after an interval ending at ${prevEnd}`,
+        `timekpra: allowed windows must be strictly ascending with adjacent intervals merged, got [${start}-${end}] after an interval ending at ${prevEnd}`,
       );
     }
     prevEnd = end;
