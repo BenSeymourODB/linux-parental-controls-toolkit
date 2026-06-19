@@ -21,6 +21,8 @@ import {
   enrolmentTokens,
   exceptions,
   grants,
+  groupExceptions,
+  groupSchedules,
   integrationTokens,
   notificationPolicies,
   schedules,
@@ -52,6 +54,8 @@ const allTables: Record<string, SQLiteTable> = {
   transportQueue,
   userGroups,
   userGroupMemberships,
+  groupSchedules,
+  groupExceptions,
 };
 
 let db: TestDb;
@@ -317,6 +321,113 @@ describe("recurrence + date-scoping reservation (#146 / ADR 0005)", () => {
     expect(() => insertException(1_800_000_000, 1_800_600_000)).not.toThrow(); // pre-scheduled
     expect(() => insertException(1_800_600_000, 1_800_600_000)).toThrow(/CHECK constraint/i); // not before expiry
     expect(() => insertException(1_800_600_000, 1_800_000_000)).toThrow(/CHECK constraint/i); // starts after expiry
+  });
+});
+
+describe("group-targeted schedules/exceptions (#182 / ADR 0007)", () => {
+  /** Insert a user group and return its generated id. */
+  function insertGroup(name = "Kids"): number {
+    const row = db.insert(userGroups).values({ name }).returning({ id: userGroups.id }).get();
+    if (row === undefined) throw new Error("group insert returned no row");
+    return row.id;
+  }
+
+  it("accepts an always-on group schedule and a basic group exception", () => {
+    const groupId = insertGroup();
+    expect(() =>
+      db
+        .insert(groupSchedules)
+        .values({ userGroupId: groupId, targetKind: "overall", action: "deny" })
+        .run(),
+    ).not.toThrow();
+    expect(() =>
+      db
+        .insert(groupExceptions)
+        .values({
+          userGroupId: groupId,
+          targetKind: "overall",
+          action: "allow",
+          expiresAt: new Date(1_800_600_000_000),
+        })
+        .run(),
+    ).not.toThrow();
+  });
+
+  it("rejects a group schedule for a non-existent group (FK)", () => {
+    expect(() =>
+      db
+        .insert(groupSchedules)
+        .values({ userGroupId: 9999, targetKind: "overall", action: "deny" })
+        .run(),
+    ).toThrow(/FOREIGN KEY constraint/i);
+  });
+
+  it("enforces the polymorphic target invariant on group schedules", () => {
+    const groupId = insertGroup();
+    // overall must carry no target_id
+    expect(() =>
+      db.$client
+        .prepare(
+          "INSERT INTO group_schedules (user_group_id, target_kind, target_id, action) VALUES (?,?,?,?)",
+        )
+        .run(groupId, "overall", 7, "deny"),
+    ).toThrow(/CHECK constraint/i);
+    // activity must carry one
+    expect(() =>
+      db.$client
+        .prepare(
+          "INSERT INTO group_schedules (user_group_id, target_kind, target_id, action) VALUES (?,?,?,?)",
+        )
+        .run(groupId, "activity", null, "deny"),
+    ).toThrow(/CHECK constraint/i);
+  });
+
+  it("enforces the recurrence window CHECK on group schedules", () => {
+    const groupId = insertGroup();
+    const insert = (start: number | null, end: number | null): void => {
+      db.$client
+        .prepare(
+          "INSERT INTO group_schedules (user_group_id, target_kind, recurrence_start_minute, recurrence_end_minute, action) VALUES (?,?,?,?,?)",
+        )
+        .run(groupId, "overall", start, end, "allow");
+    };
+    expect(() => insert(600, 600)).toThrow(/CHECK constraint/i); // empty window
+    expect(() => insert(600, null)).toThrow(/CHECK constraint/i); // half a pair
+    expect(() => insert(600, 720)).not.toThrow();
+  });
+
+  it("enforces the effective-window CHECK on group exceptions", () => {
+    const groupId = insertGroup();
+    const insert = (effectiveFrom: number | null, expiresAt: number): void => {
+      db.$client
+        .prepare(
+          "INSERT INTO group_exceptions (user_group_id, target_kind, action, effective_from, expires_at) VALUES (?,?,?,?,?)",
+        )
+        .run(groupId, "overall", "allow", effectiveFrom, expiresAt);
+    };
+    expect(() => insert(null, 1_800_600_000)).not.toThrow();
+    expect(() => insert(1_800_000_000, 1_800_600_000)).not.toThrow();
+    expect(() => insert(1_800_600_000, 1_800_000_000)).toThrow(/CHECK constraint/i);
+  });
+
+  it("cascades a group delete to its group-targeted rules", () => {
+    const groupId = insertGroup();
+    db.insert(groupSchedules)
+      .values({ userGroupId: groupId, targetKind: "overall", action: "deny" })
+      .run();
+    db.insert(groupExceptions)
+      .values({
+        userGroupId: groupId,
+        targetKind: "overall",
+        action: "allow",
+        expiresAt: new Date(1_800_600_000_000),
+      })
+      .run();
+
+    db.delete(userGroups).where(eq(userGroups.id, groupId)).run();
+
+    expect(db.select().from(groupSchedules).all()).toHaveLength(0);
+    expect(db.select().from(groupExceptions).all()).toHaveLength(0);
   });
 });
 

@@ -414,6 +414,99 @@ export const exceptions = sqliteTable(
 );
 
 /**
+ * A recurring allow/deny/extend rule defined **once for a {@link userGroups
+ * group}** and inherited by every member (#182, `docs/adr/0007-group-targeted-policy-rules.md`).
+ * Column-for-column the same rule shape as {@link schedules} — including the
+ * reserved recurrence + date-scoping window (ADR 0005) and the polymorphic
+ * `target_id` (see the file header) — but keyed by `user_group_id` instead of
+ * `user_id`, and with its own per-group `ordinal` (first-match-wins within the
+ * group, ADR 0004).
+ *
+ * Kept in a separate table rather than relaxing `schedules.user_id` to nullable
+ * (ADR 0007 §"Why B over A"): the user-keyed table and its wire contract stay
+ * untouched. The two tables converge at resolution, not in storage — a member's
+ * own rules and these inherited rules are merged into one precedence-ordered
+ * list by `policy/group-resolution.ts`, both satisfying the owner-agnostic
+ * `ScheduleRule` interface, so there is no duplicated precedence logic.
+ */
+export const groupSchedules = sqliteTable(
+  "group_schedules",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    userGroupId: integer("user_group_id")
+      .notNull()
+      .references(() => userGroups.id, { onDelete: "cascade" }),
+    targetKind: text("target_kind", { enum: scopeValues }).notNull(),
+    targetId: integer("target_id"),
+    recurrenceDays: integer("recurrence_days"),
+    recurrenceStartMinute: integer("recurrence_start_minute"),
+    recurrenceEndMinute: integer("recurrence_end_minute"),
+    effectiveFrom: integer("effective_from", { mode: "timestamp" }),
+    effectiveTo: integer("effective_to", { mode: "timestamp" }),
+    action: text("action", { enum: scheduleActionValues }).notNull(),
+    ordinal: integer("ordinal").notNull().default(0),
+  },
+  (table) => [
+    index("group_schedules_group_ordinal_idx").on(table.userGroupId, table.ordinal),
+    check("group_schedules_target_kind_check", oneOf(table.targetKind, scopeValues)),
+    check("group_schedules_action_check", oneOf(table.action, scheduleActionValues)),
+    check(
+      "group_schedules_target_coherence_check",
+      targetCoherence(table.targetKind, table.targetId),
+    ),
+    check(
+      "group_schedules_recurrence_days_check",
+      sql`${table.recurrenceDays} is null or (${table.recurrenceDays} between ${sql.raw(String(WEEKDAY_MASK_MIN))} and ${sql.raw(String(WEEKDAY_MASK_MAX))})`,
+    ),
+    check(
+      "group_schedules_recurrence_minutes_check",
+      sql`(${table.recurrenceStartMinute} is null) = (${table.recurrenceEndMinute} is null) and (${table.recurrenceStartMinute} is null or (${table.recurrenceStartMinute} >= ${sql.raw(String(MINUTE_OF_DAY_MIN))} and ${table.recurrenceEndMinute} <= ${sql.raw(String(MINUTE_OF_DAY_MAX))} and ${table.recurrenceStartMinute} < ${table.recurrenceEndMinute}))`,
+    ),
+    check(
+      "group_schedules_effective_window_check",
+      sql`${table.effectiveFrom} is null or ${table.effectiveTo} is null or ${table.effectiveFrom} < ${table.effectiveTo}`,
+    ),
+  ],
+);
+
+/**
+ * A one-off, expiring override defined **once for a {@link userGroups group}**
+ * and inherited by every member (#182, ADR 0007). The {@link exceptions} shape
+ * keyed by `user_group_id` instead of `user_id`: active during
+ * `[effective_from ?? created_at, expires_at)` (ADR 0005 §2), the
+ * `(user_group_id, expires_at)` index serving the active-override lookup.
+ */
+export const groupExceptions = sqliteTable(
+  "group_exceptions",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    userGroupId: integer("user_group_id")
+      .notNull()
+      .references(() => userGroups.id, { onDelete: "cascade" }),
+    targetKind: text("target_kind", { enum: scopeValues }).notNull(),
+    targetId: integer("target_id"),
+    action: text("action", { enum: scheduleActionValues }).notNull(),
+    reason: text("reason"),
+    effectiveFrom: integer("effective_from", { mode: "timestamp" }),
+    expiresAt: integer("expires_at", { mode: "timestamp" }).notNull(),
+    createdAt: timestampNow("created_at"),
+  },
+  (table) => [
+    index("group_exceptions_group_expires_idx").on(table.userGroupId, table.expiresAt),
+    check("group_exceptions_target_kind_check", oneOf(table.targetKind, scopeValues)),
+    check("group_exceptions_action_check", oneOf(table.action, scheduleActionValues)),
+    check(
+      "group_exceptions_target_coherence_check",
+      targetCoherence(table.targetKind, table.targetId),
+    ),
+    check(
+      "group_exceptions_effective_window_check",
+      sql`${table.effectiveFrom} is null or ${table.effectiveFrom} < ${table.expiresAt}`,
+    ),
+  ],
+);
+
+/**
  * A normalised usage interval pulled from ActivityWatch. Both `started_at`
  * and `ended_at` are UTC. Burndown views read these per user over a time
  * window, optionally narrowed to one activity — hence the two indexes.

@@ -71,6 +71,13 @@
       "when": 1781883667142,
       "tag": "20260619154107_fluffy_radioactive_man",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1781893289130,
+      "tag": "20260619182129_absent_meteorite",
+      "breakpoints": true
     }
   ]
 }
