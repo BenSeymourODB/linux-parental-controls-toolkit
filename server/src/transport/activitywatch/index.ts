@@ -28,6 +28,13 @@ export {
   type TelemetryScheduleOptions,
 } from "./telemetry.js";
 export {
+  DEFAULT_FUTURE_TOLERANCE_SECONDS,
+  normaliseWindowEvents,
+  type ActivityMatcher,
+  type NormaliseUsageInput,
+  type UsageSampleCandidate,
+} from "./normalise.js";
+export {
   awAfkDataSchema,
   awBucketSchema,
   awBucketsResponseSchema,
