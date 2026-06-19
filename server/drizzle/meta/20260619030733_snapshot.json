@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "9494938c-5d18-447b-9e70-f732148a57f5",
-  "prevId": "8340f92b-fe00-422e-bc6d-671141282f7a",
+  "id": "712503c8-5060-4f1d-92e1-df4fbaeb7c6f",
+  "prevId": "a3dec4b6-5857-4a66-94bd-503886ee2fb0",
   "tables": {
     "activities": {
       "name": "activities",
@@ -972,6 +972,131 @@
         "schedules_effective_window_check": {
           "name": "schedules_effective_window_check",
           "value": "\"schedules\".\"effective_from\" is null or \"schedules\".\"effective_to\" is null or \"schedules\".\"effective_from\" < \"schedules\".\"effective_to\""
+        }
+      }
+    },
+    "transport_queue": {
+      "name": "transport_queue",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "client_id": {
+          "name": "client_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "coalesce_key": {
+          "name": "coalesce_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "payload": {
+          "name": "payload",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'pending'"
+        },
+        "attempts": {
+          "name": "attempts",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "last_error": {
+          "name": "last_error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "enqueued_at": {
+          "name": "enqueued_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch())"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch())"
+        }
+      },
+      "indexes": {
+        "transport_queue_client_coalesce_unique": {
+          "name": "transport_queue_client_coalesce_unique",
+          "columns": [
+            "client_id",
+            "coalesce_key"
+          ],
+          "isUnique": true
+        },
+        "transport_queue_client_status_id_idx": {
+          "name": "transport_queue_client_status_id_idx",
+          "columns": [
+            "client_id",
+            "status",
+            "id"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "transport_queue_client_id_clients_id_fk": {
+          "name": "transport_queue_client_id_clients_id_fk",
+          "tableFrom": "transport_queue",
+          "tableTo": "clients",
+          "columnsFrom": [
+            "client_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "transport_queue_status_check": {
+          "name": "transport_queue_status_check",
+          "value": "\"transport_queue\".\"status\" in ('pending', 'failed')"
+        },
+        "transport_queue_attempts_check": {
+          "name": "transport_queue_attempts_check",
+          "value": "\"transport_queue\".\"attempts\" >= 0"
         }
       }
     },

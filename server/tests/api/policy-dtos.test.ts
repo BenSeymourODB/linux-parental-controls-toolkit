@@ -6,8 +6,20 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { toClientResponse, toUserResponse } from "../../src/api/policy/dtos.js";
-import type { ClientRow, UserRow } from "../../src/policy/repository.js";
+import {
+  toBudgetResponse,
+  toClientResponse,
+  toExceptionResponse,
+  toScheduleResponse,
+  toUserResponse,
+} from "../../src/api/policy/dtos.js";
+import type {
+  BudgetRow,
+  ClientRow,
+  ExceptionRow,
+  ScheduleRow,
+  UserRow,
+} from "../../src/policy/repository.js";
 
 describe("policy DTO mappers", () => {
   it("maps a user row, preserving a null tz", () => {
@@ -59,5 +71,78 @@ describe("policy DTO mappers", () => {
       versionsReportedAt: null,
     };
     expect(toClientResponse(row).lastSeen).toBeNull();
+  });
+
+  it("maps a budget row, preserving the polymorphic target", () => {
+    const row: BudgetRow = {
+      id: 4,
+      userId: 1,
+      scope: "activity",
+      targetId: 9,
+      window: "weekly",
+      secondsAllowed: 3600,
+    };
+    expect(toBudgetResponse(row)).toEqual({
+      id: 4,
+      userId: 1,
+      scope: "activity",
+      targetId: 9,
+      window: "weekly",
+      secondsAllowed: 3600,
+    });
+  });
+
+  it("maps a schedule row, serializing the effective window and keeping null recurrence", () => {
+    const row: ScheduleRow = {
+      id: 5,
+      userId: 1,
+      targetKind: "overall",
+      targetId: null,
+      recurrenceDays: 31,
+      recurrenceStartMinute: 540,
+      recurrenceEndMinute: 1020,
+      effectiveFrom: new Date("2026-09-01T00:00:00.000Z"),
+      effectiveTo: null,
+      action: "allow",
+      ordinal: 2,
+    };
+    expect(toScheduleResponse(row)).toEqual({
+      id: 5,
+      userId: 1,
+      targetKind: "overall",
+      targetId: null,
+      recurrenceDays: 31,
+      recurrenceStartMinute: 540,
+      recurrenceEndMinute: 1020,
+      effectiveFrom: "2026-09-01T00:00:00.000Z",
+      effectiveTo: null,
+      action: "allow",
+      ordinal: 2,
+    });
+  });
+
+  it("maps an exception row, serializing timestamps and a null effectiveFrom", () => {
+    const row: ExceptionRow = {
+      id: 6,
+      userId: 1,
+      targetKind: "overall",
+      targetId: null,
+      action: "allow",
+      reason: "Birthday",
+      effectiveFrom: null,
+      expiresAt: new Date("2026-07-01T21:00:00.000Z"),
+      createdAt: new Date("2026-06-30T10:00:00.000Z"),
+    };
+    expect(toExceptionResponse(row)).toEqual({
+      id: 6,
+      userId: 1,
+      targetKind: "overall",
+      targetId: null,
+      action: "allow",
+      reason: "Birthday",
+      effectiveFrom: null,
+      expiresAt: "2026-07-01T21:00:00.000Z",
+      createdAt: "2026-06-30T10:00:00.000Z",
+    });
   });
 });
