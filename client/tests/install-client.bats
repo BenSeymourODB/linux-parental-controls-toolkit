@@ -195,6 +195,9 @@ plan_strict() {
   export PCT_AGENT_VERSION=1.4.0
   export PCT_TIMEKPR_VERSION=0.5.3
   export PCT_ACTIVITYWATCH_VERSION=0.13.2
+  # e2guardian is intentionally left undetected; pin its probe at a missing
+  # binary so the "omitted" assertion stays hermetic on hosts that have it.
+  export PCT_E2GUARDIAN=pct-no-such-binary
   ok_args
   [ "$status" -eq 0 ]
   [[ "$output" == *'"agentVersion":"1.4.0"'* ]]
@@ -225,6 +228,9 @@ plan_strict() {
   # A tool whose name contains a digit must still resolve to the version, not
   # the name (the dot requirement guards this).
   export PCT_E2GUARDIAN_VERSION='e2guardian 5.5.8'
+  # Pin the un-overridden probes at a missing binary so the body is hermetic.
+  export PCT_TIMEKPRA=pct-no-such-binary
+  export PCT_AWSERVER=pct-no-such-binary
   ok_args
   [ "$status" -eq 0 ]
   [[ "$output" == *'"agentVersion":"1.4.0"'* ]]
