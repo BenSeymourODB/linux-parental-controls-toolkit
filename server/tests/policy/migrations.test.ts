@@ -136,6 +136,35 @@ describe("policy migrations", () => {
     sqlite.close();
   });
 
+  it("adds activities.match_type defaulting to 'exact' (#178, ADR 0006)", () => {
+    // Locks the hand-fixed recreate migration: the new matcher-grammar
+    // discriminator must exist and carry the degenerate v1 default so any
+    // activity predating it keeps case-insensitive exact matching with no
+    // backfill.
+    const sqlite = new Database(":memory:");
+    const db = drizzle(sqlite);
+
+    migrate(db, { migrationsFolder });
+
+    const column = sqlite
+      .prepare(`SELECT name, "notnull", dflt_value FROM pragma_table_info('activities')`)
+      .all() as { name: string; notnull: number; dflt_value: string | null }[];
+    const matchType = column.find((c) => c.name === "match_type");
+    expect(matchType).toBeDefined();
+    expect(matchType?.notnull).toBe(1);
+    expect(matchType?.dflt_value).toBe("'exact'");
+
+    // An existing row inserted without match_type lands on the default, so the
+    // recreate's column-copy hand-fix preserved v1 rows.
+    sqlite.prepare(`INSERT INTO activities (kind, matcher) VALUES ('app', 'firefox')`).run();
+    const row = sqlite.prepare(`SELECT match_type FROM activities`).get() as {
+      match_type: string;
+    };
+    expect(row.match_type).toBe("exact");
+
+    sqlite.close();
+  });
+
   it("is a no-op when re-applied to an already-migrated database", () => {
     const sqlite = new Database(":memory:");
     const db = drizzle(sqlite);

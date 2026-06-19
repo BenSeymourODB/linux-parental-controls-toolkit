@@ -202,6 +202,8 @@ describe("policy repository — activities & groups", () => {
     const created = repo.createActivity(db, { kind: "app", matcher: "firefox" });
     expect(created.id).toBeGreaterThan(0);
     expect(created.kind).toBe("app");
+    // match_type defaults to the v1 'exact' when not supplied (ADR 0006).
+    expect(created.matchType).toBe("exact");
 
     expect(repo.getActivity(db, created.id)).toEqual(created);
     expect(repo.listActivities(db)).toEqual([created]);
@@ -213,6 +215,21 @@ describe("policy repository — activities & groups", () => {
     expect(repo.deleteActivity(db, created.id)).toBe(true);
     expect(repo.getActivity(db, created.id)).toBeUndefined();
     expect(repo.deleteActivity(db, created.id)).toBe(false);
+  });
+
+  it("persists an explicit match_type and patches it (#178)", () => {
+    const created = repo.createActivity(db, {
+      kind: "app_group",
+      matcher: "(chrome|firefox)",
+      matchType: "regex",
+    });
+    expect(created.matchType).toBe("regex");
+    expect(repo.getActivity(db, created.id)?.matchType).toBe("regex");
+
+    const updated = repo.updateActivity(db, created.id, { matchType: "substring" });
+    expect(updated?.matchType).toBe("substring");
+    // The matcher is untouched by a match-type-only patch.
+    expect(updated?.matcher).toBe("(chrome|firefox)");
   });
 
   it("returns undefined for a missing activity update", () => {

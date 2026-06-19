@@ -50,6 +50,13 @@
       "when": 1781821514993,
       "tag": "20260618222514_pink_speed_demon",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1781879235726,
+      "tag": "20260619142715_brief_veda",
+      "breakpoints": true
     }
   ]
 }

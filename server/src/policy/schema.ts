@@ -34,6 +34,7 @@ import {
 import {
   activityKindValues,
   budgetWindowValues,
+  matchTypeValues,
   scheduleActionValues,
   scopeValues,
   transportQueueStatusValues,
@@ -184,8 +185,14 @@ export const activities = sqliteTable(
     id: integer("id").primaryKey({ autoIncrement: true }),
     kind: text("kind", { enum: activityKindValues }).notNull(),
     matcher: text("matcher").notNull(),
+    // How `matcher` is interpreted (ADR 0006). Defaults to `exact` so every
+    // row predating this column keeps the #88 v1 behaviour with no backfill.
+    matchType: text("match_type", { enum: matchTypeValues }).notNull().default("exact"),
   },
-  (table) => [check("activities_kind_check", oneOf(table.kind, activityKindValues))],
+  (table) => [
+    check("activities_kind_check", oneOf(table.kind, activityKindValues)),
+    check("activities_match_type_check", oneOf(table.matchType, matchTypeValues)),
+  ],
 );
 
 /** A named bundle of {@link activities}, linked many-to-many. */

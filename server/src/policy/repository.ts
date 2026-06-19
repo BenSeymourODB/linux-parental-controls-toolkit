@@ -20,7 +20,7 @@
 import { and, eq } from "drizzle-orm";
 
 import type { PolicyDb } from "./db.js";
-import type { ActivityKind, BudgetWindow, ScheduleAction, Scope } from "./enums.js";
+import type { ActivityKind, BudgetWindow, MatchType, ScheduleAction, Scope } from "./enums.js";
 import {
   activities,
   activitiesToGroups,
@@ -222,12 +222,15 @@ export type ActivityGroupMembershipRow = typeof activitiesToGroups.$inferSelect;
 export interface ActivityCreate {
   kind: ActivityKind;
   matcher: string;
+  /** How `matcher` is interpreted (ADR 0006). Omitted → DB default `exact`. */
+  matchType?: MatchType | undefined;
 }
 
 /** Mutable fields on an {@link activities} row; omitted keys are unchanged. */
 export interface ActivityUpdate {
   kind?: ActivityKind | undefined;
   matcher?: string | undefined;
+  matchType?: MatchType | undefined;
 }
 
 /** All activities, ascending by id. */
@@ -244,7 +247,12 @@ export function getActivity(db: PolicyDb, id: number): ActivityRow | undefined {
 export function createActivity(db: PolicyDb, input: ActivityCreate): ActivityRow {
   return db
     .insert(activities)
-    .values({ kind: input.kind, matcher: input.matcher })
+    .values({
+      kind: input.kind,
+      matcher: input.matcher,
+      // Omit when undefined so the column's DEFAULT 'exact' applies (ADR 0006).
+      ...(input.matchType !== undefined ? { matchType: input.matchType } : {}),
+    })
     .returning()
     .get();
 }
@@ -338,6 +346,7 @@ export function listGroupActivities(db: PolicyDb, groupId: number): ActivityRow[
       id: activities.id,
       kind: activities.kind,
       matcher: activities.matcher,
+      matchType: activities.matchType,
     })
     .from(activitiesToGroups)
     .innerJoin(activities, eq(activitiesToGroups.activityId, activities.id))

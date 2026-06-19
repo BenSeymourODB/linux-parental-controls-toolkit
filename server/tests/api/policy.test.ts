@@ -420,7 +420,8 @@ describe("policy CRUD routes — policy model (#148)", () => {
     });
     expect(created.statusCode).toBe(201);
     const body = created.json();
-    expect(body).toMatchObject({ kind: "domain", matcher: "youtube.com" });
+    // match_type defaults to the v1 'exact' when the client omits it (ADR 0006).
+    expect(body).toMatchObject({ kind: "domain", matcher: "youtube.com", matchType: "exact" });
 
     const patched = await auth({
       method: "PATCH",
@@ -448,6 +449,60 @@ describe("policy CRUD routes — policy model (#148)", () => {
     const id = await makeActivity();
     const empty = await auth({ method: "PATCH", url: `/api/activities/${id}`, payload: {} });
     expect(empty.statusCode).toBe(400);
+  });
+
+  it("round-trips an explicit match_type and validates regex patterns (#178, ADR 0006)", async () => {
+    // Create with an explicit non-default match_type.
+    const created = await auth({
+      method: "POST",
+      url: "/api/activities",
+      payload: { kind: "app", matcher: "(chrome|chromium)", matchType: "regex" },
+    });
+    expect(created.statusCode).toBe(201);
+    const body = created.json();
+    expect(body).toMatchObject({ matcher: "(chrome|chromium)", matchType: "regex" });
+
+    // GET echoes the stored match_type.
+    expect(
+      (await auth({ method: "GET", url: `/api/activities/${body.id}` })).json().matchType,
+    ).toBe("regex");
+
+    // PATCH the match_type alone.
+    const patched = await auth({
+      method: "PATCH",
+      url: `/api/activities/${body.id}`,
+      payload: { matchType: "substring" },
+    });
+    expect(patched.json().matchType).toBe("substring");
+
+    // An invalid match_type enum value is a 400.
+    const badType = await auth({
+      method: "POST",
+      url: "/api/activities",
+      payload: { kind: "app", matcher: "x", matchType: "fuzzy" },
+    });
+    expect(badType.statusCode).toBe(400);
+
+    // An uncompilable regex is rejected at create time (DTO-level).
+    const badCreate = await auth({
+      method: "POST",
+      url: "/api/activities",
+      payload: { kind: "app", matcher: "([unterminated", matchType: "regex" },
+    });
+    expect(badCreate.statusCode).toBe(400);
+    expect(badCreate.json().error.code).toBe("validation_error");
+
+    // And on PATCH, the effective (merged) pair is validated: flipping an
+    // existing literal matcher to match_type=regex when it isn't a valid
+    // pattern is a 400 even though the matcher field is unchanged.
+    const literal = await makeActivity("([not-a-regex");
+    const badPatch = await auth({
+      method: "PATCH",
+      url: `/api/activities/${literal}`,
+      payload: { matchType: "regex" },
+    });
+    expect(badPatch.statusCode).toBe(400);
+    expect(badPatch.json().error.code).toBe("validation_error");
   });
 
   // --- activity groups + membership ----------------------------------------
