@@ -13,6 +13,7 @@ import { generateToken, hashToken } from "../../auth/secret-token.js";
 import type { PolicyDb } from "../../policy/db.js";
 import * as enrolmentRepo from "../../policy/enrolment.js";
 import * as repo from "../../policy/repository.js";
+import type { ComponentVersions } from "../../policy/schema.js";
 import { ApiError } from "../errors.js";
 import type { EnrolClientRequest, MintEnrolmentTokenRequest } from "./dtos.js";
 import { loadServerSshPublicKey } from "./ssh-identity.js";
@@ -32,6 +33,39 @@ export interface EnrolServiceResult {
   bearerToken: string;
   sshPublicKey: string | null;
   supervisedUsers: { userId: number; linuxUsername: string; linuxUid: number }[];
+  /** The agent version recorded at enrolment, or `null` if none reported (#164). */
+  agentVersion: string | null;
+  /** The component versions recorded at enrolment, or `null` if none (#164). */
+  componentVersions: ComponentVersions | null;
+}
+
+/**
+ * Normalise the optional version inventory a client reported (#164) into the
+ * three columns the enrolment write expects. An empty `componentVersions`
+ * object (every field absent) counts as "nothing reported", so it does not on
+ * its own set `versionsReportedAt`. `versionsReportedAt` is the timestamp iff
+ * at least one version is present, keeping the trio internally consistent.
+ */
+export function resolveReportedVersions(input: {
+  agentVersion?: string | undefined;
+  componentVersions?: ComponentVersions | undefined;
+}): {
+  agentVersion: string | null;
+  componentVersions: ComponentVersions | null;
+  versionsReportedAt: Date | null;
+} {
+  const agentVersion = input.agentVersion ?? null;
+  const components = input.componentVersions;
+  const componentVersions =
+    components !== undefined && Object.values(components).some((v) => v !== undefined)
+      ? components
+      : null;
+  const reported = agentVersion !== null || componentVersions !== null;
+  return {
+    agentVersion,
+    componentVersions,
+    versionsReportedAt: reported ? new Date() : null,
+  };
 }
 
 /**
@@ -141,6 +175,7 @@ export function enrolClient(
     };
   });
 
+  const versions = resolveReportedVersions(input);
   const bearerToken = generateToken();
   let result: enrolmentRepo.EnrolResult;
   try {
@@ -149,6 +184,9 @@ export function enrolClient(
       sshUser: input.sshUser,
       bearerTokenHash: hashToken(bearerToken),
       links,
+      agentVersion: versions.agentVersion,
+      componentVersions: versions.componentVersions,
+      versionsReportedAt: versions.versionsReportedAt,
     });
   } catch (err) {
     if (err instanceof enrolmentRepo.EnrolmentTokenConsumedError) {
@@ -185,6 +223,8 @@ export function enrolClient(
       linuxUsername: link.linuxUsername,
       linuxUid: link.linuxUid,
     })),
+    agentVersion: result.client.agentVersion,
+    componentVersions: result.client.componentVersions,
   };
 }
 
