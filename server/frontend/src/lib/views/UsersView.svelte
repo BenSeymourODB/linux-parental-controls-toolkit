@@ -46,7 +46,10 @@
     error = null;
     try {
       const tz = newTz.trim();
-      const created = await createUser({ displayName: newName, ...(tz === "" ? {} : { tz }) });
+      const created = await createUser({
+        displayName: newName.trim(),
+        ...(tz === "" ? {} : { tz }),
+      });
       users = [...users, created];
       newName = "";
       newTz = "";

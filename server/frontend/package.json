@@ -6,11 +6,11 @@
   "description": "Dashboard frontend: one SvelteKit project serving the /admin and /app surfaces, built statically and served by the Fastify backend.",
   "scripts": {
     "dev": "vite dev",
-    "build": "npm run check && vite build",
+    "build": "svelte-kit sync && vite build",
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
-    "test": "vitest run"
+    "test": "svelte-kit sync && vitest run"
   },
   "devDependencies": {
     "@sveltejs/adapter-static": "^3.0.6",

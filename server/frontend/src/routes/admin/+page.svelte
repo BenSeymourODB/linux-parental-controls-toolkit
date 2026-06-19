@@ -50,8 +50,14 @@
     } catch (err) {
       // An unconfigured-auth 500 or a 401 both mean "show the login screen".
       session = { authenticated: false };
-      if (err instanceof ApiError && !err.unauthorized && err.status !== 500) {
-        loginError = err.message;
+      if (err instanceof ApiError) {
+        if (!err.unauthorized && err.status !== 500) {
+          loginError = err.message;
+        }
+      } else {
+        // A network/transport failure (fetch rejects) — don't leave the login
+        // screen unexplained.
+        loginError = "Unable to reach the server. Please try again.";
       }
     }
   }
