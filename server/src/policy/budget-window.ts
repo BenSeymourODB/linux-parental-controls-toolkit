@@ -288,6 +288,74 @@ export function windowContaining(
 }
 
 /**
+ * The local calendar date (`{ year, month, day }`, month 1-12) of `instant` as
+ * seen in `tz`. The complement of {@link localDayBounds}: it answers "what day
+ * is it for this user right now?" so a preview that defaults to "today" picks
+ * the user's local today, not the server's. Pure read of the wall-clock fields.
+ */
+export function localCalendarDate(
+  instant: Date,
+  tz: string,
+): { year: number; month: number; day: number } {
+  assertTimeZone(tz);
+  const { year, month, day } = zonedParts(instant, tz);
+  return { year, month, day };
+}
+
+/**
+ * Minutes elapsed since local midnight for `instant` in `tz` — i.e. the
+ * wall-clock `hour * 60 + minute`, in `[0, 1440)`. This is the value the
+ * recurrence model's intra-day window (`recurrence_start_minute` /
+ * `recurrence_end_minute`, ADR 0005 §1) is compared against, so the
+ * effective-policy resolver (#143) reads "is *T* inside `[start, end)`?"
+ * directly. Seconds are dropped (the model's resolution is whole minutes).
+ */
+export function localTimeOfDayMinutes(instant: Date, tz: string): number {
+  assertTimeZone(tz);
+  const { hour, minute } = zonedParts(instant, tz);
+  return hour * 60 + minute;
+}
+
+/**
+ * The ISO-8601 weekday of a local calendar date: `1` = Monday … `7` = Sunday.
+ *
+ * This is the numbering the recurrence model uses (ADR 0005 §1: bit *i* of a
+ * `recurrence_days` mask ⇒ ISO weekday *i + 1*), chosen over JavaScript's
+ * `0` = Sunday. Computed from the calendar fields alone, so it is independent
+ * of any timezone — the caller passes the date already resolved in the user's
+ * effective zone.
+ */
+export function isoWeekday(year: number, month: number, day: number): number {
+  // localWeekday: 0 = Sunday … 6 = Saturday. Map to ISO 1 (Mon) … 7 (Sun).
+  return ((localWeekday(year, month, day) + 6) % 7) + 1;
+}
+
+/**
+ * The UTC `[start, end)` bounds of a single local calendar **day** in `tz`:
+ * local midnight of `(year, month, day)` to the next local midnight.
+ *
+ * The day-scoped sibling of {@link windowContaining}`("daily", …)`, taking the
+ * calendar date directly rather than an instant within it — what the
+ * effective-policy resolver (#143) needs to date-gate grants and rules against
+ * a specific (possibly future) day. DST-correct: a spring-forward day is 23h
+ * and a fall-back day is 25h, because both edges are local-midnight wall times.
+ */
+export function localDayBounds(
+  year: number,
+  month: number,
+  day: number,
+  tz: string,
+): BudgetWindowBounds {
+  assertTimeZone(tz);
+  const next = addDays(year, month, day, 1);
+  return {
+    start: localMidnight(year, month, day, tz),
+    end: localMidnight(next.year, next.month, next.day, tz),
+    tz,
+  };
+}
+
+/**
  * The budget window active at `now`, honouring the mid-window timezone-change
  * rule (ADR 0003).
  *

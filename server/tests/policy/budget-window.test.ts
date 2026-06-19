@@ -10,7 +10,11 @@ import {
   assertTimeZone,
   effectiveWindow,
   InvalidTimeZoneError,
+  isoWeekday,
   isValidTimeZone,
+  localCalendarDate,
+  localDayBounds,
+  localTimeOfDayMinutes,
   resolveEffectiveTz,
   windowContaining,
 } from "../../src/policy/budget-window.js";
@@ -282,5 +286,67 @@ describe("effectiveWindow (mid-window timezone-change pin rule)", () => {
     expect(w.tz).toBe("America/New_York");
     expect(iso(w.start)).toBe("2024-01-15T05:00:00.000Z");
     expect(iso(w.end)).toBe("2024-01-22T05:00:00.000Z");
+  });
+});
+
+describe("isoWeekday", () => {
+  it("numbers Monday=1 … Sunday=7", () => {
+    // 2024-01-01 is a Monday.
+    expect(isoWeekday(2024, 1, 1)).toBe(1);
+    expect(isoWeekday(2024, 1, 6)).toBe(6); // Saturday
+    expect(isoWeekday(2024, 1, 7)).toBe(7); // Sunday
+    expect(isoWeekday(2024, 1, 8)).toBe(1); // next Monday
+  });
+});
+
+describe("localCalendarDate", () => {
+  it("reads the wall-clock date in the given zone", () => {
+    // 04:30Z on 2024-03-02 is still 2024-03-01 in Los Angeles (UTC-8).
+    const instant = new Date("2024-03-02T04:30:00Z");
+    expect(localCalendarDate(instant, "America/Los_Angeles")).toEqual({
+      year: 2024,
+      month: 3,
+      day: 1,
+    });
+    expect(localCalendarDate(instant, "UTC")).toEqual({ year: 2024, month: 3, day: 2 });
+  });
+
+  it("rejects an invalid zone", () => {
+    expect(() => localCalendarDate(new Date(), "Nowhere/Nope")).toThrow(InvalidTimeZoneError);
+  });
+});
+
+describe("localTimeOfDayMinutes", () => {
+  it("returns minutes from local midnight, dropping seconds", () => {
+    const instant = new Date("2024-06-01T13:45:30Z");
+    expect(localTimeOfDayMinutes(instant, "UTC")).toBe(13 * 60 + 45);
+    // Same instant in New York (UTC-4 in June) → 09:45 local.
+    expect(localTimeOfDayMinutes(instant, "America/New_York")).toBe(9 * 60 + 45);
+  });
+
+  it("is 0 at local midnight", () => {
+    expect(localTimeOfDayMinutes(new Date("2024-06-01T00:00:00Z"), "UTC")).toBe(0);
+  });
+});
+
+describe("localDayBounds", () => {
+  it("spans local midnight to the next local midnight in UTC", () => {
+    const b = localDayBounds(2024, 6, 1, "America/New_York");
+    expect(iso(b.start)).toBe("2024-06-01T04:00:00.000Z"); // EDT, UTC-4
+    expect(iso(b.end)).toBe("2024-06-02T04:00:00.000Z");
+    expect(b.tz).toBe("America/New_York");
+  });
+
+  it("is a 23-hour day across spring-forward DST", () => {
+    // 2024-03-10 is the US spring-forward; the local day is 23h long.
+    const b = localDayBounds(2024, 3, 10, "America/New_York");
+    expect(b.end.getTime() - b.start.getTime()).toBe(23 * 60 * 60 * 1000);
+  });
+
+  it('agrees with windowContaining("daily") for an instant inside the day', () => {
+    const b = localDayBounds(2024, 6, 1, "Asia/Tokyo");
+    const w = windowContaining("daily", new Date("2024-06-01T03:00:00Z"), "Asia/Tokyo");
+    expect(iso(b.start)).toBe(iso(w.start));
+    expect(iso(b.end)).toBe(iso(w.end));
   });
 });
