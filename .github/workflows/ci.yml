@@ -115,22 +115,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: ShellCheck (client scripts)
+      - name: ShellCheck (client + scripts)
         run: |
-          if compgen -G "client/**/*.sh" > /dev/null 2>&1 || compgen -G "client/*.sh" > /dev/null 2>&1; then
-            find client/ -name "*.sh" -print0 | xargs -0 shellcheck
+          mapfile -t sh_files < <(find client/ scripts/ -name "*.sh" 2>/dev/null)
+          if [ "${#sh_files[@]}" -gt 0 ]; then
+            shellcheck "${sh_files[@]}"
           else
-            echo "No shell scripts in client/ yet — skipping ShellCheck"
+            echo "No shell scripts yet — skipping ShellCheck"
           fi
 
   client-tests:
-    name: Client shell tests (bats)
+    name: Shell tests (bats)
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install bats
-        run: sudo apt-get update && sudo apt-get install -y bats
+      - name: Install bats + sqlite3
+        run: sudo apt-get update && sudo apt-get install -y bats sqlite3
 
       - name: bats (client/tests)
         run: |
@@ -138,6 +139,14 @@ jobs:
             bats client/tests/
           else
             echo "No client bats tests yet — skipping"
+          fi
+
+      - name: bats (scripts/tests)
+        run: |
+          if compgen -G "scripts/tests/*.bats" > /dev/null 2>&1; then
+            bats scripts/tests/
+          else
+            echo "No scripts bats tests yet — skipping"
           fi
 
   ansible-lint:
