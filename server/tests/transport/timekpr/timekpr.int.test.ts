@@ -84,7 +84,9 @@ describe.skipIf(!liveSshEnabled)("TimekprClient over live SSH (stub timekpra)", 
 
   it("getUserInfo parses the stub's --userinfo block over the wire", async () => {
     const info = await client.getUserInfo();
-    expect(info.has("USER_NAME")).toBe(true);
+    // The stub echoes the username arg ($2), so this also confirms the client
+    // passed the right user through to `--userinfo`.
+    expect(info.get("USER_NAME")).toBe("alice");
     expect(info.get("TIME_LIMIT_PER_WEEK")).toBe("86400");
     expect(info.get("TIME_LIMIT_PER_MONTH")).toBe("360000");
   });
