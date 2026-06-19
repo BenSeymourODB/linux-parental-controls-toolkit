@@ -44,3 +44,25 @@ export type ActivityKind = z.infer<typeof activityKindSchema>;
 export const scheduleActionValues = ["allow", "deny", "extend"] as const;
 export const scheduleActionSchema = z.enum(scheduleActionValues);
 export type ScheduleAction = z.infer<typeof scheduleActionSchema>;
+
+/**
+ * Outcome of a transport command recorded in the audit log (#85), derived from
+ * the SSH facade's error taxonomy (`transport/ssh/errors.ts`):
+ *
+ * - `ok` — the command ran and exited zero.
+ * - `failed` — the host was reached but the command exited non-zero / was
+ *   signal-killed (`SshCommandError`).
+ * - `unreachable` — the host could not be reached (`SshUnreachableError`).
+ * - `timeout` — the command exceeded its per-exec timeout (`SshExecTimeoutError`).
+ * - `parse_error` — the command succeeded but its stdout failed validation
+ *   (`SshParseError`).
+ */
+export const auditOutcomeValues = [
+  "ok",
+  "failed",
+  "unreachable",
+  "timeout",
+  "parse_error",
+] as const;
+export const auditOutcomeSchema = z.enum(auditOutcomeValues);
+export type AuditOutcome = z.infer<typeof auditOutcomeSchema>;

@@ -10,6 +10,7 @@ import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 
 import { registerAuth } from "../auth/index.js";
 import type { Settings } from "../config.js";
+import { registerAuditRoutes } from "./audit/index.js";
 import { registerClientEnrolmentRoutes } from "./clients/index.js";
 import { registerMetaRoute } from "./meta.js";
 import { registerPolicyRoutes } from "./policy/index.js";
@@ -36,6 +37,8 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (scope, opt
   // Client enrolment (#77): admin-minted token + the install script's enrol
   // exchange. `settings` carries the SSH-public-key path the enrol response returns.
   registerClientEnrolmentRoutes(scope, opts.settings);
+  // Transport audit log (#85): admin-only read of every command issued to a client.
+  registerAuditRoutes(scope);
 };
 
 /** Mount the JSON API under `/api` on the given app. */
