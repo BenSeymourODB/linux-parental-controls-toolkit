@@ -194,6 +194,48 @@ export const usersOnClients = sqliteTable(
   ],
 );
 
+/**
+ * A named set of supervised {@link users} that policy can target as a unit
+ * (#124) — "set bedtime for all the kids once". A user may belong to ≥0 groups
+ * (membership is many-to-many via {@link userGroupMemberships}); group-targeted
+ * {@link schedules}/{@link exceptions} are inherited by every member, with the
+ * member's own rules taking precedence (see `policy/group-resolution.ts`).
+ *
+ * This is a distinct axis from {@link activityGroups}, which bundles
+ * *activities*; `UserGroup` bundles *users*.
+ */
+export const userGroups = sqliteTable(
+  "user_groups",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    name: text("name").notNull(),
+    createdAt: timestampNow("created_at"),
+  },
+  (table) => [uniqueIndex("user_groups_name_unique").on(table.name)],
+);
+
+/**
+ * Join table for the {@link users} ↔ {@link userGroups} M2M (multi-group
+ * membership). Composite-keyed so a user appears at most once per group; the
+ * `group_id` index serves the "who is in this group?" read (the user-id read
+ * is the composite PK's left prefix).
+ */
+export const userGroupMemberships = sqliteTable(
+  "user_group_memberships",
+  {
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    groupId: integer("group_id")
+      .notNull()
+      .references(() => userGroups.id, { onDelete: "cascade" }),
+  },
+  (table) => [
+    primaryKey({ columns: [table.userId, table.groupId] }),
+    index("user_group_memberships_group_idx").on(table.groupId),
+  ],
+);
+
 /** A matchable app or domain (or a named group of them). */
 export const activities = sqliteTable(
   "activities",

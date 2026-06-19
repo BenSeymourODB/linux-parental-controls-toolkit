@@ -32,6 +32,7 @@ import {
   createClientSchema,
   createExceptionSchema,
   createScheduleSchema,
+  createUserGroupSchema,
   createUserSchema,
   groupActivityParamsSchema,
   groupIdParamsSchema,
@@ -43,6 +44,7 @@ import {
   toExceptionResponse,
   toLinkResponse,
   toScheduleResponse,
+  toUserGroupResponse,
   toUserResponse,
   updateActivityGroupSchema,
   updateActivitySchema,
@@ -50,9 +52,11 @@ import {
   updateClientSchema,
   updateExceptionSchema,
   updateScheduleSchema,
+  updateUserGroupSchema,
   updateUserSchema,
   upsertLinkSchema,
   userClientParamsSchema,
+  userGroupMemberParamsSchema,
   userIdParamsSchema,
   userIdQuerySchema,
   type ActivityGroupResponse,
@@ -62,6 +66,7 @@ import {
   type ExceptionResponse,
   type LinkResponse,
   type ScheduleResponse,
+  type UserGroupResponse,
   type UserResponse,
 } from "./dtos.js";
 
@@ -491,6 +496,122 @@ export function registerPolicyRoutes(scope: FastifyInstance): void {
           "not_found",
           `Activity ${activityId} is not a member of group ${groupId}`,
         );
+      }
+      return reply.code(204).send();
+    },
+  );
+
+  // --- User groups (#124) --------------------------------------------------
+
+  typed.get(
+    "/user-groups",
+    guard,
+    async (): Promise<UserGroupResponse[]> =>
+      repo.listUserGroups(scope.db).map(toUserGroupResponse),
+  );
+
+  typed.post(
+    "/user-groups",
+    { ...guard, schema: { body: createUserGroupSchema } },
+    async (request, reply): Promise<UserGroupResponse> => {
+      const row = asConflict(
+        () => repo.createUserGroup(scope.db, request.body),
+        `A user group named "${request.body.name}" already exists`,
+      );
+      reply.code(201);
+      return toUserGroupResponse(row);
+    },
+  );
+
+  typed.get(
+    "/user-groups/:id",
+    { ...guard, schema: { params: idParamsSchema } },
+    async (request): Promise<UserGroupResponse> => {
+      const row = repo.getUserGroup(scope.db, request.params.id);
+      if (row === undefined) {
+        throw new ApiError(404, "not_found", `User group ${request.params.id} not found`);
+      }
+      return toUserGroupResponse(row);
+    },
+  );
+
+  typed.patch(
+    "/user-groups/:id",
+    { ...guard, schema: { params: idParamsSchema, body: updateUserGroupSchema } },
+    async (request): Promise<UserGroupResponse> => {
+      const row = asConflict(
+        () => repo.updateUserGroup(scope.db, request.params.id, request.body),
+        "That user-group name is already in use",
+      );
+      if (row === undefined) {
+        throw new ApiError(404, "not_found", `User group ${request.params.id} not found`);
+      }
+      return toUserGroupResponse(row);
+    },
+  );
+
+  typed.delete(
+    "/user-groups/:id",
+    { ...guard, schema: { params: idParamsSchema } },
+    async (request, reply) => {
+      if (!repo.deleteUserGroup(scope.db, request.params.id)) {
+        throw new ApiError(404, "not_found", `User group ${request.params.id} not found`);
+      }
+      return reply.code(204).send();
+    },
+  );
+
+  // --- User-group membership (users ↔ user_groups) -------------------------
+
+  typed.get(
+    "/user-groups/:groupId/members",
+    { ...guard, schema: { params: groupIdParamsSchema } },
+    async (request): Promise<UserResponse[]> => {
+      const { groupId } = request.params;
+      if (repo.getUserGroup(scope.db, groupId) === undefined) {
+        throw new ApiError(404, "not_found", `User group ${groupId} not found`);
+      }
+      return repo.listGroupMembers(scope.db, groupId).map(toUserResponse);
+    },
+  );
+
+  typed.get(
+    "/users/:userId/groups",
+    { ...guard, schema: { params: userIdParamsSchema } },
+    async (request): Promise<UserGroupResponse[]> => {
+      const { userId } = request.params;
+      if (repo.getUser(scope.db, userId) === undefined) {
+        throw new ApiError(404, "not_found", `User ${userId} not found`);
+      }
+      return repo.listUserGroupsForUser(scope.db, userId).map(toUserGroupResponse);
+    },
+  );
+
+  typed.put(
+    "/user-groups/:groupId/members/:userId",
+    { ...guard, schema: { params: userGroupMemberParamsSchema } },
+    async (request, reply) => {
+      const { groupId, userId } = request.params;
+      // Confirm both ends exist so the caller gets a precise 404 rather than an
+      // opaque foreign-key failure.
+      if (repo.getUserGroup(scope.db, groupId) === undefined) {
+        throw new ApiError(404, "not_found", `User group ${groupId} not found`);
+      }
+      if (repo.getUser(scope.db, userId) === undefined) {
+        throw new ApiError(404, "not_found", `User ${userId} not found`);
+      }
+      repo.addUserToGroup(scope.db, groupId, userId);
+      return reply.code(204).send();
+    },
+  );
+
+  typed.delete(
+    "/user-groups/:groupId/members/:userId",
+    { ...guard, schema: { params: userGroupMemberParamsSchema } },
+    async (request, reply) => {
+      const { groupId, userId } = request.params;
+      if (!repo.removeUserFromGroup(scope.db, groupId, userId)) {
+        throw new ApiError(404, "not_found", `User ${userId} is not a member of group ${groupId}`);
       }
       return reply.code(204).send();
     },
