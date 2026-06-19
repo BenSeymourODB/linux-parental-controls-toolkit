@@ -465,6 +465,42 @@ describe("client enrolment routes", () => {
       }
     });
 
+    it("tracks the failed-attempt budget independently per source IP", async () => {
+      const userId = await createUser("Alice");
+      const token = await mintFor(userId, "alice");
+
+      // Exhaust one IP's budget with bearer-less failures.
+      for (let i = 0; i < ENROL_RATE_LIMIT_MAX_ATTEMPTS; i += 1) {
+        const fail = await harness.app.inject({
+          method: "POST",
+          url: "/api/clients/enrol",
+          payload: validPayload,
+          remoteAddress: "10.0.0.1",
+        });
+        expect(fail.statusCode).toBe(401);
+      }
+
+      // That IP is now blocked, even presenting a valid token...
+      const blocked = await harness.app.inject({
+        method: "POST",
+        url: "/api/clients/enrol",
+        payload: validPayload,
+        headers: { authorization: `Bearer ${token}` },
+        remoteAddress: "10.0.0.1",
+      });
+      expect(blocked.statusCode).toBe(429);
+
+      // ...but a different IP is unaffected and enrols normally.
+      const other = await harness.app.inject({
+        method: "POST",
+        url: "/api/clients/enrol",
+        payload: validPayload,
+        headers: { authorization: `Bearer ${token}` },
+        remoteAddress: "10.0.0.2",
+      });
+      expect(other.statusCode).toBe(201);
+    });
+
     it("valid-token rejections (400/409) don't count toward the budget", async () => {
       const userId = await createUser("Alice");
       // A 400 mismatch is thrown before the token is consumed, so one token
