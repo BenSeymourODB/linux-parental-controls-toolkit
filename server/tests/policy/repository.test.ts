@@ -176,3 +176,295 @@ describe("isUniqueViolation", () => {
     expect(repo.isUniqueViolation({ code: "SQLITE_CONSTRAINT_PRIMARYKEY" })).toBe(true);
   });
 });
+
+describe("isCheckViolation", () => {
+  it("is false for non-CHECK values", () => {
+    expect(repo.isCheckViolation(null)).toBe(false);
+    expect(repo.isCheckViolation(new Error("boom"))).toBe(false);
+    expect(repo.isCheckViolation({ code: "SQLITE_CONSTRAINT_UNIQUE" })).toBe(false);
+  });
+
+  it("is true for the CHECK constraint code", () => {
+    expect(repo.isCheckViolation({ code: "SQLITE_CONSTRAINT_CHECK" })).toBe(true);
+  });
+});
+
+describe("policy repository — activities & groups", () => {
+  let db: TestDb;
+  beforeEach(() => {
+    db = testDb();
+  });
+  afterEach(() => {
+    db.$client.close();
+  });
+
+  it("creates, reads, lists, updates, and deletes an activity", () => {
+    const created = repo.createActivity(db, { kind: "app", matcher: "firefox" });
+    expect(created.id).toBeGreaterThan(0);
+    expect(created.kind).toBe("app");
+
+    expect(repo.getActivity(db, created.id)).toEqual(created);
+    expect(repo.listActivities(db)).toEqual([created]);
+
+    const updated = repo.updateActivity(db, created.id, { matcher: "firefox-esr" });
+    expect(updated?.matcher).toBe("firefox-esr");
+    expect(updated?.kind).toBe("app");
+
+    expect(repo.deleteActivity(db, created.id)).toBe(true);
+    expect(repo.getActivity(db, created.id)).toBeUndefined();
+    expect(repo.deleteActivity(db, created.id)).toBe(false);
+  });
+
+  it("returns undefined for a missing activity update", () => {
+    expect(repo.updateActivity(db, 999, { matcher: "x" })).toBeUndefined();
+  });
+
+  it("creates a group and surfaces a duplicate name as a unique violation", () => {
+    const group = repo.createActivityGroup(db, { name: "Social" });
+    expect(group.name).toBe("Social");
+    expect(repo.listActivityGroups(db)).toEqual([group]);
+
+    let caught: unknown;
+    try {
+      repo.createActivityGroup(db, { name: "Social" });
+    } catch (err) {
+      caught = err;
+    }
+    expect(repo.isUniqueViolation(caught)).toBe(true);
+  });
+
+  it("renames a group and surfaces a missing one as undefined", () => {
+    const group = repo.createActivityGroup(db, { name: "Social" });
+    const renamed = repo.updateActivityGroup(db, group.id, { name: "Socials" });
+    expect(renamed?.name).toBe("Socials");
+    expect(repo.updateActivityGroup(db, 999, { name: "x" })).toBeUndefined();
+  });
+
+  it("manages membership idempotently and cascades on delete", () => {
+    const group = repo.createActivityGroup(db, { name: "Social" });
+    const fb = repo.createActivity(db, { kind: "domain", matcher: "facebook.com" });
+    const ig = repo.createActivity(db, { kind: "domain", matcher: "instagram.com" });
+
+    repo.addActivityToGroup(db, group.id, fb.id);
+    repo.addActivityToGroup(db, group.id, fb.id); // idempotent — no throw, no dup
+    repo.addActivityToGroup(db, group.id, ig.id);
+
+    expect(repo.isGroupMember(db, group.id, fb.id)).toBe(true);
+    expect(repo.listGroupActivities(db, group.id)).toEqual([fb, ig]);
+
+    expect(repo.removeActivityFromGroup(db, group.id, fb.id)).toBe(true);
+    expect(repo.removeActivityFromGroup(db, group.id, fb.id)).toBe(false);
+    expect(repo.isGroupMember(db, group.id, fb.id)).toBe(false);
+
+    // Deleting the group cascades its memberships away.
+    repo.deleteActivityGroup(db, group.id);
+    expect(repo.listGroupActivities(db, group.id)).toEqual([]);
+    // The activity itself survives the group deletion.
+    expect(repo.getActivity(db, ig.id)).toBeDefined();
+  });
+
+  it("cascades membership when the activity is deleted", () => {
+    const group = repo.createActivityGroup(db, { name: "Games" });
+    const steam = repo.createActivity(db, { kind: "app", matcher: "steam" });
+    repo.addActivityToGroup(db, group.id, steam.id);
+    repo.deleteActivity(db, steam.id);
+    expect(repo.listGroupActivities(db, group.id)).toEqual([]);
+  });
+});
+
+describe("policy repository — budgets", () => {
+  let db: TestDb;
+  let userId: number;
+  beforeEach(() => {
+    db = testDb();
+    userId = repo.createUser(db, { displayName: "Alice" }).id;
+  });
+  afterEach(() => {
+    db.$client.close();
+  });
+
+  it("creates, reads, lists (all + per-user), updates, and deletes", () => {
+    const overall = repo.createBudget(db, {
+      userId,
+      scope: "overall",
+      window: "daily",
+      secondsAllowed: 7200,
+    });
+    expect(overall.targetId).toBeNull();
+    expect(repo.getBudget(db, overall.id)).toEqual(overall);
+    expect(repo.listBudgets(db)).toEqual([overall]);
+    expect(repo.listUserBudgets(db, userId)).toEqual([overall]);
+    expect(repo.listUserBudgets(db, 999)).toEqual([]);
+
+    const updated = repo.updateBudget(db, overall.id, { secondsAllowed: 3600 });
+    expect(updated?.secondsAllowed).toBe(3600);
+
+    expect(repo.deleteBudget(db, overall.id)).toBe(true);
+    expect(repo.deleteBudget(db, overall.id)).toBe(false);
+  });
+
+  it("stores an activity-scoped budget with its target", () => {
+    const activity = repo.createActivity(db, { kind: "app", matcher: "steam" });
+    const row = repo.createBudget(db, {
+      userId,
+      scope: "activity",
+      targetId: activity.id,
+      window: "weekly",
+      secondsAllowed: 3600,
+    });
+    expect(row.scope).toBe("activity");
+    expect(row.targetId).toBe(activity.id);
+  });
+
+  it("cascades budgets when the user is deleted", () => {
+    repo.createBudget(db, { userId, scope: "overall", window: "daily", secondsAllowed: 1 });
+    repo.deleteUser(db, userId);
+    expect(repo.listBudgets(db)).toEqual([]);
+  });
+
+  it("rejects a negative allowance at the storage CHECK", () => {
+    let caught: unknown;
+    try {
+      repo.createBudget(db, { userId, scope: "overall", window: "daily", secondsAllowed: -1 });
+    } catch (err) {
+      caught = err;
+    }
+    expect(repo.isCheckViolation(caught)).toBe(true);
+  });
+
+  it("rejects an incoherent target at the storage CHECK", () => {
+    let caught: unknown;
+    try {
+      // overall scope must not carry a target_id.
+      repo.createBudget(db, {
+        userId,
+        scope: "overall",
+        targetId: 5,
+        window: "daily",
+        secondsAllowed: 1,
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(repo.isCheckViolation(caught)).toBe(true);
+  });
+});
+
+describe("policy repository — schedules & exceptions", () => {
+  let db: TestDb;
+  let userId: number;
+  beforeEach(() => {
+    db = testDb();
+    userId = repo.createUser(db, { displayName: "Alice" }).id;
+  });
+  afterEach(() => {
+    db.$client.close();
+  });
+
+  it("stores the always-on degenerate schedule (all recurrence null)", () => {
+    const row = repo.createSchedule(db, {
+      userId,
+      targetKind: "overall",
+      action: "deny",
+    });
+    expect(row.recurrenceDays).toBeNull();
+    expect(row.recurrenceStartMinute).toBeNull();
+    expect(row.effectiveFrom).toBeNull();
+    expect(row.ordinal).toBe(0); // column default
+  });
+
+  it("stores a recurring window and orders by (ordinal, id)", () => {
+    const second = repo.createSchedule(db, {
+      userId,
+      targetKind: "overall",
+      action: "allow",
+      recurrenceDays: 0b0011111, // Mon–Fri
+      recurrenceStartMinute: 9 * 60,
+      recurrenceEndMinute: 17 * 60,
+      ordinal: 5,
+    });
+    const first = repo.createSchedule(db, {
+      userId,
+      targetKind: "overall",
+      action: "deny",
+      ordinal: 1,
+    });
+    expect(repo.listUserSchedules(db, userId).map((r) => r.id)).toEqual([first.id, second.id]);
+    expect(repo.listSchedules(db).map((r) => r.id)).toEqual(
+      [first.id, second.id].sort((a, b) => a - b),
+    );
+
+    const updated = repo.updateSchedule(db, second.id, { ordinal: 0 });
+    expect(updated?.ordinal).toBe(0);
+    expect(repo.deleteSchedule(db, second.id)).toBe(true);
+    expect(repo.deleteSchedule(db, second.id)).toBe(false);
+  });
+
+  it("rejects a half-open minute pair at the storage CHECK", () => {
+    let caught: unknown;
+    try {
+      repo.createSchedule(db, {
+        userId,
+        targetKind: "overall",
+        action: "allow",
+        recurrenceStartMinute: 540, // start without end
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(repo.isCheckViolation(caught)).toBe(true);
+  });
+
+  it("creates an exception with a pre-schedule window and orders by expiry", () => {
+    const later = repo.createException(db, {
+      userId,
+      targetKind: "overall",
+      action: "allow",
+      expiresAt: new Date("2026-07-02T00:00:00.000Z"),
+    });
+    const sooner = repo.createException(db, {
+      userId,
+      targetKind: "overall",
+      action: "allow",
+      effectiveFrom: new Date("2026-07-01T00:00:00.000Z"),
+      expiresAt: new Date("2026-07-01T12:00:00.000Z"),
+    });
+    expect(sooner.effectiveFrom).toEqual(new Date("2026-07-01T00:00:00.000Z"));
+    expect(repo.listUserExceptions(db, userId).map((r) => r.id)).toEqual([sooner.id, later.id]);
+    expect(repo.listExceptions(db).map((r) => r.id)).toEqual(
+      [sooner.id, later.id].sort((a, b) => a - b),
+    );
+
+    expect(repo.deleteException(db, sooner.id)).toBe(true);
+    expect(repo.deleteException(db, sooner.id)).toBe(false);
+  });
+
+  it("rejects effectiveFrom >= expiresAt at the storage CHECK", () => {
+    let caught: unknown;
+    try {
+      repo.createException(db, {
+        userId,
+        targetKind: "overall",
+        action: "allow",
+        effectiveFrom: new Date("2026-07-02T00:00:00.000Z"),
+        expiresAt: new Date("2026-07-01T00:00:00.000Z"),
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(repo.isCheckViolation(caught)).toBe(true);
+  });
+
+  it("cascades schedules and exceptions when the user is deleted", () => {
+    repo.createSchedule(db, { userId, targetKind: "overall", action: "deny" });
+    repo.createException(db, {
+      userId,
+      targetKind: "overall",
+      action: "allow",
+      expiresAt: new Date("2026-07-01T00:00:00.000Z"),
+    });
+    repo.deleteUser(db, userId);
+    expect(repo.listSchedules(db)).toEqual([]);
+    expect(repo.listExceptions(db)).toEqual([]);
+  });
+});

@@ -247,6 +247,15 @@ access, terminate TLS at a reverse proxy (TrueNAS's built-in or a
 separate Nginx Proxy Manager / Caddy instance) and put the dashboard
 behind authentication.
 
+The reverse proxy is also where volumetric/DoS protection belongs — the
+dashboard does not rate-limit by request volume. It does apply a small
+per-IP **failed-attempt** limiter in the application layer to the two
+surfaces that face unauthenticated callers (the admin login and the
+token-authenticated `POST /api/clients/enrol` enrolment exchange, issue
+#154), as cheap defence-in-depth that holds even with no proxy in front;
+that is throttling of *failures*, not a substitute for proxy-level rate
+limiting.
+
 ## Authentication
 
 - The dashboard ships with single-admin local password auth (Argon2

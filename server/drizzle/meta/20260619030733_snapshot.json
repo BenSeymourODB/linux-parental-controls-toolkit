@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "cab8e274-e68b-47b8-9707-6fa10693616a",
-  "prevId": "8340f92b-fe00-422e-bc6d-671141282f7a",
+  "id": "712503c8-5060-4f1d-92e1-df4fbaeb7c6f",
+  "prevId": "a3dec4b6-5857-4a66-94bd-503886ee2fb0",
   "tables": {
     "activities": {
       "name": "activities",
@@ -175,175 +175,6 @@
         }
       }
     },
-    "audit_log": {
-      "name": "audit_log",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "integer",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": true
-        },
-        "at": {
-          "name": "at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "(unixepoch())"
-        },
-        "target_host": {
-          "name": "target_host",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "target_port": {
-          "name": "target_port",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "target_user": {
-          "name": "target_user",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "client_id": {
-          "name": "client_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "user_id": {
-          "name": "user_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "actor": {
-          "name": "actor",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "'system'"
-        },
-        "reason": {
-          "name": "reason",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "command": {
-          "name": "command",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "outcome": {
-          "name": "outcome",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "exit_code": {
-          "name": "exit_code",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "signal": {
-          "name": "signal",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "duration_ms": {
-          "name": "duration_ms",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "error_message": {
-          "name": "error_message",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        }
-      },
-      "indexes": {
-        "audit_log_at_idx": {
-          "name": "audit_log_at_idx",
-          "columns": [
-            "at"
-          ],
-          "isUnique": false
-        },
-        "audit_log_client_at_idx": {
-          "name": "audit_log_client_at_idx",
-          "columns": [
-            "client_id",
-            "at"
-          ],
-          "isUnique": false
-        }
-      },
-      "foreignKeys": {
-        "audit_log_client_id_clients_id_fk": {
-          "name": "audit_log_client_id_clients_id_fk",
-          "tableFrom": "audit_log",
-          "tableTo": "clients",
-          "columnsFrom": [
-            "client_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        },
-        "audit_log_user_id_users_id_fk": {
-          "name": "audit_log_user_id_users_id_fk",
-          "tableFrom": "audit_log",
-          "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {
-        "audit_log_outcome_check": {
-          "name": "audit_log_outcome_check",
-          "value": "\"audit_log\".\"outcome\" in ('ok', 'failed', 'unreachable', 'timeout', 'parse_error')"
-        },
-        "audit_log_duration_check": {
-          "name": "audit_log_duration_check",
-          "value": "\"audit_log\".\"duration_ms\" >= 0"
-        }
-      }
-    },
     "budgets": {
       "name": "budgets",
       "columns": {
@@ -478,6 +309,27 @@
         },
         "last_seen": {
           "name": "last_seen",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "agent_version": {
+          "name": "agent_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "component_versions": {
+          "name": "component_versions",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "versions_reported_at": {
+          "name": "versions_reported_at",
           "type": "integer",
           "primaryKey": false,
           "notNull": false,
@@ -1120,6 +972,131 @@
         "schedules_effective_window_check": {
           "name": "schedules_effective_window_check",
           "value": "\"schedules\".\"effective_from\" is null or \"schedules\".\"effective_to\" is null or \"schedules\".\"effective_from\" < \"schedules\".\"effective_to\""
+        }
+      }
+    },
+    "transport_queue": {
+      "name": "transport_queue",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "client_id": {
+          "name": "client_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "coalesce_key": {
+          "name": "coalesce_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "payload": {
+          "name": "payload",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'pending'"
+        },
+        "attempts": {
+          "name": "attempts",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "last_error": {
+          "name": "last_error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "enqueued_at": {
+          "name": "enqueued_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch())"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch())"
+        }
+      },
+      "indexes": {
+        "transport_queue_client_coalesce_unique": {
+          "name": "transport_queue_client_coalesce_unique",
+          "columns": [
+            "client_id",
+            "coalesce_key"
+          ],
+          "isUnique": true
+        },
+        "transport_queue_client_status_id_idx": {
+          "name": "transport_queue_client_status_id_idx",
+          "columns": [
+            "client_id",
+            "status",
+            "id"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "transport_queue_client_id_clients_id_fk": {
+          "name": "transport_queue_client_id_clients_id_fk",
+          "tableFrom": "transport_queue",
+          "tableTo": "clients",
+          "columnsFrom": [
+            "client_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "transport_queue_status_check": {
+          "name": "transport_queue_status_check",
+          "value": "\"transport_queue\".\"status\" in ('pending', 'failed')"
+        },
+        "transport_queue_attempts_check": {
+          "name": "transport_queue_attempts_check",
+          "value": "\"transport_queue\".\"attempts\" >= 0"
         }
       }
     },

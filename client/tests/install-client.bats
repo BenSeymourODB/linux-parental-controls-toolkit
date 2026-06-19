@@ -189,6 +189,57 @@ plan_strict() {
   [[ "$output" == *'"sshUser":"customagent"'* ]]
 }
 
+# --- version reporting (#164) ----------------------------------------------
+
+@test "reports the detected agent + component versions in the enrol body (#164)" {
+  export PCT_AGENT_VERSION=1.4.0
+  export PCT_TIMEKPR_VERSION=0.5.3
+  export PCT_ACTIVITYWATCH_VERSION=0.13.2
+  # e2guardian is intentionally left undetected; pin its probe at a missing
+  # binary so the "omitted" assertion stays hermetic on hosts that have it.
+  export PCT_E2GUARDIAN=pct-no-such-binary
+  ok_args
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"agentVersion":"1.4.0"'* ]]
+  [[ "$output" == *'"componentVersions":{'* ]]
+  [[ "$output" == *'"timekpr":"0.5.3"'* ]]
+  [[ "$output" == *'"activitywatch":"0.13.2"'* ]]
+  # e2guardian was not detected, so its key is omitted (not reported as empty).
+  [[ "$output" != *'"e2guardian"'* ]]
+}
+
+@test "omits the version fields entirely when nothing can be detected (#164)" {
+  # Point every probe at a non-existent binary so detection is hermetic
+  # regardless of what the test host happens to have installed.
+  export PCT_DPKG_QUERY=pct-no-such-binary
+  export PCT_TIMEKPRA=pct-no-such-binary
+  export PCT_E2GUARDIAN=pct-no-such-binary
+  export PCT_AWSERVER=pct-no-such-binary
+  ok_args
+  [ "$status" -eq 0 ]
+  [[ "$output" != *'"agentVersion"'* ]]
+  [[ "$output" != *'"componentVersions"'* ]]
+}
+
+@test "reduces a tool's version output to a plain dotted token, dropping unsafe text (#164)" {
+  # A version carrying a quote + shell metacharacters is reduced to just the
+  # dotted token, so nothing can break out of the JSON string.
+  export PCT_AGENT_VERSION='1.4.0"; rm -rf /'
+  # A tool whose name contains a digit must still resolve to the version, not
+  # the name (the dot requirement guards this).
+  export PCT_E2GUARDIAN_VERSION='e2guardian 5.5.8'
+  # Pin the un-overridden probes at a missing binary so the body is hermetic.
+  export PCT_TIMEKPRA=pct-no-such-binary
+  export PCT_AWSERVER=pct-no-such-binary
+  ok_args
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"agentVersion":"1.4.0"'* ]]
+  [[ "$output" == *'"e2guardian":"5.5.8"'* ]]
+  [[ "$output" != *'rm -rf'* ]]
+  # The digit in the tool name must not be mistaken for the version value.
+  [[ "$output" != *':"2guardian"'* ]]
+}
+
 # --- enrol response handling ----------------------------------------------
 
 @test "authorizes the dashboard SSH key when the response carries one" {
@@ -220,7 +271,11 @@ plan_strict() {
 # --- self-test hook --------------------------------------------------------
 
 @test "notes the self-test is pending when it is not installed" {
-  ok_args
+  # Point at a guaranteed-absent path: now that the self-test (#80) lives at
+  # the orchestrator's default ${PCT_INSTALL_DIR}/self-test.sh, the "pending"
+  # branch must be exercised deterministically rather than relying on the repo
+  # not shipping one.
+  PCT_SELF_TEST="${TMP}/no-such-self-test.sh" ok_args
   [ "$status" -eq 0 ]
   [[ "$output" == *"self-test not installed yet (tracked as #80)"* ]]
 }

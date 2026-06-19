@@ -66,3 +66,19 @@ export const auditOutcomeValues = [
 ] as const;
 export const auditOutcomeSchema = z.enum(auditOutcomeValues);
 export type AuditOutcome = z.infer<typeof auditOutcomeSchema>;
+
+/**
+ * Lifecycle of a queued offline transport action (#84, `transport_queue`).
+ *
+ * - `pending` — awaiting a successful push to the (currently offline) client;
+ *   drained in order on the next reachable probe. A row is **deleted** once
+ *   drained successfully, so the queue holds only outstanding work.
+ * - `failed` — dead-lettered: the action failed non-retriably (the command
+ *   itself is wrong, so replaying it unchanged won't help), so it is parked
+ *   here rather than blocking the queue head, where the admin Clients page
+ *   (#81) can surface it. A *retriable* failure never lands here — it stays
+ *   `pending` and is retried on a later tick (a missed push is never dropped).
+ */
+export const transportQueueStatusValues = ["pending", "failed"] as const;
+export const transportQueueStatusSchema = z.enum(transportQueueStatusValues);
+export type TransportQueueStatus = z.infer<typeof transportQueueStatusSchema>;

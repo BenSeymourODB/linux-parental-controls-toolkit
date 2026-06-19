@@ -10,7 +10,24 @@ export {
   resolveEffectiveTz,
   windowContaining,
   effectiveWindow,
+  localCalendarDate,
+  localTimeOfDayMinutes,
+  isoWeekday,
+  localDayBounds,
 } from "./budget-window.js";
+
+export {
+  type BudgetInput,
+  type GrantInput,
+  type AllowedWindow,
+  type ActiveRule,
+  type ActivityQuota,
+  type EffectivePolicy,
+  type EffectivePolicyInput,
+  isRuleActiveAt,
+  ruleActiveAt,
+  effectivePolicy,
+} from "./resolve.js";
 
 export {
   type ScheduleRule,

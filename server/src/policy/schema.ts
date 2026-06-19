@@ -37,6 +37,7 @@ import {
   budgetWindowValues,
   scheduleActionValues,
   scopeValues,
+  transportQueueStatusValues,
 } from "./enums.js";
 import {
   MINUTE_OF_DAY_MAX,
@@ -96,7 +97,21 @@ export const users = sqliteTable("users", {
  * nullable because a client created through the admin CRUD (`POST /api/clients`,
  * #51) has not been through the enrolment exchange and so holds no bearer
  * token; only `POST /api/clients/enrol` sets it.
+ *
+ * The `*_version` columns (#164) record what each client is running so Phase 14
+ * (#163) has an inventory to diff against. They are nullable because a client
+ * that doesn't report versions (an older install script, an admin-CRUD client)
+ * still enrols; `versions_reported_at` is set only when at least one version is
+ * reported. `component_versions` is a JSON blob keyed by managed component.
  */
+export interface ComponentVersions {
+  // `| undefined` on each optional field so this lines up with the zod-inferred
+  // `componentVersionsSchema` shape under `exactOptionalPropertyTypes`.
+  timekpr?: string | undefined;
+  e2guardian?: string | undefined;
+  activitywatch?: string | undefined;
+}
+
 export const clients = sqliteTable(
   "clients",
   {
@@ -106,6 +121,9 @@ export const clients = sqliteTable(
     bearerTokenHash: text("bearer_token_hash"),
     enrolledAt: timestampNow("enrolled_at"),
     lastSeen: integer("last_seen", { mode: "timestamp" }),
+    agentVersion: text("agent_version"),
+    componentVersions: text("component_versions", { mode: "json" }).$type<ComponentVersions>(),
+    versionsReportedAt: integer("versions_reported_at", { mode: "timestamp" }),
   },
   (table) => [
     uniqueIndex("clients_hostname_unique").on(table.hostname),
@@ -552,5 +570,50 @@ export const auditLog = sqliteTable(
     index("audit_log_client_at_idx").on(table.clientId, table.at),
     check("audit_log_outcome_check", oneOf(table.outcome, auditOutcomeValues)),
     check("audit_log_duration_check", sql`${table.durationMs} >= 0`),
+  ],
+);
+
+/**
+ * Durable offline-queue of pending per-client transport actions (#84).
+ *
+ * When a policy change can't be pushed because the client is offline (the SSH
+ * facade raises a retriable {@link SshUnreachableError} —
+ * `transport/ssh/errors.ts`), the intended action is persisted here and
+ * replayed on the next successful probe (`transport/queue`). Conservative
+ * semantics: a missed push is queued, never silently dropped
+ * (`docs/architecture.md` → "Client offline at policy-change time").
+ *
+ * **Coalescing is structural.** The UNIQUE index on `(client_id, coalesce_key)`
+ * means a newer push for the same target supersedes the older queued one (the
+ * `enqueue` upsert resets it to `pending`), so the queue can't grow unboundedly
+ * while a client stays offline — only the latest desired state per target is
+ * kept. `kind` is a discriminator (`policy.push`, later `ansible.push`) so a
+ * future executor can route `payload` without re-parsing it here. Rows are
+ * **deleted** once drained successfully; a non-retriable failure parks the row
+ * in `failed` (a dead-letter the admin Clients page #81 can surface) rather
+ * than wedging the queue head. The `(client_id, status, id)` index serves the
+ * ordered per-client drain read (oldest `pending` first).
+ */
+export const transportQueue = sqliteTable(
+  "transport_queue",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    clientId: integer("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "cascade" }),
+    coalesceKey: text("coalesce_key").notNull(),
+    kind: text("kind").notNull(),
+    payload: text("payload", { mode: "json" }).$type<Record<string, unknown>>().notNull(),
+    status: text("status", { enum: transportQueueStatusValues }).notNull().default("pending"),
+    attempts: integer("attempts").notNull().default(0),
+    lastError: text("last_error"),
+    enqueuedAt: timestampNow("enqueued_at"),
+    updatedAt: timestampNow("updated_at"),
+  },
+  (table) => [
+    uniqueIndex("transport_queue_client_coalesce_unique").on(table.clientId, table.coalesceKey),
+    index("transport_queue_client_status_id_idx").on(table.clientId, table.status, table.id),
+    check("transport_queue_status_check", oneOf(table.status, transportQueueStatusValues)),
+    check("transport_queue_attempts_check", sql`${table.attempts} >= 0`),
   ],
 );
