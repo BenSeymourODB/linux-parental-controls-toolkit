@@ -12,7 +12,7 @@
 import { and, eq, isNull } from "drizzle-orm";
 
 import type { PolicyDb } from "./db.js";
-import { clients, enrolmentTokens, usersOnClients } from "./schema.js";
+import { clients, enrolmentTokens, usersOnClients, type ComponentVersions } from "./schema.js";
 import type { ClientRow, UserOnClientRow } from "./repository.js";
 
 /** A persisted {@link enrolmentTokens} row. */
@@ -47,6 +47,16 @@ export interface EnrolWrite {
   /** SHA-256 of the per-client bearer token issued at enrolment. */
   bearerTokenHash: string;
   links: EnrolLink[];
+  /**
+   * Version inventory reported at enrolment (#164). All three move together:
+   * `versionsReportedAt` is set by the caller exactly when at least one of
+   * `agentVersion` / `componentVersions` is present, so a row never claims to
+   * have reported versions it doesn't hold. Omit all three for a client that
+   * reported nothing — the columns stay NULL.
+   */
+  agentVersion?: string | null;
+  componentVersions?: ComponentVersions | null;
+  versionsReportedAt?: Date | null;
 }
 
 /** The rows created by a successful enrolment. */
@@ -112,6 +122,9 @@ export function consumeTokenAndEnrol(
         hostname: input.hostname,
         sshUser: input.sshUser,
         bearerTokenHash: input.bearerTokenHash,
+        agentVersion: input.agentVersion ?? null,
+        componentVersions: input.componentVersions ?? null,
+        versionsReportedAt: input.versionsReportedAt ?? null,
       })
       .returning()
       .get();

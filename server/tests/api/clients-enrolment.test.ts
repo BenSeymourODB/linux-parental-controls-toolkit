@@ -16,7 +16,7 @@ import { ENROL_RATE_LIMIT_MAX_ATTEMPTS, parseBearer } from "../../src/api/client
 import { hashToken } from "../../src/auth/secret-token.js";
 import { SESSION_COOKIE } from "../../src/auth/session.js";
 import { loadSettings, type Settings } from "../../src/config.js";
-import { enrolmentTokens } from "../../src/policy/schema.js";
+import { clients, enrolmentTokens } from "../../src/policy/schema.js";
 import { buildTestApp, type TestApp } from "../helpers/app.js";
 
 function settingsWith(env: Record<string, string> = {}): Settings {
@@ -202,6 +202,62 @@ describe("client enrolment routes", () => {
     expect(links.json()).toEqual([
       { userId, clientId: body.clientId, linuxUsername: "alice", linuxUid: 1000 },
     ]);
+  });
+
+  it("records reported component versions at enrolment and echoes them back (#164)", async () => {
+    const userId = await createUser("Alice");
+    const token = await mintFor(userId, "alice");
+
+    const res = await enrol(token, {
+      hostname: "mint-01",
+      sshUser: "pct-agent",
+      supervisedUsers: [{ linuxUsername: "alice", linuxUid: 1000 }],
+      agentVersion: "1.4.0",
+      componentVersions: { timekpr: "0.5.3", activitywatch: "0.13.2" },
+    });
+    expect(res.statusCode).toBe(201);
+    const body = res.json();
+    expect(body.agentVersion).toBe("1.4.0");
+    expect(body.componentVersions).toEqual({ timekpr: "0.5.3", activitywatch: "0.13.2" });
+
+    // The inventory is persisted, with a report timestamp set.
+    const stored = harness.db.select().from(clients).all();
+    expect(stored).toHaveLength(1);
+    expect(stored[0]?.agentVersion).toBe("1.4.0");
+    expect(stored[0]?.componentVersions).toEqual({ timekpr: "0.5.3", activitywatch: "0.13.2" });
+    expect(stored[0]?.versionsReportedAt).toBeInstanceOf(Date);
+  });
+
+  it("leaves the version inventory null when the client reports none (#164)", async () => {
+    const userId = await createUser("Alice");
+    const token = await mintFor(userId, "alice");
+
+    const res = await enrol(token, {
+      hostname: "mint-01",
+      sshUser: "pct-agent",
+      supervisedUsers: [{ linuxUsername: "alice", linuxUid: 1000 }],
+    });
+    expect(res.statusCode).toBe(201);
+    const body = res.json();
+    expect(body.agentVersion).toBeNull();
+    expect(body.componentVersions).toBeNull();
+
+    const stored = harness.db.select().from(clients).all();
+    expect(stored[0]?.versionsReportedAt).toBeNull();
+  });
+
+  it("400s an enrol whose reported version is malformed (#164)", async () => {
+    const userId = await createUser("Alice");
+    const token = await mintFor(userId, "alice");
+
+    const res = await enrol(token, {
+      hostname: "mint-01",
+      sshUser: "pct-agent",
+      supervisedUsers: [{ linuxUsername: "alice", linuxUid: 1000 }],
+      componentVersions: { timekpr: 'bad" version' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.code).toBe("validation_error");
   });
 
   it("401s reuse of a consumed token (single-use)", async () => {
