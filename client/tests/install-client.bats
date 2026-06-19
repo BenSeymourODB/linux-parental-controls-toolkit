@@ -220,7 +220,11 @@ plan_strict() {
 # --- self-test hook --------------------------------------------------------
 
 @test "notes the self-test is pending when it is not installed" {
-  ok_args
+  # Point at a guaranteed-absent path: now that the self-test (#80) lives at
+  # the orchestrator's default ${PCT_INSTALL_DIR}/self-test.sh, the "pending"
+  # branch must be exercised deterministically rather than relying on the repo
+  # not shipping one.
+  PCT_SELF_TEST="${TMP}/no-such-self-test.sh" ok_args
   [ "$status" -eq 0 ]
   [[ "$output" == *"self-test not installed yet (tracked as #80)"* ]]
 }
