@@ -163,6 +163,12 @@ export class AdGuardHomeClient {
    * `POST /control/clients/add` — create a dashboard-owned client. The name must
    * carry the `pct:` prefix or {@link AdGuardScopeError} is thrown before any
    * request. Returns once AdGuard answers 2xx (the body is empty).
+   *
+   * Not idempotent: AdGuard rejects a duplicate name with a 4xx, surfaced as
+   * {@link AdGuardRequestError} (AdGuard does not use 409 for this, so the
+   * generic "409 → idempotent no-op" REST convention in `docs/testing.md` does
+   * not apply). The caller decides whether an "already exists" failure is benign
+   * or should fall back to {@link updateClient}.
    */
   async addClient(client: AdGuardClientInput): Promise<void> {
     const path = "/control/clients/add";
@@ -174,7 +180,9 @@ export class AdGuardHomeClient {
    * `POST /control/clients/update` — replace a dashboard-owned client's config.
    * Both the existing `name` and the (possibly renamed) `data.name` must carry
    * the prefix, so neither a foreign client is edited nor a managed one is
-   * renamed out of the namespace.
+   * renamed out of the namespace. The guard relies on AdGuard keying the target
+   * by the top-level `name` (the existing client) and adopting `data.name` as
+   * the new name — the only identity fields in the documented request shape.
    */
   async updateClient(name: string, data: AdGuardClientInput): Promise<void> {
     const path = "/control/clients/update";
@@ -208,8 +216,15 @@ export class AdGuardHomeClient {
 
   /**
    * `POST /control/filtering/set_rules` — replace the global custom-rules list.
-   * AdGuard has no per-client rule list, so this writes the whole `user_rules`
-   * set; callers (#97) must read-modify-write to preserve rules they do not own.
+   *
+   * AdGuard has no per-client rule list, so this writes the **whole**
+   * `user_rules` set and is **deliberately unconfined** — unlike the client
+   * writes there is no `pct:` guard, because there is no per-rule owner to key
+   * on. Callers must therefore only ever pass a list derived from a fresh
+   * {@link getUserRules} read with the dashboard's own rules swapped in, so a
+   * household's hand-written global rules are preserved. That read-modify-write
+   * confinement (and the marker that identifies dashboard-owned rules) lands
+   * with the per-client blocklist feature (#97); this is only the raw write.
    */
   async setUserRules(rules: readonly string[]): Promise<void> {
     await this.#postOk("/control/filtering/set_rules", { rules: [...rules] });

@@ -362,6 +362,20 @@ describe("user rules", () => {
     await makeClient().setUserRules(["||ads.example^"]);
     expect(JSON.parse(seenBody ?? "")).toEqual({ rules: ["||ads.example^"] });
   });
+
+  it("setUserRules can clear the list (sends { rules: [] })", async () => {
+    let seenBody: string | undefined;
+    agent
+      .get(BASE_URL)
+      .intercept({ path: "/control/filtering/set_rules", method: "POST" })
+      .reply(200, (opts) => {
+        seenBody = opts.body as string;
+        return "";
+      });
+
+    await makeClient().setUserRules([]);
+    expect(JSON.parse(seenBody ?? "")).toEqual({ rules: [] });
+  });
 });
 
 describe("error mapping", () => {
