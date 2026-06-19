@@ -28,6 +28,8 @@ import {
   budgets,
   clients,
   exceptions,
+  groupExceptions,
+  groupSchedules,
   schedules,
   userGroupMemberships,
   userGroups,
@@ -793,6 +795,201 @@ export function deleteException(db: PolicyDb, id: number): boolean {
   return (
     db.delete(exceptions).where(eq(exceptions.id, id)).returning({ id: exceptions.id }).get() !==
     undefined
+  );
+}
+
+// --- Group schedules (#182) ------------------------------------------------
+// Group-targeted recurring rules, keyed by `user_group_id` (ADR 0007). The same
+// rule shape as {@link schedules} minus the owner; `policy/group-resolution.ts`
+// merges a user's own schedules with the schedules of their groups.
+
+/** A persisted {@link groupSchedules} row. */
+export type GroupScheduleRow = typeof groupSchedules.$inferSelect;
+
+/**
+ * Fields accepted when creating a {@link groupSchedules} row — {@link
+ * ScheduleCreate} with `userGroupId` in place of `userId`. The recurrence +
+ * date-scoping fields default to `null` (always-on); `ordinal` defaults to the
+ * column default when omitted.
+ */
+export interface GroupScheduleCreate {
+  userGroupId: number;
+  targetKind: Scope;
+  targetId?: number | null | undefined;
+  action: ScheduleAction;
+  recurrenceDays?: number | null | undefined;
+  recurrenceStartMinute?: number | null | undefined;
+  recurrenceEndMinute?: number | null | undefined;
+  effectiveFrom?: Date | null | undefined;
+  effectiveTo?: Date | null | undefined;
+  ordinal?: number | undefined;
+}
+
+/** Mutable fields on a {@link groupSchedules} row; omitted keys are unchanged. */
+export interface GroupScheduleUpdate {
+  targetKind?: Scope | undefined;
+  targetId?: number | null | undefined;
+  action?: ScheduleAction | undefined;
+  recurrenceDays?: number | null | undefined;
+  recurrenceStartMinute?: number | null | undefined;
+  recurrenceEndMinute?: number | null | undefined;
+  effectiveFrom?: Date | null | undefined;
+  effectiveTo?: Date | null | undefined;
+  ordinal?: number | undefined;
+}
+
+/** All schedules for one group, in evaluation order (ascending `ordinal`, then id). */
+export function listGroupSchedules(db: PolicyDb, groupId: number): GroupScheduleRow[] {
+  return db
+    .select()
+    .from(groupSchedules)
+    .where(eq(groupSchedules.userGroupId, groupId))
+    .orderBy(groupSchedules.ordinal, groupSchedules.id)
+    .all();
+}
+
+/** One group schedule by id, or `undefined` if absent. */
+export function getGroupSchedule(db: PolicyDb, id: number): GroupScheduleRow | undefined {
+  return db.select().from(groupSchedules).where(eq(groupSchedules.id, id)).get();
+}
+
+/**
+ * Insert a group schedule and return the stored row. The caller confirms the
+ * group (and any activity/group referent) exists first; the recurrence +
+ * coherence invariants are validated by the DTO and the route before this.
+ */
+export function createGroupSchedule(db: PolicyDb, input: GroupScheduleCreate): GroupScheduleRow {
+  return db
+    .insert(groupSchedules)
+    .values({
+      userGroupId: input.userGroupId,
+      targetKind: input.targetKind,
+      targetId: input.targetId ?? null,
+      action: input.action,
+      recurrenceDays: input.recurrenceDays ?? null,
+      recurrenceStartMinute: input.recurrenceStartMinute ?? null,
+      recurrenceEndMinute: input.recurrenceEndMinute ?? null,
+      effectiveFrom: input.effectiveFrom ?? null,
+      effectiveTo: input.effectiveTo ?? null,
+      // Omit when undefined so the column default (0) applies.
+      ...(input.ordinal === undefined ? {} : { ordinal: input.ordinal }),
+    })
+    .returning()
+    .get();
+}
+
+/**
+ * Apply a partial update and return the stored row, or `undefined` if no group
+ * schedule with `id` exists. The route re-validates coherence + recurrence on
+ * the merged row before calling this.
+ */
+export function updateGroupSchedule(
+  db: PolicyDb,
+  id: number,
+  patch: GroupScheduleUpdate,
+): GroupScheduleRow | undefined {
+  return db.update(groupSchedules).set(patch).where(eq(groupSchedules.id, id)).returning().get();
+}
+
+/** Delete a group schedule. Returns whether a row was removed. */
+export function deleteGroupSchedule(db: PolicyDb, id: number): boolean {
+  return (
+    db
+      .delete(groupSchedules)
+      .where(eq(groupSchedules.id, id))
+      .returning({ id: groupSchedules.id })
+      .get() !== undefined
+  );
+}
+
+// --- Group exceptions (#182) -----------------------------------------------
+// Group-targeted one-off overrides, keyed by `user_group_id` (ADR 0007).
+
+/** A persisted {@link groupExceptions} row. */
+export type GroupExceptionRow = typeof groupExceptions.$inferSelect;
+
+/**
+ * Fields accepted when creating a {@link groupExceptions} row — {@link
+ * ExceptionCreate} with `userGroupId` in place of `userId`. Active during
+ * `[effectiveFrom ?? createdAt, expiresAt)` (ADR 0005 §2).
+ */
+export interface GroupExceptionCreate {
+  userGroupId: number;
+  targetKind: Scope;
+  targetId?: number | null | undefined;
+  action: ScheduleAction;
+  reason?: string | null | undefined;
+  effectiveFrom?: Date | null | undefined;
+  expiresAt: Date;
+}
+
+/** Mutable fields on a {@link groupExceptions} row; omitted keys are unchanged. */
+export interface GroupExceptionUpdate {
+  targetKind?: Scope | undefined;
+  targetId?: number | null | undefined;
+  action?: ScheduleAction | undefined;
+  reason?: string | null | undefined;
+  effectiveFrom?: Date | null | undefined;
+  expiresAt?: Date | undefined;
+}
+
+/** All exceptions for one group, ascending by `expiresAt` (the hot lookup order). */
+export function listGroupExceptions(db: PolicyDb, groupId: number): GroupExceptionRow[] {
+  return db
+    .select()
+    .from(groupExceptions)
+    .where(eq(groupExceptions.userGroupId, groupId))
+    .orderBy(groupExceptions.expiresAt, groupExceptions.id)
+    .all();
+}
+
+/** One group exception by id, or `undefined` if absent. */
+export function getGroupException(db: PolicyDb, id: number): GroupExceptionRow | undefined {
+  return db.select().from(groupExceptions).where(eq(groupExceptions.id, id)).get();
+}
+
+/**
+ * Insert a group exception and return the stored row. The caller confirms the
+ * group (and any activity/group referent) exists first; coherence and the
+ * `effectiveFrom < expiresAt` window are validated by the DTO/route.
+ */
+export function createGroupException(db: PolicyDb, input: GroupExceptionCreate): GroupExceptionRow {
+  return db
+    .insert(groupExceptions)
+    .values({
+      userGroupId: input.userGroupId,
+      targetKind: input.targetKind,
+      targetId: input.targetId ?? null,
+      action: input.action,
+      reason: input.reason ?? null,
+      effectiveFrom: input.effectiveFrom ?? null,
+      expiresAt: input.expiresAt,
+    })
+    .returning()
+    .get();
+}
+
+/**
+ * Apply a partial update and return the stored row, or `undefined` if no group
+ * exception with `id` exists. The route re-validates coherence and the
+ * effective window on the merged row before calling this.
+ */
+export function updateGroupException(
+  db: PolicyDb,
+  id: number,
+  patch: GroupExceptionUpdate,
+): GroupExceptionRow | undefined {
+  return db.update(groupExceptions).set(patch).where(eq(groupExceptions.id, id)).returning().get();
+}
+
+/** Delete a group exception. Returns whether a row was removed. */
+export function deleteGroupException(db: PolicyDb, id: number): boolean {
+  return (
+    db
+      .delete(groupExceptions)
+      .where(eq(groupExceptions.id, id))
+      .returning({ id: groupExceptions.id })
+      .get() !== undefined
   );
 }
 
