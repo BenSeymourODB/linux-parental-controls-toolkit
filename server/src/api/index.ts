@@ -100,6 +100,20 @@ export {
   type EnrolmentTokenResponse,
 } from "./clients/index.js";
 
+// Client health/status DTOs (#81): the contract the admin "Clients" page reads
+// (per-client reachability, component health, offline + queued-change state).
+export {
+  clientHealthSchema,
+  clientHealthListSchema,
+  clientQueueSchema,
+  componentHealthSchema,
+  queuedActionSummarySchema,
+  type ClientHealthResponse,
+  type ClientQueueDto,
+  type ComponentHealthDto,
+  type QueuedActionSummary,
+} from "./clients/index.js";
+
 // Auth DTOs (#52). Re-exported here so the frontend imports the auth contract
 // from the same `/api` surface as every other DTO; the schemas themselves live
 // in `../auth/dtos.ts` next to the routes that use them.
