@@ -1,0 +1,4 @@
+# Follow `# shellcheck source=...` directives so the client scripts that
+# source client/lib/pct-common.sh lint cleanly even when shellcheck is invoked
+# on a single changed file (the pre-commit hook does this) without -x.
+external-sources=true

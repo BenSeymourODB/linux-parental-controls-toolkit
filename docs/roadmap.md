@@ -84,6 +84,11 @@ Goal: enrolling a fresh Mint client is one command.
 - `pct-agent` user provisioning + scoped sudoers.
 - ActivityWatch + Timekpr-nExT + e2guardian install and baseline config.
 - Self-test that runs at the end of the script.
+- Report the installed `pct-client` agent version and managed-tool
+  versions in the enrol payload, and reserve the version columns on
+  `Client`, so the fleet-update work has a version inventory to diff
+  against from day one (pulled forward from Phase 14;
+  [#164](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/164)).
 
 ## Phase 4 — SSH + `timekpra` transport
 
@@ -92,8 +97,12 @@ Goal: dashboard pushes overall session limits to clients.
 - ssh2-based transport facade.
 - `timekpra` invocations for: set daily/weekly/monthly limits, set
   allowed hours, set PlayTime configuration.
-- Offline-queue: changes for offline clients persisted and replayed on
-  next reachable probe.
+- [x] Offline-queue: changes for offline clients persisted and replayed on
+  next reachable probe
+  ([#84](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/84)).
+  The durable store + coalescing + drain/replay loop + croner scheduler land
+  here against injected SSH executor/probe seams; the live wiring activates
+  with the `timekpra` push (#83) and the entrypoint's SSH-key bootstrap (#39).
 - Audit log of every command issued.
 - Recurring day-of-week time-windows on `Schedule` (allow/deny/extend on
   chosen weekdays between start/end times), pushed as Timekpr-nExT
@@ -195,6 +204,12 @@ expiry, lock + grant-unlock on overall-screen-time expiry.
   the client with the rest of policy.
 - Admin UI under `/admin/notifications` to set the per-user sound
   profile, master enable/disable, and grace-period override.
+- Bake a **version handshake + N-1 compatibility window** into the bridge
+  ↔ `/api/events/stream` handshake (aligned with `/api/meta`'s
+  `apiVersion`), so a later upgraded server can keep talking to clients
+  that haven't updated yet. Cheap in the handshake now, impossible to
+  retrofit onto already-deployed clients (pulled forward from Phase 14;
+  [#165](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/165)).
 
 ## Phase 8c — Lockout / grant-unlock flow
 
@@ -259,7 +274,11 @@ so chore/calendar completions can grant screen-time rewards.
   Fastify-compatible, Drizzle adapter) here rather than extending the
   hand-rolled single-admin login. See `docs/server-deployment.md` →
   "Authentication" and stretch epic #24 → #26.
-- Backup/restore utility script.
+- Backup/restore utility script. Extend it with an **automatic
+  pre-migration DB snapshot** taken on boot whenever migrations are
+  pending, so a regretted server upgrade is recoverable — the safety net
+  the current `docker pull` + restart path lacks (supports Phase 14;
+  [#166](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/166)).
 - Documentation pass: per-feature how-tos.
 - Optional: tamper-resistance review and AppArmor hardening pass.
 
@@ -340,6 +359,80 @@ data-retention work in
 has to purge: rule-based resolution means retention targets only *dated*
 data — usage samples, grants, audit, and date-specific overrides — not the
 recurrence rules themselves.
+
+## Phase 14 — Fleet updates & lifecycle management
+
+Goal: update a *running* deployment in place — both the server and the
+fleet of enrolled clients — safely, observably, and (for clients)
+server-orchestrated. Tracked by the epic
+[#163](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/163).
+
+> **Where we start from.** The server already has a happy-path upgrade
+> story (`docs/server-deployment.md` → "Upgrade path": `docker pull` a
+> newer tag, restart, migrations apply in-process on boot, Ansible venv
+> reconciles per release), and `client/install-client.sh` is idempotent.
+> What's missing is the *unhappy* path and the *fleet* path: a migration
+> safety net and rollback for the server, a server↔client version
+> compatibility contract, an inventory of what each client runs, and any
+> way for the server to **push** a client update rather than the admin
+> re-running the install script by hand.
+
+> **Two channels, one division of labour.** The server cannot push a
+> client update today, but two existing channels make it tractable:
+> the **Ansible runner (SSH, Phase 6)** does the *privileged install/
+> reconcile* step (`apt`/`dpkg`, service restart) — matching the license
+> boundary and the periodic-reapply model — while the **event stream /
+> `pct-client-bridge` (Phase 8b)** only *notifies and coordinates* (an
+> `update.*` event), never performing privileged installs beyond its
+> narrow sudoers scope.
+
+Foundational pieces are pulled earlier (cheap now, expensive to retrofit
+once clients are deployed):
+
+- Client version reporting at enrolment + heartbeat → **Phase 3**
+  ([#164](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/164)).
+- Version handshake + N-1 compatibility window on the event stream →
+  **Phase 8b**
+  ([#165](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/165)).
+- Automatic pre-migration DB backup, on the backup utility → **Phase 11**
+  ([#166](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/166)).
+
+Phase 14 itself:
+
+- ADR: client update distribution channel — dashboard-hosted apt repo vs
+  GitHub Release fetch vs dashboard-proxied; license-boundary note (our
+  agent `.deb` is ours to host; GPL tools stay upstream)
+  ([#167](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/167)).
+- Publish the `pct-client` agent `.deb` from `release.yml` over the chosen
+  channel, version-stamped to the release tag
+  ([#168](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/168)).
+- `client-update` Ansible playbook: install/pin the target version,
+  reconcile config, restart services gracefully
+  ([#169](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/169)).
+- Server-driven update orchestration API + `/admin` UI: per-client / fleet,
+  staged (canary) rollout, offline-queue + replay, audit log — reusing the
+  Phase 4 transport patterns
+  ([#170](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/170)).
+- Session-aware update scheduling: never interrupt an active supervised
+  session, a grace countdown, or an in-flight force-close; maintenance
+  window + override
+  ([#171](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/171)).
+- `update.*` event types + a low-key user-facing "updating" notification,
+  reusing the client-notifications channel
+  ([#172](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/172)).
+- Server self-update runbook: health-gated boot, documented rollback, and
+  the per-release fleet compatibility matrix
+  ([#173](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/173)).
+- Fleet version dashboard: per-client version drift, "N behind",
+  `update_required`, one-click update
+  ([#174](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/174)).
+
+Constraints carried from elsewhere in the project: the license boundary is
+unchanged (our agent `.deb` is permissive and ours to distribute; GPL
+client tools keep coming from the distro/PPA/upstream — `CLAUDE.md`,
+`docs/licensing-analysis.md`), and the tamper-resistance ceiling is
+unchanged (these are *operations* features, not hardening —
+`docs/client-install.md`).
 
 ## Out of scope (for now)
 
