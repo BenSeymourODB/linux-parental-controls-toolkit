@@ -5,6 +5,14 @@
  */
 export { registerPolicyRoutes } from "./routes.js";
 export {
+  registerEffectiveRoutes,
+  activeRuleResponseSchema,
+  activityQuotaResponseSchema,
+  allowedWindowSchema,
+  effectivePolicyResponseSchema,
+  type EffectivePolicyResponse,
+} from "./effective.js";
+export {
   // Account/device core (#51)
   clientResponseSchema,
   createClientSchema,
