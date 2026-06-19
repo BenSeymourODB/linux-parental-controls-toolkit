@@ -33,7 +33,7 @@
 #
 # Usage:
 #   pct-data-backup.sh backup  [--data-dir DIR] [--output FILE] [--quiet]
-#   pct-data-backup.sh restore [--data-dir DIR] [--force] ARCHIVE
+#   pct-data-backup.sh restore [--data-dir DIR] [--force] [--quiet] ARCHIVE
 #
 # --data-dir defaults to ${PCT_DATA_DIR:-/data}. For backup, --output defaults
 # to ./pct-data-backup-<UTC-timestamp>.tar.gz.
@@ -74,7 +74,7 @@ $PROG — back up and restore the dashboard's /data volume.
 
 Usage:
   $PROG backup  [--data-dir DIR] [--output FILE] [--quiet]
-  $PROG restore [--data-dir DIR] [--force] ARCHIVE
+  $PROG restore [--data-dir DIR] [--force] [--quiet] ARCHIVE
 
 Subcommands:
   backup    Snapshot the non-regenerable state under DIR into a tar.gz archive.
@@ -201,9 +201,11 @@ cmd_backup() {
   } >"$stage/MANIFEST"
 
   # Pack from the staging root so the archive contains ./MANIFEST and ./data/…
-  # regardless of the data dir's absolute path.
-  tar -czf "$output" -C "$stage" .
-  # The archive embeds secrets/ — keep it owner-only.
+  # regardless of the data dir's absolute path. The archive embeds secrets/, so
+  # write it under a tight umask (born 0600, never briefly world-readable) and
+  # belt-and-suspenders chmod in case $output pre-existed with looser perms.
+  (umask 077 && tar -czf "$output" -C "$stage" .) \
+    || die "failed to write archive '$output'"
   chmod 600 "$output"
 
   log "Wrote backup: $output"
@@ -267,6 +269,22 @@ cmd_restore() {
   fi
 
   mkdir -p "$DATA_DIR"
+  # Restore *replaces* the in-scope state rather than merging over it, so the
+  # result is exactly what was backed up — a merge could resurrect a rotated
+  # SSH key left in secrets/ or a stale config in adguard/conf/. Only the paths
+  # the archive owns are cleared; regenerable siblings (ansible/venv,
+  # ansible/playbooks, adguard/AdGuardHome, logs/) are out of scope and left
+  # intact, so a restore doesn't force an expensive venv rebuild.
+  local rel
+  for rel in "${IN_SCOPE_DIRS[@]}" "${IN_SCOPE_FILES[@]}"; do
+    [ -e "$tmp/data/$rel" ] && rm -rf "${DATA_DIR:?}/$rel"
+  done
+  # Drop any stale WAL/SHM sidecars next to the old policy.sqlite: the snapshot
+  # is a self-contained DB, and replaying a previous deployment's WAL onto it
+  # would corrupt the restore.
+  if [ -e "$tmp/data/policy.sqlite" ]; then
+    rm -f "${DATA_DIR:?}/policy.sqlite-wal" "${DATA_DIR:?}/policy.sqlite-shm"
+  fi
   # Copy the payload's *contents* into the data dir, preserving perms/ownership
   # bits (matters for secrets/). The trailing /. copies dotfiles too.
   cp -a "$tmp/data/." "$DATA_DIR/"

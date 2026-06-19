@@ -87,7 +87,7 @@ seed_data_dir() {
   [[ "$output" != *"logs/"* ]]
 }
 
-@test "round-trip preserves policy.sqlite rows (incl. uncheckpointed WAL)" {
+@test "round-trip preserves WAL-mode policy.sqlite rows" {
   "$SCRIPT" backup --data-dir "$DATA" --output "$WORK/b.tar.gz" --quiet
   "$SCRIPT" restore --data-dir "$WORK/restored" "$WORK/b.tar.gz" --quiet
   run sqlite3 "$WORK/restored/policy.sqlite" "SELECT v FROM t ORDER BY id;"
@@ -143,6 +143,27 @@ seed_data_dir() {
   run "$SCRIPT" restore --data-dir "$WORK/target" --force "$WORK/b.tar.gz" --quiet
   [ "$status" -eq 0 ]
   [ -f "$WORK/target/policy.sqlite" ]
+}
+
+@test "restore --force replaces in-scope state (no stale secret / WAL survives)" {
+  "$SCRIPT" backup --data-dir "$DATA" --output "$WORK/b.tar.gz" --quiet
+  # A target that already holds a *different* deployment's in-scope state.
+  mkdir -p "$WORK/target/secrets/ssh" "$WORK/target/ansible/venv"
+  printf 'STALE\n' >"$WORK/target/secrets/ssh/old.key"
+  printf 'stale-db\n' >"$WORK/target/policy.sqlite"
+  printf 'stale-wal\n' >"$WORK/target/policy.sqlite-wal"
+  printf 'keepvenv\n' >"$WORK/target/ansible/venv/marker"
+  run "$SCRIPT" restore --data-dir "$WORK/target" --force "$WORK/b.tar.gz" --quiet
+  [ "$status" -eq 0 ]
+  # The archive's secrets fully replace the target's: stale key gone, real one in.
+  [ ! -e "$WORK/target/secrets/ssh/old.key" ]
+  [ -f "$WORK/target/secrets/ssh/id_ed25519" ]
+  # Stale WAL/SHM sidecars are cleared so they can't corrupt the restored DB.
+  [ ! -e "$WORK/target/policy.sqlite-wal" ]
+  run sqlite3 "$WORK/target/policy.sqlite" "SELECT count(*) FROM t;"
+  [ "$output" = "2" ]
+  # Out-of-scope regenerable state the archive doesn't own is left untouched.
+  [ -f "$WORK/target/ansible/venv/marker" ]
 }
 
 @test "restore of a missing archive fails cleanly" {

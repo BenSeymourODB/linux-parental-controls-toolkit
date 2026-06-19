@@ -332,8 +332,14 @@ docker compose start dashboard   # first-run setup re-creates the venv / AdGuard
 ```
 
 Restore refuses a non-empty `--data-dir` without `--force` so it can't clobber a
-live deployment by accident, and it re-runs `PRAGMA integrity_check` on the
-restored database. The host needs `sqlite3` and `tar` on its `PATH`.
+live deployment by accident. With `--force` it **replaces** the in-scope paths
+(`policy.sqlite` and its WAL/SHM sidecars, `secrets/`, `adguard/conf/`,
+`ansible/inventory.yml`) wholesale rather than merging onto whatever was there —
+so a restore reproduces exactly the backed-up state and never resurrects a
+rotated key or replays a stale WAL — while leaving the regenerable siblings (the
+Ansible venv, the AdGuard binary) untouched. It then re-runs `PRAGMA
+integrity_check` on the restored database. The host needs `sqlite3` and `tar` on
+its `PATH`.
 
 If your storage does volume-level snapshots (e.g. TrueNAS SCALE dataset
 snapshots of `pct_data`), those remain a valid coarse backup of the whole
