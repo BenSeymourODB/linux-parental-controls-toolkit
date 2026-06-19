@@ -56,7 +56,6 @@ import {
   updateUserSchema,
   upsertLinkSchema,
   userClientParamsSchema,
-  userGroupIdParamsSchema,
   userGroupMemberParamsSchema,
   userIdParamsSchema,
   userIdQuerySchema,
@@ -566,7 +565,7 @@ export function registerPolicyRoutes(scope: FastifyInstance): void {
 
   typed.get(
     "/user-groups/:groupId/members",
-    { ...guard, schema: { params: userGroupIdParamsSchema } },
+    { ...guard, schema: { params: groupIdParamsSchema } },
     async (request): Promise<UserResponse[]> => {
       const { groupId } = request.params;
       if (repo.getUserGroup(scope.db, groupId) === undefined) {

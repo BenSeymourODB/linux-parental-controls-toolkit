@@ -272,12 +272,11 @@ export function toUserGroupResponse(row: UserGroupRow): UserGroupResponse {
   return { id: row.id, name: row.name, createdAt: row.createdAt.toISOString() };
 }
 
-/** `:groupId` path param for the user-group membership routes. */
-export const userGroupIdParamsSchema = z.object({
-  groupId: z.coerce.number().int().positive(),
-});
-
-/** `:groupId`/`:userId` path params for a single user-group membership. */
+/**
+ * `:groupId`/`:userId` path params for a single user-group membership. (The
+ * `:groupId`-only routes reuse {@link groupIdParamsSchema}, which is the same
+ * `{ groupId }` shape the activity-group membership routes already use.)
+ */
 export const userGroupMemberParamsSchema = z.object({
   groupId: z.coerce.number().int().positive(),
   userId: z.coerce.number().int().positive(),

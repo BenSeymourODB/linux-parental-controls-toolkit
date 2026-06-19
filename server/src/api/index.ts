@@ -67,7 +67,6 @@ export {
   createUserGroupSchema,
   updateUserGroupSchema,
   userGroupResponseSchema,
-  userGroupIdParamsSchema,
   userGroupMemberParamsSchema,
   type CreateUserGroupRequest,
   type UpdateUserGroupRequest,
