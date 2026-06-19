@@ -19,9 +19,11 @@
  * event, not to duplicate state the client already holds from policy push.
  *
  * The wire format is one JSON {@link EventFrame} per WebSocket frame:
- * `{ seq, at, event }`, where `seq` is a per-connection-process monotonic
- * counter and `at` is the server send time (ISO-8601, UTC — ADR 0001). The
- * frame envelope is stamped by the hub at publish time, not by producers.
+ * `{ seq, at, event }`, where `seq` is a **process-wide** monotonic counter
+ * (shared across all clients and connections, so any single connection sees
+ * gaps — the bridge uses it for ordering/de-dup, not as a per-connection
+ * resume cursor) and `at` is the server send time (ISO-8601, UTC — ADR 0001).
+ * The frame envelope is stamped by the hub at publish time, not by producers.
  *
  * License boundary: none touched — plain TypeScript + zod.
  */
