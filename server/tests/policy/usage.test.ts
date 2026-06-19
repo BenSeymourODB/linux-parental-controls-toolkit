@@ -141,6 +141,25 @@ describe("activitySecondsInWindow", () => {
     expect(seconds).toBe(1800);
   });
 
+  it("rolls up over a weekly window, summing samples from across the ISO week", () => {
+    // ISO week containing Thu 2024-02-15 is Mon 2024-02-12 00:00Z .. Mon
+    // 2024-02-19 00:00Z (UTC). Two samples on different days both count.
+    insertUsageSamples(db, [
+      sample(firefoxId, "2024-02-12T08:00:00.000Z", "2024-02-12T08:30:00.000Z"), // 1800s, Mon
+      sample(firefoxId, "2024-02-15T08:00:00.000Z", "2024-02-15T08:15:00.000Z"), // 900s, Thu
+      // Sunday of the *next* ISO week → excluded.
+      sample(firefoxId, "2024-02-19T08:00:00.000Z", "2024-02-19T08:30:00.000Z"),
+    ]);
+    const seconds = activitySecondsInWindow(db, {
+      userId,
+      activityId: firefoxId,
+      window: "weekly",
+      now: new Date("2024-02-15T12:00:00.000Z"),
+      tz: "UTC",
+    });
+    expect(seconds).toBe(2700);
+  });
+
   it("returns zero when the user has no samples (gap-conservative)", () => {
     const seconds = activitySecondsInWindow(db, {
       userId,

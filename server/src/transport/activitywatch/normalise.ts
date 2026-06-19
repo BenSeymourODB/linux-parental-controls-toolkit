@@ -17,6 +17,8 @@
  *     start is more than {@link DEFAULT_FUTURE_TOLERANCE_SECONDS} beyond `now`
  *     is discarded rather than summed into a budget (`docs/testing.md` →
  *     "an event with a future timestamp beyond the tolerance window is dropped").
+ *     The interval *end* is clamped to the same cutoff, so a single event with a
+ *     corrupt/huge `durationSeconds` cannot credit unbounded future time.
  *  3. Clip credited time to **not-afk** intervals when afk telemetry is present,
  *     so foreground time while the user was away from the keyboard is not
  *     charged. When no afk telemetry is supplied we do not clip — missing
@@ -173,8 +175,9 @@ function notAfkIntervals(afkEvents: readonly AwAfkEvent[]): MsInterval[] {
  * Normalise window-watcher events (clipped by afk telemetry) into
  * {@link UsageSampleCandidate}s ready for `policy/usage.ts` to persist.
  *
- * Pure and deterministic: the output is sorted by `(activityId, startedAt)` and
- * carries no overlapping intervals within an activity.
+ * Pure and deterministic: the output is sorted by `(activityId, startedAt)`,
+ * carries no overlapping intervals within an activity, and has boundaries
+ * floored to whole seconds to match the `usage_samples` storage granularity.
  */
 export function normaliseWindowEvents(input: NormaliseUsageInput): UsageSampleCandidate[] {
   const { userId, clientId, windowEvents, activities, now } = input;
@@ -191,7 +194,11 @@ export function normaliseWindowEvents(input: NormaliseUsageInput): UsageSampleCa
     if (start > futureCutoff) continue;
     const activityId = appIndex.get(event.app.toLowerCase());
     if (activityId === undefined) continue;
-    const end = start + event.durationSeconds * 1000;
+    // Clamp the end to the same future cutoff as the start, so a single event
+    // with a corrupt/huge `durationSeconds` cannot credit unbounded future
+    // time past the skew tolerance; a fully-future-clamped interval is dropped.
+    const end = Math.min(start + event.durationSeconds * 1000, futureCutoff);
+    if (end <= start) continue;
     const bucket = byActivity.get(activityId);
     if (bucket === undefined) byActivity.set(activityId, [{ start, end }]);
     else bucket.push({ start, end });
@@ -208,12 +215,20 @@ export function normaliseWindowEvents(input: NormaliseUsageInput): UsageSampleCa
   for (const [activityId, raw] of [...byActivity.entries()].sort((a, b) => a[0] - b[0])) {
     const clipped = allowed === null ? raw : raw.flatMap((iv) => intersectWithAllowed(iv, allowed));
     for (const interval of mergeIntervals(clipped)) {
+      // Floor boundaries to whole seconds: `usage_samples` stores epoch
+      // *seconds*, so emitting second-aligned candidates makes the persisted
+      // row exactly the candidate (no hidden write-time truncation) and keeps
+      // the rollups' arithmetic lossless. Flooring (vs rounding) can only
+      // shrink an interval, never over-credit.
+      const startedAt = Math.floor(interval.start / 1000) * 1000;
+      const endedAt = Math.floor(interval.end / 1000) * 1000;
+      if (endedAt <= startedAt) continue;
       candidates.push({
         userId,
         clientId,
         activityId,
-        startedAt: new Date(interval.start),
-        endedAt: new Date(interval.end),
+        startedAt: new Date(startedAt),
+        endedAt: new Date(endedAt),
       });
     }
   }

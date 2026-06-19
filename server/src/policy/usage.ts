@@ -76,6 +76,10 @@ export interface WindowQuery {
  * overlapping *pull windows* is the telemetry-pull layer's responsibility
  * (#162 owns the per-client pull cursor), not this writer's — keeping this a
  * plain append.
+ *
+ * `usage_samples` timestamps are epoch **seconds**, so any sub-second precision
+ * on the supplied `Date`s is floored on write; the normaliser already emits
+ * second-aligned boundaries, so for its output the persisted row is exact.
  */
 export function insertUsageSamples(db: PolicyDb, samples: readonly UsageSampleInsert[]): number {
   if (samples.length === 0) return 0;

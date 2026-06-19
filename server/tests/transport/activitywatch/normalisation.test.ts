@@ -142,6 +142,82 @@ describe("normaliseWindowEvents", () => {
     expect(dropped).toEqual([]);
   });
 
+  it("clamps the end of an in-tolerance event with a corrupt huge duration to the cutoff", () => {
+    // Starts at `now`, but claims a 1-day duration; the credited end must not
+    // run past now + tolerance.
+    const result = normaliseWindowEvents(
+      input({
+        windowEvents: [windowEvent("firefox", NOW.toISOString(), 86_400)],
+        activities: [appActivity(7, "firefox")],
+      }),
+    );
+    expect(result).toHaveLength(1);
+    const cutoff = new Date(NOW.getTime() + DEFAULT_FUTURE_TOLERANCE_SECONDS * 1000);
+    expect(result[0]?.endedAt).toEqual(cutoff);
+  });
+
+  it("drops an event whose start sits exactly at the future cutoff (end clamps to empty)", () => {
+    const atCutoff = new Date(NOW.getTime() + DEFAULT_FUTURE_TOLERANCE_SECONDS * 1000);
+    const result = normaliseWindowEvents(
+      input({
+        windowEvents: [windowEvent("firefox", atCutoff.toISOString(), 30)],
+        activities: [appActivity(7, "firefox")],
+      }),
+    );
+    expect(result).toEqual([]);
+  });
+
+  it("drops a sub-second event that floors to a zero-width interval", () => {
+    const result = normaliseWindowEvents(
+      input({
+        // 11:00:00.200 for 0.5s → 11:00:00.700; both floor to 11:00:00 → empty.
+        windowEvents: [windowEvent("firefox", "2024-03-10T11:00:00.200Z", 0.5)],
+        activities: [appActivity(7, "firefox")],
+      }),
+    );
+    expect(result).toEqual([]);
+  });
+
+  it("floors interval boundaries to whole seconds (usage_samples is second-granular)", () => {
+    const result = normaliseWindowEvents(
+      input({
+        // 11:00:00.500 for 600.7s → 11:10:01.200; both floor to whole seconds.
+        windowEvents: [windowEvent("firefox", "2024-03-10T11:00:00.500Z", 600.7)],
+        activities: [appActivity(7, "firefox")],
+      }),
+    );
+    expect(result).toEqual([
+      {
+        userId: 1,
+        clientId: 2,
+        activityId: 7,
+        startedAt: new Date("2024-03-10T11:00:00.000Z"),
+        endedAt: new Date("2024-03-10T11:10:01.000Z"),
+      },
+    ]);
+  });
+
+  it("does not extend the merged interval for an event fully contained in another", () => {
+    const result = normaliseWindowEvents(
+      input({
+        windowEvents: [
+          windowEvent("firefox", "2024-03-10T11:00:00.000Z", 1200), // 11:00–11:20
+          windowEvent("firefox", "2024-03-10T11:05:00.000Z", 300), // 11:05–11:10 (inside)
+        ],
+        activities: [appActivity(7, "firefox")],
+      }),
+    );
+    expect(result).toEqual([
+      {
+        userId: 1,
+        clientId: 2,
+        activityId: 7,
+        startedAt: new Date("2024-03-10T11:00:00.000Z"),
+        endedAt: new Date("2024-03-10T11:20:00.000Z"),
+      },
+    ]);
+  });
+
   it("merges overlapping events for the same activity (clock-skew dedup)", () => {
     const result = normaliseWindowEvents(
       input({
