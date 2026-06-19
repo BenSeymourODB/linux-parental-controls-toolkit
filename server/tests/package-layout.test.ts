@@ -15,6 +15,7 @@ const modules = [
   ["../src/events/index.js", "events"],
   ["../src/integrations/index.js", "integrations"],
   ["../src/transport/index.js", "transport"],
+  ["../src/transport/queue/index.js", "transport/queue"],
   ["../src/transport/ssh/index.js", "transport/ssh"],
   ["../src/transport/ansible/index.js", "transport/ansible"],
   ["../src/transport/activitywatch/index.js", "transport/activitywatch"],

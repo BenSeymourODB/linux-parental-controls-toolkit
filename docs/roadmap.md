@@ -97,8 +97,12 @@ Goal: dashboard pushes overall session limits to clients.
 - ssh2-based transport facade.
 - `timekpra` invocations for: set daily/weekly/monthly limits, set
   allowed hours, set PlayTime configuration.
-- Offline-queue: changes for offline clients persisted and replayed on
-  next reachable probe.
+- [x] Offline-queue: changes for offline clients persisted and replayed on
+  next reachable probe
+  ([#84](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/84)).
+  The durable store + coalescing + drain/replay loop + croner scheduler land
+  here against injected SSH executor/probe seams; the live wiring activates
+  with the `timekpra` push (#83) and the entrypoint's SSH-key bootstrap (#39).
 - Audit log of every command issued.
 - Recurring day-of-week time-windows on `Schedule` (allow/deny/extend on
   chosen weekdays between start/end times), pushed as Timekpr-nExT
