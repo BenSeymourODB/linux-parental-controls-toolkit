@@ -45,6 +45,9 @@ describe("policy DTO mappers", () => {
       bearerTokenHash: null,
       enrolledAt: new Date("2026-06-17T00:00:00.000Z"),
       lastSeen: new Date("2026-06-17T08:30:00.000Z"),
+      agentVersion: null,
+      componentVersions: null,
+      versionsReportedAt: null,
     };
     expect(toClientResponse(row)).toEqual({
       id: 2,
@@ -63,6 +66,9 @@ describe("policy DTO mappers", () => {
       bearerTokenHash: null,
       enrolledAt: new Date("2026-06-17T00:00:00.000Z"),
       lastSeen: null,
+      agentVersion: null,
+      componentVersions: null,
+      versionsReportedAt: null,
     };
     expect(toClientResponse(row).lastSeen).toBeNull();
   });
