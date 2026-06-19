@@ -107,7 +107,9 @@ export async function getClientHealth(
 /**
  * Health/status for every enrolled client, ascending by id. Probes each client
  * in turn when `prober` is supplied (the SSH transport pools per host, so a
- * sequential walk reuses connections rather than fanning out).
+ * sequential walk reuses connections rather than fanning out). Bounded
+ * concurrency / a per-list deadline — so a fleet of offline hosts can't stall
+ * the page once the live prober is wired (#39) — is tracked in #198.
  */
 export async function listClientHealth(
   db: PolicyDb,
