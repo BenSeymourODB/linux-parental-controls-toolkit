@@ -17,7 +17,7 @@ import { getAdmin } from "./credentials.js";
 import { loginRequestSchema, type SessionResponse } from "./dtos.js";
 import { assertAuthConfigured } from "./guard.js";
 import { verifyDummy, verifyPassword } from "./passwords.js";
-import type { LoginRateLimiter } from "./rate-limit.js";
+import type { FixedWindowRateLimiter } from "./rate-limit.js";
 import { clearSession, issueSession, readSession } from "./session.js";
 
 /** Dependencies the auth routes close over. */
@@ -25,7 +25,7 @@ export interface AuthRouteDeps {
   /** Whether `PCT_SECRET_KEY` is set (sessions can be signed). */
   authConfigured: boolean;
   /** Failed-login limiter, keyed by client IP. */
-  limiter: LoginRateLimiter;
+  limiter: FixedWindowRateLimiter;
 }
 
 /** Register the auth routes on an already-`/api`-prefixed scope. */

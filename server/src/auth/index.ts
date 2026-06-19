@@ -21,7 +21,7 @@ import type { FastifyInstance } from "fastify";
 import type { Settings } from "../config.js";
 import { bootstrapAdmin } from "./credentials.js";
 import { makeRequireAdmin } from "./guard.js";
-import { LoginRateLimiter } from "./rate-limit.js";
+import { FixedWindowRateLimiter } from "./rate-limit.js";
 import { registerAuthRoutes } from "./routes.js";
 
 /**
@@ -51,7 +51,7 @@ export async function registerAuth(
     await bootstrapAdmin(scope.db, settings, scope.log);
   });
 
-  registerAuthRoutes(scope, { authConfigured, limiter: new LoginRateLimiter() });
+  registerAuthRoutes(scope, { authConfigured, limiter: new FixedWindowRateLimiter() });
 }
 
 export { makeRequireAdmin, assertAuthConfigured } from "./guard.js";
