@@ -119,6 +119,15 @@ export {
   type ListAuditQuery,
 } from "./audit/index.js";
 
+// DNS-status DTO (#95): the read-only contract surfacing the active AdGuard mode
+// and its health. Schema lives in `./dns/dtos.ts` next to the route.
+export {
+  dnsModeSchema,
+  dnsHealthSchema,
+  dnsStatusResponseSchema,
+  type DnsStatusResponse,
+} from "./dns/index.js";
+
 // Auth DTOs (#52). Re-exported here so the frontend imports the auth contract
 // from the same `/api` surface as every other DTO; the schemas themselves live
 // in `../auth/dtos.ts` next to the routes that use them.
