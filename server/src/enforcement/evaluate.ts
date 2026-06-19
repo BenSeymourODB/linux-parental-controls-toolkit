@@ -7,6 +7,13 @@
  * up the matching consumption over the same daily window (`policy/usage.ts`),
  * reads the user's grace period, and asks the core which targets to stop.
  *
+ * **Daily window only, by design.** `effectivePolicy` emits *daily* per-activity
+ * quotas, and consumption is rolled up over the same daily window — the
+ * granular per-app quota the architecture's "Enforcement responsibilities" table
+ * assigns to dashboard polling. Weekly/monthly budgets are a session-time
+ * (Timekpr-nExT) concern, not per-app process-kill, so they are not enforced
+ * here.
+ *
  * Reads are done inline here rather than through `policy/repository.ts` — the
  * same pattern `api/policy/effective.ts` uses — so this enforcement seam stays
  * decoupled from the CRUD repository surface.
@@ -89,7 +96,8 @@ export function evaluateUserEnforcement(
   });
 
   // Per-activity consumption is one scan; per-group consumption is resolved per
-  // group target (each expands its own M2M membership).
+  // group target (each expands its own M2M membership — O(group budgets) reads,
+  // which is negligible at the household scale this product targets).
   const byActivity = usageByActivityInWindow(db, { userId, window: "daily", now, tz });
 
   const quotas = effective.perActivitySeconds.map((quota) => {

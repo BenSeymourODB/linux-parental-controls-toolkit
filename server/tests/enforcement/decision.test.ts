@@ -172,6 +172,20 @@ describe("decideEnforcement", () => {
     ]);
   });
 
+  it("re-fires every evaluation when cool-down is disabled (cooldownSeconds = 0)", () => {
+    // Fired one tick ago; with no cool-down window the target fires again now.
+    const firedAt = new Date(NOW.getTime() - 1);
+    const out = decideEnforcement({
+      now: NOW,
+      graceSeconds: 60,
+      cooldownSeconds: 0,
+      quotas: [quota({ targetId: 1, allowedSeconds: 100, consumedSeconds: 150 })],
+      lastFiredAt: new Map([["activity:1", firedAt]]),
+    });
+    expect(out.decisions).toHaveLength(1);
+    expect(out.lastFiredAt.get("activity:1")).toEqual(NOW);
+  });
+
   it("does not mutate the caller's lastFiredAt map", () => {
     const input = new Map<string, Date>();
     decideEnforcement({

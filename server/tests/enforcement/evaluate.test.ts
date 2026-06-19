@@ -217,6 +217,46 @@ describe("evaluateUserEnforcement", () => {
     expect(out.decisions).toHaveLength(0);
   });
 
+  it("returns a decision per over-budget target, ordered by (scope, targetId)", () => {
+    const codeId = db
+      .insert(activities)
+      .values({ kind: "app", matcher: "code" })
+      .returning()
+      .get().id;
+    const groupId = db.insert(activityGroups).values({ name: "social" }).returning().get().id;
+    db.insert(activitiesToGroups).values({ groupId, activityId: firefoxId }).run();
+    db.insert(budgets)
+      .values([
+        { userId, scope: "activity", targetId: firefoxId, window: "daily", secondsAllowed: 600 },
+        { userId, scope: "activity", targetId: codeId, window: "daily", secondsAllowed: 600 },
+        { userId, scope: "group", targetId: groupId, window: "daily", secondsAllowed: 600 },
+      ])
+      .run();
+    seedFirefoxUsage("2024-02-15T10:00:00.000Z", "2024-02-15T11:00:00.000Z"); // firefox 3600s (also the group)
+    insertUsageSamples(db, [
+      {
+        userId,
+        clientId,
+        activityId: codeId,
+        startedAt: new Date("2024-02-15T11:00:00.000Z"),
+        endedAt: new Date("2024-02-15T12:00:00.000Z"),
+      },
+    ]); // code 3600s
+
+    const out = evaluateUserEnforcement(
+      db,
+      { userId, now: NOW, tz: "UTC", cooldownSeconds: 300 },
+      new Map(),
+    );
+    // firefoxId (seeded first) < codeId, so the activity decisions sort
+    // firefox-then-code, with the group last.
+    expect(out.decisions.map((d) => `${d.scope}:${d.targetId}`)).toEqual([
+      `activity:${firefoxId}`,
+      `activity:${codeId}`,
+      `group:${groupId}`,
+    ]);
+  });
+
   it("threads cool-down state through so a recent fire is suppressed", () => {
     db.insert(budgets)
       .values({
