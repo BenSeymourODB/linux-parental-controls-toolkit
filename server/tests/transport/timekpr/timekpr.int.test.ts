@@ -66,10 +66,11 @@ describe.skipIf(!liveSshEnabled)("TimekprClient over live SSH (stub timekpra)", 
     // not a `;`-joined weekday list — the real binary rejects that form (#207
     // findings); callers loop the setter to apply the same hours across
     // multiple weekdays.
-    await client.setAllowedHours(
-      1,
-      [{ hour: 8, startMinute: 30, endMinute: 45 }, { hour: 9 }, { hour: 22, unaccounted: true }],
-    );
+    await client.setAllowedHours(1, [
+      { hour: 8, startMinute: 30, endMinute: 45 },
+      { hour: 9 },
+      { hour: 22, unaccounted: true },
+    ]);
     await client.setAllowedHours(ALL_DAYS, [{ hour: 0 }, { hour: 23 }]);
     await client.setPlayTimeActivities([
       { mask: "minetest", description: "Minetest" },
