@@ -12,19 +12,32 @@
  *
  * `@fastify/static` serves files by URL path, so the hashed assets and static
  * files map one-to-one (`GET /_app/immutable/x.js` → `<root>/_app/immutable/x.js`).
- * The two extensionless surface URLs do not, so they get explicit routes that
- * send the matching `*.html`. `/` and `/healthz` (and, in a later phase,
+ * The extensionless surface URLs do not, so each surface gets explicit routes
+ * that send the matching `*.html`. `/` and `/healthz` (and, in a later phase,
  * `/api/*`) stay owned by the backend: the exact and more-specific routes win
  * over the static plugin's `GET /*` wildcard, and `index: false` stops the
  * plugin from registering its own `GET /` (which would collide with the
  * landing route).
  *
- * The prerendered pages reference their assets with **relative** URLs
- * (`./_app/…`), which only resolve to `/_app/…` when the document is served at
- * the canonical, slash-free surface URL. So the trailing-slash form redirects
- * to the canonical one (a permanent 308) rather than serving the same HTML
- * under a base path that would make every asset 404 in the browser. This also
- * matches the frontend's `trailingSlash: 'never'` default.
+ * SPA fallback (#59): a *deep* client-side route on a hard refresh — e.g.
+ * `GET /admin/settings`, a path that exists only inside the hydrated SvelteKit
+ * app, not as a prerendered file — must serve the surface entry page so the
+ * client router can take over, rather than 404. So beyond the exact surface
+ * URL, each surface also owns a `…/*` wildcard that sends the same entry page.
+ * Per-surface (not a single shared SPA fallback page) because `/admin` and
+ * `/app` must fall back to *their own* entry page. The fallback only ever
+ * shadows paths under the surface prefix; the shared `/_app/…` assets and the
+ * root-level static files (`favicon.png`, `/service-worker.js`,
+ * `/app.webmanifest`, `/app-icons/…`) live at the root, not under `/admin/` or
+ * `/app/`, so they are untouched.
+ *
+ * This works because the prerendered pages reference their assets with
+ * **root-absolute** URLs (`/_app/…`, via `kit.paths.relative = false` in
+ * `svelte.config.js`), so the entry HTML loads its assets regardless of the
+ * document URL's depth. With absolute assets there is no asset-resolution
+ * reason to canonicalise the trailing slash, so `/admin/` and `/app/` simply
+ * fall through the `…/*` wildcard and serve the entry page like any other deep
+ * path (no redirect).
  *
  * Static-asset requests flow through the same pino request logging the app
  * already configures (`./logger.ts`, #11) — there is no frontend-specific
@@ -80,19 +93,17 @@ export function registerFrontend(app: FastifyInstance, settings: Settings): void
     });
 
     for (const { url, page } of SURFACES) {
+      const sendEntryPage = (_request: FastifyRequest, reply: FastifyReply): FastifyReply =>
+        reply.sendFile(page);
       // Canonical URL: serve the prerendered entry page.
-      scope.get(
-        url,
-        (_request: FastifyRequest, reply: FastifyReply): FastifyReply => reply.sendFile(page),
-      );
-      // Trailing-slash form: redirect to the canonical URL so the page's
-      // relative asset paths resolve against `/` rather than `/<surface>/`.
-      // Preserve any query string so client-side state survives the redirect.
-      scope.get(`${url}/`, (request: FastifyRequest, reply: FastifyReply): FastifyReply => {
-        const queryStart = request.url.indexOf("?");
-        const target = queryStart === -1 ? url : url + request.url.slice(queryStart);
-        return reply.redirect(target, 308);
-      });
+      scope.get(url, sendEntryPage);
+      // SPA fallback (#59): any deeper path under the surface — including the
+      // trailing-slash form `/<surface>/` — serves the same entry page so a
+      // hard refresh of a client-side route hands off to the router instead of
+      // 404ing. The `…/*` wildcard is more specific than the static plugin's
+      // root `GET /*`, so it wins; the root-absolute asset URLs (#59) keep the
+      // page's `/_app/…` references working at any document depth.
+      scope.get(`${url}/*`, sendEntryPage);
     }
   });
 }
