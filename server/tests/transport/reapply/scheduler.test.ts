@@ -173,7 +173,7 @@ describe("startPeriodicReapply", () => {
 
     // Still inside the backoff window: the next tick skips the client entirely.
     clock += DEFAULT_REAPPLY_BACKOFF.baseMs - 1;
-    (runner.runPlaybook as ReturnType<typeof vi.fn>).mockClear();
+    vi.mocked(runner.runPlaybook).mockClear();
     await handle.tick();
     expect(runner.runPlaybook).not.toHaveBeenCalled();
 
@@ -181,6 +181,33 @@ describe("startPeriodicReapply", () => {
     clock += 2;
     await handle.tick();
     expect(runner.runPlaybook).toHaveBeenCalledTimes(1);
+  });
+
+  it("doubles the backoff on each consecutive failure and clamps at maxMs", async () => {
+    let clock = 0;
+    const now = (): number => clock;
+    const runner = fakeRunner(async () => {
+      throw new AnsiblePlaybookFailedError(2, "boom", "");
+    });
+    // Small, exact bounds so the doubling (100 → 200 → 400-clamped-to-250) is
+    // deterministic and readable.
+    const backoff = { baseMs: 100, maxMs: 250 };
+
+    const handle = start({ runner, now, backoff });
+    for (let i = 0; i < 3; i += 1) {
+      await handle.tick();
+      const last = [...lines]
+        .reverse()
+        .find((l) => l.msg === "re-apply failed; backing off client");
+      // Step the clock exactly to the next eligible time so the following tick
+      // is not skipped by the backoff window.
+      clock += last?.nextRetryMs as number;
+    }
+
+    const backoffLines = lines.filter((l) => l.msg === "re-apply failed; backing off client");
+    expect(backoffLines.map((l) => l.failures)).toEqual([1, 2, 3]);
+    // 100 × 2^(n-1) clamped at maxMs (250): the third would be 400 → 250.
+    expect(backoffLines.map((l) => l.nextRetryMs)).toEqual([100, 200, 250]);
   });
 
   it("clears the backoff after a clean pass so the client returns to cadence", async () => {
@@ -201,7 +228,7 @@ describe("startPeriodicReapply", () => {
     expect(lines.find((l) => l.msg === "re-apply pass succeeded")).toBeDefined();
 
     // No backoff remains: an immediate subsequent tick runs again.
-    (runner.runPlaybook as ReturnType<typeof vi.fn>).mockClear();
+    vi.mocked(runner.runPlaybook).mockClear();
     await handle.tick();
     expect(runner.runPlaybook).toHaveBeenCalledTimes(1);
   });
@@ -230,7 +257,7 @@ describe("startPeriodicReapply", () => {
     expect(lines.find((l) => l.msg === "re-apply failed; backing off client")).toBeUndefined();
 
     // No backoff was recorded, so an immediate tick retries (no clock advance).
-    (runner.runPlaybook as ReturnType<typeof vi.fn>).mockClear();
+    vi.mocked(runner.runPlaybook).mockClear();
     await handle.tick();
     expect(runner.runPlaybook).toHaveBeenCalledTimes(1);
   });

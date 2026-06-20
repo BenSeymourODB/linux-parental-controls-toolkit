@@ -198,6 +198,12 @@ export function startPeriodicReapply(options: PeriodicReapplyOptions): PeriodicR
     let anyFailed = false;
     for (const playbook of playbooks) {
       const startedAt = performance.now();
+      // A representative, normalised command for the audit row — not the
+      // verbatim argv. The runner execs `ansible-playbook -i <tmp inventory>
+      // <resolved path> --limit <host>`; the temp inventory path is ephemeral
+      // and the resolved path is noise, so the audit records the playbook by
+      // bare name plus the host it targeted. `redactArgv` is applied for
+      // parity with the SSH audit path (these args carry no secret today).
       const command = redactArgv(["ansible-playbook", playbook, "--limit", client.hostname]);
       let result: RunOutcome;
       try {
