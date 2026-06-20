@@ -125,8 +125,6 @@
     const date = new Date(iso);
     return Number.isNaN(date.getTime()) ? iso : date.toLocaleDateString();
   }
-
-  const canSaveEdit = $derived(editHostname.trim() !== "" && editSshUser.trim() !== "");
 </script>
 
 <section>
@@ -188,7 +186,10 @@
               <td class="muted">{formatDate(client.enrolledAt)}</td>
               <td class="muted">{formatDate(client.lastSeen)}</td>
               <td class="actions">
-                <button onclick={() => saveEdit(client.id)} disabled={saving || !canSaveEdit}>
+                <button
+                  onclick={() => saveEdit(client.id)}
+                  disabled={saving || editHostname.trim() === "" || editSshUser.trim() === ""}
+                >
                   {saving ? "Saving…" : "Save"}
                 </button>
                 <button class="ghost" onclick={cancelEdit} disabled={saving}>Cancel</button>

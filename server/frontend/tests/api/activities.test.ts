@@ -62,6 +62,19 @@ describe("activities API", () => {
     expect((init as RequestInit).body).toBe(JSON.stringify({ matcher: "steam" }));
   });
 
+  it("updateActivity sends a matchType-only PATCH body unchanged", async () => {
+    const updated = { id: 5, kind: "domain", matcher: "*.youtube.com", matchType: "glob" };
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(200, updated));
+
+    const result = await updateActivity(5, { matchType: "glob" });
+
+    expect(result).toEqual(updated);
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe("/api/activities/5");
+    expect((init as RequestInit).method).toBe("PATCH");
+    expect((init as RequestInit).body).toBe(JSON.stringify({ matchType: "glob" }));
+  });
+
   it("deleteActivity DELETEs /api/activities/:id and resolves on 204", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(204, undefined));
 
