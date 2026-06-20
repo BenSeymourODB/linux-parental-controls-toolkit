@@ -4,6 +4,7 @@
  * atomicity (a duplicate Linux UID rolls the whole thing back — no half-created
  * client, no consumed token).
  */
+import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import * as enrolmentRepo from "../../src/policy/enrolment.js";
@@ -64,6 +65,58 @@ describe("enrolment repository", () => {
     const reloaded = enrolmentRepo.findEnrolmentTokenByHash(db, "hash-1");
     expect(reloaded?.consumedAt).toBeInstanceOf(Date);
     expect(reloaded?.consumedClientId).toBe(result.client.id);
+  });
+
+  it("leaves the version columns NULL when no versions are reported (#164)", () => {
+    const userId = seedUser();
+    const token = enrolmentRepo.createEnrolmentToken(db, {
+      tokenHash: "hash-noversions",
+      supervisedUsers: [{ userId, linuxUsername: "alice" }],
+      expiresAt: new Date("2026-12-31T00:00:00Z"),
+    });
+
+    const result = enrolmentRepo.consumeTokenAndEnrol(db, token.id, {
+      hostname: "mint-01",
+      sshUser: "pct-agent",
+      bearerTokenHash: "bearer-hash",
+      links: [{ userId, linuxUsername: "alice", linuxUid: 1000 }],
+    });
+
+    expect(result.client.agentVersion).toBeNull();
+    expect(result.client.componentVersions).toBeNull();
+    expect(result.client.versionsReportedAt).toBeNull();
+  });
+
+  it("persists the reported version inventory and round-trips the JSON blob (#164)", () => {
+    const userId = seedUser();
+    const token = enrolmentRepo.createEnrolmentToken(db, {
+      tokenHash: "hash-versions",
+      supervisedUsers: [{ userId, linuxUsername: "alice" }],
+      expiresAt: new Date("2026-12-31T00:00:00Z"),
+    });
+    const reportedAt = new Date("2026-06-19T12:00:00.000Z");
+
+    const result = enrolmentRepo.consumeTokenAndEnrol(db, token.id, {
+      hostname: "mint-01",
+      sshUser: "pct-agent",
+      bearerTokenHash: "bearer-hash",
+      links: [{ userId, linuxUsername: "alice", linuxUid: 1000 }],
+      agentVersion: "1.4.0",
+      componentVersions: { timekpr: "0.5.3", e2guardian: "5.5.8~git", activitywatch: "0.13.2" },
+      versionsReportedAt: reportedAt,
+    });
+
+    expect(result.client.agentVersion).toBe("1.4.0");
+    expect(result.client.versionsReportedAt).toEqual(reportedAt);
+
+    // Reload from the DB to confirm the JSON blob survives a serialize/parse
+    // round-trip through the `mode: "json"` column, not just the returned row.
+    const reloaded = db.select().from(clients).where(eq(clients.id, result.client.id)).get();
+    expect(reloaded?.componentVersions).toEqual({
+      timekpr: "0.5.3",
+      e2guardian: "5.5.8~git",
+      activitywatch: "0.13.2",
+    });
   });
 
   it("refuses to consume an already-consumed token and rolls back (single-use guard)", () => {

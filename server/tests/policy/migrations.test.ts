@@ -67,6 +67,7 @@ const EXPECTED_TABLES = [
   "activities_to_groups",
   "activity_groups",
   "admin_credentials",
+  "audit_log",
   "budgets",
   "clients",
   "enrolment_tokens",
@@ -77,6 +78,8 @@ const EXPECTED_TABLES = [
   "schedules",
   "transport_queue",
   "usage_samples",
+  "user_group_memberships",
+  "user_groups",
   "users",
   "users_on_clients",
 ];
