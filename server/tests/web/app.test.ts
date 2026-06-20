@@ -52,6 +52,69 @@ describe("web app routes", () => {
   });
 });
 
+// trustProxy redefines `request.ip`, which is the key the per-IP
+// failed-attempt limiter (auth login, /api/clients/enrol) buckets on (#235).
+// Exercised through the admin-login limiter end-to-end via app.inject.
+describe("trustProxy and the per-IP failed-attempt limiter (#235)", () => {
+  /** Settings with a secret + seeded admin, plus an optional PCT_TRUST_PROXY. */
+  function seededSettings(trustProxy?: string) {
+    return loadSettings({
+      PCT_LOG_LEVEL: "silent",
+      PCT_SECRET_KEY: "trust-proxy-test-secret",
+      PCT_ADMIN_USERNAME: "ben",
+      PCT_ADMIN_PASSWORD: "hunter2",
+      ...(trustProxy === undefined ? {} : { PCT_TRUST_PROXY: trustProxy }),
+    });
+  }
+
+  /** A failed login (wrong password) from a given forwarded client IP. */
+  function failedLogin(harness: TestApp, forwardedFor: string) {
+    return harness.app.inject({
+      method: "POST",
+      url: "/api/auth/login",
+      remoteAddress: "127.0.0.1",
+      headers: { "x-forwarded-for": forwardedFor },
+      payload: { username: "ben", password: "wrong" },
+    });
+  }
+
+  // The limiter's default budget is 5 failures per window (auth/rate-limit.ts).
+  const MAX_ATTEMPTS = 5;
+
+  it("buckets per forwarded client IP when enabled and trusted", async () => {
+    const harness = buildTestApp({ appOptions: { settings: seededSettings("true") } });
+    await harness.app.ready();
+    try {
+      // Exhaust the budget for one client IP behind the proxy.
+      for (let i = 0; i < MAX_ATTEMPTS; i += 1) {
+        expect((await failedLogin(harness, "203.0.113.5")).statusCode).toBe(401);
+      }
+      // That IP is now blocked...
+      expect((await failedLogin(harness, "203.0.113.5")).statusCode).toBe(429);
+      // ...but a different forwarded IP has its own untouched bucket.
+      expect((await failedLogin(harness, "198.51.100.9")).statusCode).toBe(401);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it("ignores a spoofed X-Forwarded-For when disabled (default)", async () => {
+    const harness = buildTestApp({ appOptions: { settings: seededSettings() } });
+    await harness.app.ready();
+    try {
+      // With trustProxy off, the forwarded header is ignored: every request
+      // keys on the immediate TCP peer (127.0.0.1), so they share one bucket.
+      for (let i = 0; i < MAX_ATTEMPTS; i += 1) {
+        expect((await failedLogin(harness, "203.0.113.5")).statusCode).toBe(401);
+      }
+      // A "different" forwarded IP cannot dodge the block — the header is unused.
+      expect((await failedLogin(harness, "198.51.100.9")).statusCode).toBe(429);
+    } finally {
+      await harness.close();
+    }
+  });
+});
+
 describe("app.db decorator (#49)", () => {
   it("decorates the app with the injected policy db and serves reads/writes", () => {
     const db = testDb();
