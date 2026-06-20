@@ -23,6 +23,7 @@ export {
   type PolicyPushClient,
   type PolicyPushClientFactory,
   type PolicyPushClientTarget,
+  type PolicyPushExecutorLogger,
   type PolicyPushExecutorOptions,
 } from "./executor.js";
 export {

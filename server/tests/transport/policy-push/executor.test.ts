@@ -5,6 +5,7 @@
  * error propagation the offline queue classifies on.
  */
 import { describe, expect, it, vi } from "vitest";
+import { ZodError } from "zod";
 
 import {
   createBudget,
@@ -141,6 +142,29 @@ describe("createPolicyPushExecutor", () => {
     expect(rec.calls).toEqual(["setWeeklyAllowedHours:7"]);
   });
 
+  it("skips the allowed-hours push (and logs) for a fully-denied week, still pushing limits", async () => {
+    const { userId, clientId } = setup();
+    createBudget(db, { userId, scope: "overall", window: "daily", secondsAllowed: 3600 });
+    // An always-on overall deny denies access every day, all day → no allowed weekday.
+    createSchedule(db, { userId, targetKind: "overall", action: "deny" });
+
+    const rec = recordingClient();
+    const warn = vi.fn();
+    const executor = createPolicyPushExecutor({
+      db,
+      defaultTz: "UTC",
+      log: { warn },
+      buildClient: () => rec.client,
+    });
+
+    await executor(action(clientId, userId));
+
+    // Limits still pushed; the unrepresentable allowed-hours push is skipped.
+    expect(rec.calls).toEqual(["setTimeLimits:3600,3600,3600,3600,3600,3600,3600"]);
+    expect(rec.calls).not.toContain("setWeeklyAllowedHours:7");
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
   it("uses the server default timezone for a user with no tz override", async () => {
     db = testDb();
     const userId = createUser(db, { displayName: "Bob", tz: null }).id;
@@ -239,6 +263,6 @@ describe("createPolicyPushExecutor", () => {
 
     await expect(
       executor({ clientId, coalesceKey: "user:1", kind: "policy.push", payload: { nope: true } }),
-    ).rejects.toBeTruthy();
+    ).rejects.toBeInstanceOf(ZodError);
   });
 });

@@ -78,6 +78,11 @@ export interface PolicyPushClientTarget {
  */
 export type PolicyPushClientFactory = (target: PolicyPushClientTarget) => PolicyPushClient;
 
+/** The slice of a logger the executor uses (for the full-lockout skip notice). */
+export interface PolicyPushExecutorLogger {
+  warn(obj: object, msg: string): void;
+}
+
 /** Construction options for {@link createPolicyPushExecutor}. */
 export interface PolicyPushExecutorOptions {
   /** The shared policy-store handle the affected rows are read from. */
@@ -86,6 +91,8 @@ export interface PolicyPushExecutorOptions {
   readonly buildClient: PolicyPushClientFactory;
   /** Server-default timezone for users with no `tz` override. */
   readonly defaultTz: string;
+  /** Optional logger; records the full-lockout allowed-hours skip (see below). */
+  readonly log?: PolicyPushExecutorLogger;
   /** Clock for the reference instant; overridable in tests. Defaults to `new Date()`. */
   readonly now?: () => Date;
 }
@@ -96,7 +103,7 @@ export interface PolicyPushExecutorOptions {
  * at-least-once queue contract requires.
  */
 export function createPolicyPushExecutor(options: PolicyPushExecutorOptions): ActionExecutor {
-  const { db, buildClient, defaultTz } = options;
+  const { db, buildClient, defaultTz, log } = options;
   const now = options.now ?? ((): Date => new Date());
 
   return async function execute(action: QueuedAction): Promise<void> {
@@ -114,6 +121,9 @@ export function createPolicyPushExecutor(options: PolicyPushExecutorOptions): Ac
     const link = listUserLinks(db, userId).find((l) => l.clientId === action.clientId);
     if (link === undefined) return;
 
+    // The link's existence guarantees the user row exists (the link FK-cascades
+    // away with the user), so `getUser` is effectively non-null here; `?.` is
+    // defensive only, and a vanished user resolves to an empty-policy push.
     const user = getUser(db, userId);
     const tz = user?.tz ?? defaultTz;
     const budgets = listUserBudgets(db, userId);
@@ -132,6 +142,20 @@ export function createPolicyPushExecutor(options: PolicyPushExecutorOptions): Ac
     if (resolved.monthlySeconds !== null) {
       await timekpr.setTimeLimitMonth(resolved.monthlySeconds);
     }
-    await timekpr.setWeeklyAllowedHours(resolved.weekly);
+
+    // A fully-denied week has no allowed weekday, which `timekpra` allowed-hours
+    // cannot represent (`--setalloweddays` rejects an empty set). Pushing it
+    // would throw a *non-retriable* error and dead-letter the whole action —
+    // silently dropping the limits above too. Full lockout is enforced via a
+    // zero daily limit / session-kill (Phase 8c), not allowed-hours, so skip
+    // the allowed-hours push here and surface the gap rather than failing.
+    if ([...resolved.weekly.values()].some((windows) => windows.length > 0)) {
+      await timekpr.setWeeklyAllowedHours(resolved.weekly);
+    } else {
+      log?.warn(
+        { clientId: action.clientId, userId },
+        "policy denies all access all week; allowed-hours push skipped (full lockout is Phase 8c: zero daily limit / session-kill, not allowed-hours)",
+      );
+    }
   };
 }

@@ -127,6 +127,7 @@ export function createPolicyPushTransport(
   const executor = createPolicyPushExecutor({
     db,
     defaultTz: settings.defaultTz,
+    log,
     ...(options.now !== undefined ? { now: options.now } : {}),
     buildClient: ({ client, username, userId, reason }) =>
       new TimekprClient(
