@@ -142,6 +142,16 @@ describe("buildE2guardianPlan", () => {
     db.$client.close();
   });
 
+  it("ignores an overall (null-target) deny — it is not a per-website filter", () => {
+    const db = testDb();
+    const clientId = createClient(db, { hostname: "mint-01", sshUser: "pct-agent" }).id;
+    const alice = addLinkedUser(db, clientId, "Alice", "alice", 1001);
+    createSchedule(db, { userId: alice, targetKind: "overall", action: "deny" });
+
+    expect(buildE2guardianPlan(db, clientId).users).toEqual([]);
+    db.$client.close();
+  });
+
   it("skips domain_group denies (named bundles owned by #178/#195)", () => {
     const db = testDb();
     const clientId = createClient(db, { hostname: "mint-01", sshUser: "pct-agent" }).id;
