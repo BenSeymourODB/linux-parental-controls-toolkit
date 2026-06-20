@@ -35,10 +35,11 @@ repos:
       - id: shellcheck
         files: ^(client|scripts)/.*\.sh$
 
-  # ansible-lint is intentionally kept in ci.yml only (not here), because
-  # the pre-commit hook has environment sensitivity with ansible-core versions
-  # and there are no playbooks to lint yet (client/ansible/ is a reserved
-  # placeholder). Add it back here once real playbooks land (Phase 6).
+  # ansible-lint is intentionally kept in ci.yml only (not here), because the
+  # pre-commit hook has environment sensitivity with ansible-core versions. The
+  # first Phase-6 playbooks have landed under client/ansible/ (#91); the
+  # ansible-lint CI job is the gate for them. Local runs: `ansible-lint
+  # client/ansible/`.
 
   # Standard file hygiene
   - repo: https://github.com/pre-commit/pre-commit-hooks
