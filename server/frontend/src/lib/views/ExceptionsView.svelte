@@ -149,10 +149,20 @@
     newTargetId = null;
   }
 
+  // A start after (or equal to) the expiry is rejected by the server's
+  // `effectiveFrom < expiresAt` refinement; mirror it client-side for fast
+  // feedback rather than waiting for the 400.
+  let datesInvalid = $derived.by(() => {
+    const from = localToIso(newEffectiveFrom);
+    const to = localToIso(newExpiresAt);
+    return from !== null && to !== null && Date.parse(from) >= Date.parse(to);
+  });
+
   let createDisabled = $derived(
     creating ||
       newUserId === null ||
       newExpiresAt.trim() === "" ||
+      datesInvalid ||
       (newScope !== "overall" && newTargetId === null),
   );
 
@@ -333,6 +343,10 @@
       </button>
     </form>
 
+    {#if datesInvalid}
+      <p class="warn" role="alert">Expiry must be after the start time.</p>
+    {/if}
+
     {#if loading}
       <p class="muted">Loading exceptions…</p>
     {:else if exceptions.length === 0}
@@ -507,5 +521,10 @@
     background: #fef2f2;
     color: #b91c1c;
     font-size: 0.85rem;
+  }
+  .warn {
+    margin: -0.5rem 0 1rem;
+    color: #b45309;
+    font-size: 0.8rem;
   }
 </style>
