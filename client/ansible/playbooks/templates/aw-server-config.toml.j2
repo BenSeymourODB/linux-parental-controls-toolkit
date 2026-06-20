@@ -1,0 +1,7 @@
+# Managed by pct Ansible (issue #91) — ActivityWatch {{ aw_version }}.
+# aw-server is bound to loopback only; the dashboard pulls telemetry over an
+# SSH tunnel and never exposes this port (docs/architecture.md). Local edits
+# are reverted on the next playbook re-apply (#93).
+[server]
+host = "{{ aw_host }}"
+port = {{ aw_port }}
