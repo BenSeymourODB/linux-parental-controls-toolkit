@@ -1,0 +1,91 @@
+/**
+ * Unit tests for the client health/status DTOs (#81): the `transport_queue`-row
+ * → wire-summary mapper and the schema/contract invariants (enums derived from
+ * the `transport/health` catalogue and the queue status enum).
+ */
+import { describe, expect, it } from "vitest";
+
+import { clientComponentValues } from "../../../src/transport/health/index.js";
+import type { QueuedActionRow } from "../../../src/transport/queue/index.js";
+import {
+  clientHealthSchema,
+  componentHealthSchema,
+  toQueuedActionSummary,
+} from "../../../src/api/clients/health-dtos.js";
+
+const row: QueuedActionRow = {
+  id: 7,
+  clientId: 3,
+  coalesceKey: "policy.push:user:1",
+  kind: "policy.push",
+  payload: { foo: "bar" },
+  status: "failed",
+  attempts: 2,
+  lastError: "exit code 1",
+  enqueuedAt: new Date("2026-06-19T10:00:00.000Z"),
+  updatedAt: new Date("2026-06-19T10:05:00.000Z"),
+};
+
+describe("toQueuedActionSummary", () => {
+  it("maps a queue row to its wire summary with ISO timestamps", () => {
+    expect(toQueuedActionSummary(row)).toEqual({
+      id: 7,
+      kind: "policy.push",
+      coalesceKey: "policy.push:user:1",
+      status: "failed",
+      attempts: 2,
+      lastError: "exit code 1",
+      enqueuedAt: "2026-06-19T10:00:00.000Z",
+      updatedAt: "2026-06-19T10:05:00.000Z",
+    });
+  });
+
+  it("preserves a null lastError", () => {
+    expect(toQueuedActionSummary({ ...row, lastError: null }).lastError).toBeNull();
+  });
+});
+
+describe("health DTO contract", () => {
+  it("accepts every catalogue component name", () => {
+    for (const component of clientComponentValues) {
+      expect(
+        componentHealthSchema.safeParse({ component, status: "ok", detail: "active" }).success,
+      ).toBe(true);
+    }
+  });
+
+  it("rejects an unknown component name", () => {
+    expect(
+      componentHealthSchema.safeParse({ component: "not-a-thing", status: "ok", detail: "" })
+        .success,
+    ).toBe(false);
+  });
+
+  it("round-trips a full client-health record", () => {
+    const parsed = clientHealthSchema.safeParse({
+      clientId: 3,
+      hostname: "alice-pc.local",
+      reachability: "online",
+      lastSeen: "2026-06-19T12:00:00.000Z",
+      enrolledAt: "2026-06-01T00:00:00.000Z",
+      probedAt: "2026-06-19T12:00:00.000Z",
+      components: [{ component: "timekpr-next", status: "ok", detail: "active" }],
+      queue: { pending: 1, failed: 0, actions: [toQueuedActionSummary(row)] },
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it("allows null lastSeen / probedAt (never-seen, un-probed client)", () => {
+    const parsed = clientHealthSchema.safeParse({
+      clientId: 3,
+      hostname: "alice-pc.local",
+      reachability: "unknown",
+      lastSeen: null,
+      enrolledAt: "2026-06-01T00:00:00.000Z",
+      probedAt: null,
+      components: [],
+      queue: { pending: 0, failed: 0, actions: [] },
+    });
+    expect(parsed.success).toBe(true);
+  });
+});
