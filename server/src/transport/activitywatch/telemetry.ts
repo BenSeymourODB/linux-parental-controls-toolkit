@@ -18,6 +18,7 @@
  */
 import { Cron, type CronOptions } from "croner";
 
+import { mapWithConcurrency } from "../../util/concurrency.js";
 import {
   SshUnreachableError,
   targetFromClient,
@@ -213,33 +214,6 @@ export function isValidCronPattern(pattern: string): boolean {
   } catch {
     return false;
   }
-}
-
-/**
- * Run `worker` over `items` with at most `limit` in flight. Single-threaded JS
- * makes the shared-cursor increments safe; ordering within the limit is not
- * guaranteed (it doesn't matter for independent per-client tunnels).
- */
-async function mapWithConcurrency<T>(
-  items: readonly T[],
-  limit: number,
-  worker: (item: T) => Promise<void>,
-): Promise<void> {
-  let cursor = 0;
-  const runnerCount = Math.min(Math.max(limit, 1), items.length);
-  const runners: Promise<void>[] = [];
-  for (let i = 0; i < runnerCount; i += 1) {
-    runners.push(
-      (async () => {
-        while (cursor < items.length) {
-          const item = items[cursor];
-          cursor += 1;
-          if (item !== undefined) await worker(item);
-        }
-      })(),
-    );
-  }
-  await Promise.all(runners);
 }
 
 /** A safe, loggable message for an unknown thrown value. */
