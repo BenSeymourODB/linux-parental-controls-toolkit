@@ -104,16 +104,21 @@ idempotently:
    the dashboard skips the download entirely and validates that it can
    reach the configured AdGuard Home instance's REST API. In `disabled`
    mode (the default), neither happens.
-4. **SSH key bootstrap** — if `/data/secrets/ssh/id_ed25519` is absent,
-   generate one. The public key is shown in the dashboard's "Add client"
-   flow for the admin to install on each new client (or, more commonly,
-   for the client install script to fetch via a one-time enrolment token).
-   Its path is configurable via `PCT_SSH_PUBLIC_KEY_PATH` (default
-   `/data/secrets/ssh/id_ed25519.pub`); the client-enrolment response
-   (`POST /api/clients/enrol`, #77) returns that public key so the client can
-   authorize the dashboard. Until this Phase-4 keygen step lands the file is
-   absent and the enrol response carries `sshPublicKey: null` — enrolment still
-   succeeds, the client just isn't handed a key to authorize yet.
+4. **SSH key bootstrap** — if `/data/secrets/ssh/id_ed25519` is absent, the
+   Node server generates an Ed25519 key pair **in-process on boot** (issue #39,
+   via `node:crypto` — the runtime image ships no `ssh-keygen` binary, mirroring
+   the in-process migrator above). The private key is written `0600` at
+   `PCT_SSH_PRIVATE_KEY_PATH` (default `/data/secrets/ssh/id_ed25519`) and the
+   public key `0644` at `PCT_SSH_PUBLIC_KEY_PATH` (default
+   `/data/secrets/ssh/id_ed25519.pub`). The step is idempotent — an existing key
+   is **never** regenerated, so clients that already authorized it keep working.
+   The public key is shown in the dashboard's "Add client" flow for the admin to
+   install on each new client (or, more commonly, for the client install script
+   to fetch via a one-time enrolment token): the client-enrolment response
+   (`POST /api/clients/enrol`, #77) returns it so the client can authorize the
+   dashboard. If key generation fails (e.g. an unwritable data volume) the
+   dashboard still starts and the enrol response carries `sshPublicKey: null`
+   until the problem is fixed.
 5. Start the Node server on `0.0.0.0:8000` (default).
 
 If any of the optional downloads fail (no network, etc.), the dashboard
