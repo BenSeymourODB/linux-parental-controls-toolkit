@@ -14,6 +14,7 @@ import { registerAuditRoutes } from "./audit/index.js";
 import { registerClientEnrolmentRoutes } from "./clients/index.js";
 import { registerMetaRoute } from "./meta.js";
 import { registerEffectiveRoutes, registerPolicyRoutes } from "./policy/index.js";
+import { registerRetentionRoutes } from "./retention/index.js";
 import { installApiConventions } from "./validation.js";
 
 /** Options the `/api` plugin needs from its host app. */
@@ -42,6 +43,9 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (scope, opt
   registerClientEnrolmentRoutes(scope, opts.settings);
   // Transport audit log (#85): admin-only read of every command issued to a client.
   registerAuditRoutes(scope);
+  // Retention config (#136): admin-only read/write of data-retention windows.
+  // Needs `settings` for the global default window.
+  registerRetentionRoutes(scope, opts.settings);
 };
 
 /** Mount the JSON API under `/api` on the given app. */
