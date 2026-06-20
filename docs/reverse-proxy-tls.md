@@ -66,11 +66,15 @@ A reverse proxy must:
 - Forward the `Upgrade: websocket` and `Connection: upgrade` headers so
   the HTTP/1.1 upgrade handshake reaches Fastify. Caddy and Traefik do
   this automatically; nginx needs an explicit `map` (shown below).
-- Use a **long read/idle timeout** on that connection. The default
-  proxy idle timeout (often 30–60s) will sever the stream and force the
-  bridge to reconnect on a cycle. Set it generously (e.g. 1h); the bridge
-  reconnects with backoff if the socket really drops, but you don't want
-  the proxy churning a healthy connection.
+- Not impose a short **idle/read timeout** on that connection. The
+  stream can be quiet for long stretches — events fire only on grants,
+  policy changes, and enforcement — so a short idle timeout (proxy
+  defaults are often 30–60s) severs a *healthy* connection and churns the
+  bridge through reconnects. The server sends periodic WebSocket keepalive
+  pings, but the robust, proxy-agnostic rule is: **disable the read/idle
+  timeout for this route, or set it well above the keepalive interval.**
+  The bridge reconnects with backoff if the socket genuinely drops. Each
+  example below applies this correctly for its proxy.
 
 If you also enable HTTP/2 or HTTP/3 at the proxy, keep an HTTP/1.1 path
 available for the WebSocket upgrade (all three proxies below handle this
@@ -141,15 +145,11 @@ transparent WebSocket proxying, so the whole config is a few lines.
 ```caddyfile
 # Caddyfile
 parentalcontrols.example.com {
-    # Caddy obtains and renews the certificate automatically.
-    reverse_proxy dashboard:8000 {
-        # WebSocket upgrades are proxied transparently; no extra directives
-        # needed for /api/events/stream. Raise the upstream stream timeout
-        # so a healthy long-lived event stream is not cut.
-        transport http {
-            read_timeout 1h
-        }
-    }
+    # Caddy obtains and renews the certificate automatically, proxies
+    # WebSocket upgrades transparently, and applies no read timeout to the
+    # upstream by default — so a healthy long-lived /api/events/stream
+    # connection is never cut on an idle period. No extra directives needed.
+    reverse_proxy dashboard:8000
 }
 ```
 
@@ -216,8 +216,11 @@ server {
     ssl_certificate     /etc/letsencrypt/live/parentalcontrols.example.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/parentalcontrols.example.com/privkey.pem;
 
-    # The long-lived event-stream WebSocket. HTTP/1.1 + upgrade headers +
-    # a generous read timeout so a healthy stream is not severed.
+    # The long-lived event-stream WebSocket. HTTP/1.1 + the upgrade headers,
+    # plus a generous *inactivity* timeout: proxy_read_timeout resets on
+    # every frame (including the server's keepalive pings), so it only fires
+    # if the connection is genuinely dead. Keep it well above the keepalive
+    # interval; the bridge reconnects with backoff if the socket really drops.
     location /api/events/stream {
         proxy_pass http://dashboard:8000;
         proxy_http_version 1.1;
@@ -227,8 +230,8 @@ server {
         proxy_set_header X-Real-IP        $remote_addr;
         proxy_set_header X-Forwarded-For  $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_read_timeout 1h;
-        proxy_send_timeout 1h;
+        proxy_read_timeout 1d;
+        proxy_send_timeout 1d;
     }
 
     # Everything else: /, /healthz, /api, /admin, /app and their assets.
@@ -274,8 +277,11 @@ services:
       # Redirect HTTP→HTTPS for every router on the web entrypoint.
       - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
       - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
-      # Generous read timeout so the long-lived event stream is not cut.
-      - "--entrypoints.websecure.transport.respondingTimeouts.readTimeout=1h"
+      # Do NOT set a finite respondingTimeouts.readTimeout on this
+      # entrypoint: it caps the lifetime of the long-lived
+      # /api/events/stream WebSocket. The default (0 = no limit) is what you
+      # want; genuinely idle sockets are handled by idleTimeout, and the
+      # bridge reconnects with backoff if the socket drops.
       - "--certificatesresolvers.le.acme.email=you@example.com"
       - "--certificatesresolvers.le.acme.storage=/letsencrypt/acme.json"
       - "--certificatesresolvers.le.acme.httpchallenge.entrypoint=web"
