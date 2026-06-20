@@ -1,4 +1,4 @@
-# ADR 0006 — Event-stream and API version-compatibility contract
+# ADR 0007 — Event-stream and API version-compatibility contract
 
 - **Status:** Accepted (2026-06-19) — decision only; implementation lands with the event stream in Phase 8b.
 - **Issue:** [#165](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/165)
@@ -129,6 +129,14 @@ client speak the **same** `eventProtocol` and differ only in advertised
 `capabilities`. Capability strings are themselves additive: adding one is not a
 breaking change.
 
+The `enforce.*` frames this gates are not hypothetical: the per-activity
+enforcement *decision* logic already lives in `server/src/enforcement/` (#98,
+documented in `CLAUDE.md`'s module split as deciding "on `events/` +
+transport"). That module computes *when* a quota is exhausted; Phase 8b's event
+stream is *how* the resulting `enforce.force_close` / `enforce.session_lock`
+reaches the client — and this contract is what decides whether a given client
+is sent that frame at all. The capability gate sits between the two.
+
 The division of labour:
 
 - **`eventProtocol` (the window)** guards the *envelope and framing* — the parts
@@ -142,9 +150,14 @@ The division of labour:
 
 A client refused for being too old (`eventProtocol < P − 1`) is recorded as
 `update_required` in the client inventory and surfaced in the admin **Clients**
-health view (#81), alongside the version inventory #164 already collects. This
-is a **flag and a signal**, not an action: the ADR deliberately stops at marking
-the client. The actual remediation — pushing an agent update — is the Phase-14
+health view — which now exists (#81 has merged:
+`server/src/api/clients/health-*.ts`, with per-component `status`,
+`reachability` (live/offline), and transport-queue state). `update_required` is
+a new signal *added to* that surface in Phase 8b, sitting alongside the version
+inventory #164 already collects; it reuses the health view's existing
+status-enum pattern rather than inventing a new admin surface. This is a **flag
+and a signal**, not an action: the ADR deliberately stops at marking the
+client. The actual remediation — pushing an agent update — is the Phase-14
 update mechanism (#169/#170) and is explicitly out of scope here, matching the
 issue's "Out of scope" note.
 

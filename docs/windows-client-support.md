@@ -321,7 +321,7 @@ them require building anything Windows-specific now.
    Then the server can withhold `enforce.*` frames a client can't honour and
    the admin UI can grey out unsupported controls per client — the mechanism a
    mixed Linux/Windows fleet needs, designed once. **This is now decided** in
-   [`adr/0006-event-stream-version-compatibility.md`](adr/0006-event-stream-version-compatibility.md):
+   [`adr/0007-event-stream-version-compatibility.md`](adr/0007-event-stream-version-compatibility.md):
    capabilities are an additive flag set in the handshake, a Linux and a Windows
    client speak the same `eventProtocol` and differ only in advertised
    capabilities, and the server withholds `enforce.*` frames a client can't

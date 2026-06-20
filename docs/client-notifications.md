@@ -286,7 +286,7 @@ of normal policy distribution:
   carry (the `hello`/`accept`/`refuse` handshake, the `eventProtocol`
   version axis, the N-1 support window, and capability advertisement) is
   decided in
-  [`docs/adr/0006-event-stream-version-compatibility.md`](adr/0006-event-stream-version-compatibility.md);
+  [`docs/adr/0007-event-stream-version-compatibility.md`](adr/0007-event-stream-version-compatibility.md);
   the frame envelope is fixed against that contract.
 - Push notifications to the *parent*'s phone when a child's budget
   is running low. That's a feature of the `/app` PWA, covered in

@@ -214,7 +214,7 @@ expiry, lock + grant-unlock on overall-screen-time expiry.
   `eventProtocol`), the N-1 window, the `hello`/`accept`/`refuse`
   handshake, capability advertisement, and `update_required` semantics —
   is decided in
-  [`docs/adr/0006-event-stream-version-compatibility.md`](adr/0006-event-stream-version-compatibility.md);
+  [`docs/adr/0007-event-stream-version-compatibility.md`](adr/0007-event-stream-version-compatibility.md);
   this phase implements it.
 
 ## Phase 8c — Lockout / grant-unlock flow
