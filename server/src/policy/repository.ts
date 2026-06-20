@@ -20,7 +20,7 @@
 import { and, eq } from "drizzle-orm";
 
 import type { PolicyDb } from "./db.js";
-import type { ActivityKind, BudgetWindow, ScheduleAction, Scope } from "./enums.js";
+import type { ActivityKind, BudgetWindow, ScheduleAction, Scope, SoundProfile } from "./enums.js";
 import {
   activities,
   activitiesToGroups,
@@ -28,6 +28,7 @@ import {
   budgets,
   clients,
   exceptions,
+  notificationPolicies,
   schedules,
   userGroupMemberships,
   userGroups,
@@ -793,6 +794,79 @@ export function deleteException(db: PolicyDb, id: number): boolean {
   return (
     db.delete(exceptions).where(eq(exceptions.id, id)).returning({ id: exceptions.id }).get() !==
     undefined
+  );
+}
+
+// --- Notification policies (#104) ------------------------------------------
+
+/** A persisted {@link notificationPolicies} row. */
+export type NotificationPolicyRow = typeof notificationPolicies.$inferSelect;
+
+/**
+ * Fields accepted when upserting a {@link notificationPolicies} row. All
+ * optional: an omitted field takes the column default on insert (the
+ * documented `subtle` / `15` / `true`), or is left unchanged on update — the
+ * route layer resolves the full effective policy from the merged row. A
+ * `cadenceOverrides` of `null` clears any override back to the built-in cadence.
+ */
+export interface NotificationPolicyUpsert {
+  enabled?: boolean | undefined;
+  soundProfile?: SoundProfile | undefined;
+  graceSeconds?: number | undefined;
+  cadenceOverrides?: Record<string, unknown> | null | undefined;
+}
+
+/** The persisted notification policy for a user, or `undefined` if unset. */
+export function getNotificationPolicy(
+  db: PolicyDb,
+  userId: number,
+): NotificationPolicyRow | undefined {
+  return db
+    .select()
+    .from(notificationPolicies)
+    .where(eq(notificationPolicies.userId, userId))
+    .get();
+}
+
+/**
+ * Create or replace the user's notification policy (idempotent on the
+ * `user_id` primary key) and return the stored row. The caller confirms the
+ * user exists first (an FK violation otherwise surfaces opaquely). Only the
+ * fields present in `input` are written; on conflict the same fields are
+ * updated, so a partial upsert leaves the rest at their stored (or default)
+ * values. `cadenceOverrides` maps to the `cadence_overrides_json` column.
+ */
+export function upsertNotificationPolicy(
+  db: PolicyDb,
+  userId: number,
+  input: NotificationPolicyUpsert,
+): NotificationPolicyRow {
+  // Build the column set from only the provided fields so omitted keys fall to
+  // the column default (insert) or stay unchanged (the on-conflict update).
+  const set: Partial<typeof notificationPolicies.$inferInsert> = {};
+  if (input.enabled !== undefined) set.enabled = input.enabled;
+  if (input.soundProfile !== undefined) set.soundProfile = input.soundProfile;
+  if (input.graceSeconds !== undefined) set.graceSeconds = input.graceSeconds;
+  if (input.cadenceOverrides !== undefined) set.cadenceOverridesJson = input.cadenceOverrides;
+  return db
+    .insert(notificationPolicies)
+    .values({ userId, ...set })
+    .onConflictDoUpdate({ target: notificationPolicies.userId, set })
+    .returning()
+    .get();
+}
+
+/**
+ * Delete a user's notification policy (reverting them to the documented
+ * defaults). Returns whether a row was removed.
+ */
+export function deleteNotificationPolicy(db: PolicyDb, userId: number): boolean {
+  return (
+    db
+      .delete(notificationPolicies)
+      .where(eq(notificationPolicies.userId, userId))
+      .returning({ userId: notificationPolicies.userId })
+      .get() !== undefined
   );
 }
 
