@@ -20,6 +20,7 @@ describe("loadSettings", () => {
     expect(settings.sshPrivateKeyPath).toBe("/data/secrets/ssh/id_ed25519");
     expect(settings.adguard).toEqual({ mode: "disabled" });
     expect(settings.telemetry).toEqual({ pullCron: "*/5 * * * *", pullConcurrency: 4 });
+    expect(settings.reapply).toEqual({ cron: "0 * * * *", playbooks: [] });
   });
 
   it("honours an explicit PCT_ANSIBLE_DIR", () => {
@@ -222,6 +223,33 @@ describe("loadSettings", () => {
       expect(() => loadSettings({ PCT_TELEMETRY_PULL_CONCURRENCY: "0" })).toThrow(SettingsError);
       expect(() => loadSettings({ PCT_TELEMETRY_PULL_CONCURRENCY: "-3" })).toThrow(SettingsError);
       expect(() => loadSettings({ PCT_TELEMETRY_PULL_CONCURRENCY: "many" })).toThrow(SettingsError);
+    });
+  });
+
+  describe("PCT_REAPPLY_*", () => {
+    it("honours an explicit cron and a comma-separated playbook list", () => {
+      const settings = loadSettings({
+        PCT_REAPPLY_CRON: "0 */6 * * *",
+        PCT_REAPPLY_PLAYBOOKS: "e2guardian.yml, activitywatch.yml ,apparmor.yml",
+      });
+
+      expect(settings.reapply).toEqual({
+        cron: "0 */6 * * *",
+        // Whitespace around each entry is trimmed and empties dropped.
+        playbooks: ["e2guardian.yml", "activitywatch.yml", "apparmor.yml"],
+      });
+    });
+
+    it("rejects an invalid cron pattern with a readable error", () => {
+      expect(() => loadSettings({ PCT_REAPPLY_CRON: "not a cron" })).toThrow(SettingsError);
+      expect(() => loadSettings({ PCT_REAPPLY_CRON: "not a cron" })).toThrow(/valid cron pattern/);
+    });
+
+    it("rejects a playbook name with path separators", () => {
+      expect(() => loadSettings({ PCT_REAPPLY_PLAYBOOKS: "../escape.yml" })).toThrow(SettingsError);
+      expect(() => loadSettings({ PCT_REAPPLY_PLAYBOOKS: "ok.yml,sub/dir.yml" })).toThrow(
+        /bare playbook file name/,
+      );
     });
   });
 });
