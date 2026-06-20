@@ -210,6 +210,12 @@ expiry, lock + grant-unlock on overall-screen-time expiry.
   that haven't updated yet. Cheap in the handshake now, impossible to
   retrofit onto already-deployed clients (pulled forward from Phase 14;
   [#165](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/165)).
+  The contract — two integer version axes (`apiVersion` + a new
+  `eventProtocol`), the N-1 window, the `hello`/`accept`/`refuse`
+  handshake, capability advertisement, and `update_required` semantics —
+  is decided in
+  [`docs/adr/0007-event-stream-version-compatibility.md`](adr/0007-event-stream-version-compatibility.md);
+  this phase implements it.
 
 ## Phase 8c — Lockout / grant-unlock flow
 
@@ -440,6 +446,15 @@ unchanged (these are *operations* features, not hardening —
   mobile/PWA experience in Phase 9 is a *control surface*, not an
   enforcement target — it lets phones view and adjust policy; the
   enforced devices are still Linux desktops.
+  - **Windows is the most-requested of these** (parents who keep a
+    Windows gaming PC for Easy Anti-Cheat / BattlEye titles but want the
+    same time-budget/schedule controls without Microsoft's cloud Family
+    Safety). A forward-looking design for a Windows enforcement client —
+    sequenced *after* Phase 14, with the cheap "keep these seams clean
+    now" tweaks called out — lives in
+    [`windows-client-support.md`](windows-client-support.md). It is still
+    out of scope for the numbered phases above; the doc exists so we don't
+    bake in Linux-only assumptions that are expensive to unwind later.
 - Native mobile apps (Android, iOS). The Phase 9 PWA is the mobile
   story.
 - Cloud-hosted SaaS multi-tenant model. The deployment target is the

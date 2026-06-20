@@ -9,10 +9,10 @@
  * free so it unit-tests without a database or a live `aw-server`.
  *
  * What it does, in order:
- *  1. Resolve each window event's foreground `app` to an {@link Activity} via
- *     the matcher index (see "Matcher semantics" below). Unmatched apps yield no
- *     sample — the `usage_samples.activity_id` FK requires a real activity and
- *     we never fabricate one.
+ *  1. Resolve each window event's foreground `app` to a single {@link Activity}
+ *     via the matcher grammar (see "Matcher semantics" below). Unmatched apps
+ *     yield no sample — the `usage_samples.activity_id` FK requires a real
+ *     activity and we never fabricate one.
  *  2. Drop future-skewed events (a client clock running ahead): an event whose
  *     start is more than {@link DEFAULT_FUTURE_TOLERANCE_SECONDS} beyond `now`
  *     is discarded rather than summed into a budget (`docs/testing.md` →
@@ -29,19 +29,38 @@
  *     clock-skew duplicate-event artifact (`docs/testing.md` → "Overlapping
  *     events ... are deduplicated") into tiling half-open intervals.
  *
- * Matcher semantics (v1, defined here because the docs leave "matcher"
- * unspecified): only `app`-kind activities are resolvable from window events,
- * by **case-insensitive exact match** of the event `app` against the activity
- * `matcher`. `domain*` kinds come from web-proxy telemetry (not the window
- * watcher) and `*_group` kinds are client-expanded bundles; both are out of
- * scope for window-event normalisation (tracked as a follow-up). Group-level
- * *rollups* are still available downstream via the `activities_to_groups` M2M.
+ * Matcher semantics (ADR 0006): the `app` is resolved against the activity
+ * `match_type` + `matcher` grammar (`exact` | `substring` | `glob` | `regex`,
+ * all case-insensitive) shared with the API in `policy/activity-matcher.ts`.
+ * Both **`app`** and **`app_group`** kinds participate — an `app_group` is just
+ * an activity whose matcher spans several apps (distinct from the
+ * `activities_to_groups` rollup M2M). `domain` / `domain_group` kinds match web
+ * requests sourced from web-proxy telemetry (not the window watcher) and are
+ * still ignored here (tracked separately for Phase 6/7). When several activities
+ * match one event, precedence is exact-beats-pattern, then lowest activity id
+ * (see {@link resolveActivityId}).
  *
  * License boundary: pure TypeScript over the already-validated AW DTOs — no
  * ActivityWatch source linked, no GPL surface, no subprocess/REST call here.
  */
-import type { ActivityKind } from "../../policy/enums.js";
+import {
+  compileMatchers,
+  resolveActivityId,
+  type CompiledMatcher,
+  type MatchableActivity,
+} from "../../policy/activity-matcher.js";
+import type { ActivityKind, MatchType } from "../../policy/enums.js";
 import type { AwAfkEvent, AwWindowEvent } from "./schemas.js";
+
+/**
+ * The activity kinds resolvable from ActivityWatch **window** events. `domain` /
+ * `domain_group` match web requests (a different telemetry source that does not
+ * exist yet) and are excluded here.
+ */
+const WINDOW_RESOLVABLE_KINDS: ReadonlySet<ActivityKind> = new Set<ActivityKind>([
+  "app",
+  "app_group",
+]);
 
 /**
  * A normalised usage interval ready to insert into `usage_samples`. Structurally
@@ -67,6 +86,12 @@ export interface ActivityMatcher {
   readonly id: number;
   readonly kind: ActivityKind;
   readonly matcher: string;
+  /**
+   * How `matcher` is interpreted (ADR 0006). Optional for source compatibility
+   * with callers/fixtures that predate the column; absent → `exact` (the v1
+   * behaviour).
+   */
+  readonly matchType?: MatchType;
 }
 
 /** Input to {@link normaliseWindowEvents}. */
@@ -82,7 +107,10 @@ export interface NormaliseUsageInput {
    * time is clipped to the `not-afk` intervals. Absent or empty → no clip.
    */
   readonly afkEvents?: readonly AwAfkEvent[];
-  /** Candidate activities to resolve `app` against (only `app`-kind is used). */
+  /**
+   * Candidate activities to resolve `app` against. Only the window-resolvable
+   * kinds (`app`, `app_group`) are considered; `domain*` kinds are ignored.
+   */
   readonly activities: readonly ActivityMatcher[];
   /** Reference "now" for the future-skew guard (typically the pull instant). */
   readonly now: Date;
@@ -108,21 +136,23 @@ interface MsInterval {
 }
 
 /**
- * Build a case-insensitive `app → activityId` lookup over the `app`-kind
- * activities. On a duplicate (case-folded) matcher the lowest activity id wins,
- * so resolution is deterministic regardless of input order.
+ * Compile the window-resolvable (`app`, `app_group`) activities into the matcher
+ * grammar's predicate set (ADR 0006). `domain*` kinds are skipped; an absent
+ * `matchType` defaults to `exact` (the v1 behaviour). The shared
+ * {@link compileMatchers} sorts ascending by id so the precedence tiebreak is
+ * deterministic regardless of input order.
  */
-function buildAppMatchIndex(activities: readonly ActivityMatcher[]): Map<string, number> {
-  const index = new Map<string, number>();
+function buildMatchers(activities: readonly ActivityMatcher[]): CompiledMatcher[] {
+  const matchable: MatchableActivity[] = [];
   for (const activity of activities) {
-    if (activity.kind !== "app") continue;
-    const key = activity.matcher.toLowerCase();
-    const existing = index.get(key);
-    if (existing === undefined || activity.id < existing) {
-      index.set(key, activity.id);
-    }
+    if (!WINDOW_RESOLVABLE_KINDS.has(activity.kind)) continue;
+    matchable.push({
+      id: activity.id,
+      matcher: activity.matcher,
+      matchType: activity.matchType ?? "exact",
+    });
   }
-  return index;
+  return compileMatchers(matchable);
 }
 
 /** Coalesce a set of intervals into sorted, non-overlapping, merged intervals. */
@@ -184,7 +214,7 @@ export function normaliseWindowEvents(input: NormaliseUsageInput): UsageSampleCa
   const tolerance = (input.futureToleranceSeconds ?? DEFAULT_FUTURE_TOLERANCE_SECONDS) * 1000;
   const futureCutoff = now.getTime() + tolerance;
 
-  const appIndex = buildAppMatchIndex(activities);
+  const matchers = buildMatchers(activities);
 
   // Group raw (skew-checked, matched) intervals by activity.
   const byActivity = new Map<number, MsInterval[]>();
@@ -192,7 +222,7 @@ export function normaliseWindowEvents(input: NormaliseUsageInput): UsageSampleCa
     if (event.durationSeconds <= 0) continue;
     const start = event.timestamp.getTime();
     if (start > futureCutoff) continue;
-    const activityId = appIndex.get(event.app.toLowerCase());
+    const activityId = resolveActivityId(matchers, event.app);
     if (activityId === undefined) continue;
     // Clamp the end to the same future cutoff as the start, so a single event
     // with a corrupt/huge `durationSeconds` cannot credit unbounded future

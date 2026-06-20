@@ -11,7 +11,7 @@ import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import { registerAuth } from "../auth/index.js";
 import type { Settings } from "../config.js";
 import { registerAuditRoutes } from "./audit/index.js";
-import { registerClientEnrolmentRoutes } from "./clients/index.js";
+import { registerClientEnrolmentRoutes, registerClientHealthRoutes } from "./clients/index.js";
 import { registerDnsRoutes } from "./dns/index.js";
 import { registerMetaRoute } from "./meta.js";
 import { registerEffectiveRoutes, registerPolicyRoutes } from "./policy/index.js";
@@ -41,6 +41,11 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (scope, opt
   // Client enrolment (#77): admin-minted token + the install script's enrol
   // exchange. `settings` carries the SSH-public-key path the enrol response returns.
   registerClientEnrolmentRoutes(scope, opts.settings);
+  // Client health/status (#81): the read-only Clients-page reads. The live SSH
+  // prober is injected once the SSH-key bootstrap (#39) plumbs credentials;
+  // until then the routes degrade to `unknown` reachability/components while
+  // still surfacing real enrolment + offline-queue state.
+  registerClientHealthRoutes(scope);
   // Transport audit log (#85): admin-only read of every command issued to a client.
   registerAuditRoutes(scope);
   // DNS status (#95): admin-only read of the active AdGuard mode + health.

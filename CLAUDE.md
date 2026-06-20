@@ -186,6 +186,10 @@ full reasoning.
     session cookie, the `requireAdmin` guard, and first-admin bootstrap
     (wired into the `/api` scope; auth DTO types re-exported from `api/`)
   - `policy/` — Drizzle schema, policy model, DB access, grant ledger
+  - `enforcement/` — per-activity quota enforcement *decision* logic on
+    usage rollups (the resolver's effective quota vs. consumption, with a
+    cool-down). Decides only; the `enforce.force_close` emit lives in
+    `events/` + transport
   - `integrations/` — external-system inbound APIs (e.g. the
     family-calendar rewards endpoint; see `docs/architecture.md`)
   - `transport/ssh/` — SSH + `timekpra` invocation
