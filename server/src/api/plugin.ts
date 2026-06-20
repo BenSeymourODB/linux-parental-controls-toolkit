@@ -43,8 +43,12 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (scope, opt
   // Client health/status (#81): the read-only Clients-page reads. The live SSH
   // prober is injected once the SSH-key bootstrap (#39) plumbs credentials;
   // until then the routes degrade to `unknown` reachability/components while
-  // still surfacing real enrolment + offline-queue state.
-  registerClientHealthRoutes(scope);
+  // still surfacing real enrolment + offline-queue state. The fan-out bounds
+  // (#198) are passed now so they're ready when the prober lands.
+  registerClientHealthRoutes(scope, {
+    probeConcurrency: opts.settings.clientHealth.probeConcurrency,
+    probeDeadlineMs: opts.settings.clientHealth.probeDeadlineMs,
+  });
   // Transport audit log (#85): admin-only read of every command issued to a client.
   registerAuditRoutes(scope);
 };
