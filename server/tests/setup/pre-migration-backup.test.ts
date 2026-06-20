@@ -284,6 +284,8 @@ describe("pre-migration-backup", () => {
       const filePath = join(dir, "not-a-dir");
       writeFileSync(filePath, "x");
 
+      // Matched so the test can't pass for an unrelated reason: mkdir under a
+      // file fails with ENOTDIR ("not a directory").
       expect(() =>
         backUpBeforeMigrate({
           client: db,
@@ -291,7 +293,7 @@ describe("pre-migration-backup", () => {
           backupDir: join(filePath, "backups"),
           retain: 5,
         }),
-      ).toThrow();
+      ).toThrow(/ENOTDIR|not a directory/i);
     });
   });
 });

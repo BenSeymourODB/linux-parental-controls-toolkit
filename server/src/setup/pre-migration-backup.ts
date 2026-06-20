@@ -92,8 +92,12 @@ const maxRowSchema = z.object({ m: z.number().nullable() });
  * A DB with no `__drizzle_migrations` table — or the table present but empty —
  * is a fresh / first-run store with nothing yet to protect (`everMigrated:
  * false`). Otherwise "pending" is every journal entry whose `when` is newer than
- * the latest applied `created_at`, which is exactly drizzle's own apply rule
- * (migrations are append-only and applied in `when` order).
+ * the latest applied `created_at`. This mirrors drizzle's own apply rule for the
+ * normal append-only journal: its migrator compares each entry's `when`
+ * (`folderMillis`) against the single most-recent applied `created_at`. A
+ * hand-edited or otherwise out-of-band DB state (a "hole" below the max) is not
+ * specially reconciled here — `pendingTags` is a best-effort, human-facing
+ * summary, not an authoritative replay plan.
  */
 export function inspectMigrations(
   client: Database.Database,
