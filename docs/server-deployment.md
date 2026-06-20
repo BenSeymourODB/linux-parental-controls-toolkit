@@ -104,16 +104,21 @@ idempotently:
    the dashboard skips the download entirely and validates that it can
    reach the configured AdGuard Home instance's REST API. In `disabled`
    mode (the default), neither happens.
-4. **SSH key bootstrap** — if `/data/secrets/ssh/id_ed25519` is absent,
-   generate one. The public key is shown in the dashboard's "Add client"
-   flow for the admin to install on each new client (or, more commonly,
-   for the client install script to fetch via a one-time enrolment token).
-   Its path is configurable via `PCT_SSH_PUBLIC_KEY_PATH` (default
-   `/data/secrets/ssh/id_ed25519.pub`); the client-enrolment response
-   (`POST /api/clients/enrol`, #77) returns that public key so the client can
-   authorize the dashboard. Until this Phase-4 keygen step lands the file is
-   absent and the enrol response carries `sshPublicKey: null` — enrolment still
-   succeeds, the client just isn't handed a key to authorize yet.
+4. **SSH key bootstrap** — if `/data/secrets/ssh/id_ed25519` is absent, the
+   Node server generates an Ed25519 key pair **in-process on boot** (issue #39,
+   via `node:crypto` — the runtime image ships no `ssh-keygen` binary, mirroring
+   the in-process migrator above). The private key is written `0600` at
+   `PCT_SSH_PRIVATE_KEY_PATH` (default `/data/secrets/ssh/id_ed25519`) and the
+   public key `0644` at `PCT_SSH_PUBLIC_KEY_PATH` (default
+   `/data/secrets/ssh/id_ed25519.pub`). The step is idempotent — an existing key
+   is **never** regenerated, so clients that already authorized it keep working.
+   The public key is shown in the dashboard's "Add client" flow for the admin to
+   install on each new client (or, more commonly, for the client install script
+   to fetch via a one-time enrolment token): the client-enrolment response
+   (`POST /api/clients/enrol`, #77) returns it so the client can authorize the
+   dashboard. If key generation fails (e.g. an unwritable data volume) the
+   dashboard still starts and the enrol response carries `sshPublicKey: null`
+   until the problem is fixed.
 5. Start the Node server on `0.0.0.0:8000` (default).
 
 If any of the optional downloads fail (no network, etc.), the dashboard
@@ -307,11 +312,53 @@ limiting.
 
 ## Backup and restore
 
-The entire deployable state lives under `/data`. A backup is a snapshot
-or `tar` of that volume. TrueNAS SCALE's dataset snapshots handle this
-natively for the volume that backs `pct_data`. Restoration is restoring
-the snapshot and starting the container; no other state is held inside
-the image.
+The entire deployable state lives under `/data`, and most of it is
+**regenerated on first run** (see "First-run setup"): the Ansible venv is
+`pip`-installed, the playbooks are synced from the image, and the AdGuard Home
+binary is refetched from upstream. A useful backup therefore captures only the
+**non-regenerable** state, and must capture the policy store *consistently* — a
+hot `cp` of a live SQLite file can grab a torn page or miss an un-checkpointed
+WAL and restore to corruption.
+
+`scripts/pct-data-backup.sh` does both. It takes a transactionally consistent
+snapshot of `policy.sqlite` via SQLite's online backup (`sqlite3 … ".backup"`,
+safe even while the dashboard is running) and packs the non-regenerable state
+into one owner-only `tar.gz`:
+
+| Path | In a backup? | Why |
+|---|---|---|
+| `policy.sqlite` | ✅ consistent snapshot | the canonical policy store |
+| `secrets/` | ✅ verbatim (perms preserved) | SSH key + API keys; losing the SSH key means re-authorizing every client |
+| `adguard/conf/` | ✅ if present | managed-mode config the dashboard owns |
+| `ansible/inventory.yml` | ✅ if present | the dashboard's inventory |
+| `ansible/venv/`, `ansible/playbooks/` | ❌ | reinstalled / synced on first run |
+| `adguard/AdGuardHome` (binary) | ❌ | refetched from upstream on first run |
+| `logs/` | ❌ | runtime logs, not state |
+
+```bash
+# Back up the running deployment's volume (archive defaults to ./pct-data-backup-<UTC>.tar.gz):
+scripts/pct-data-backup.sh backup --data-dir /data --output /backups/pct-$(date -u +%F).tar.gz
+
+# Restore — stop the dashboard first so nothing is writing /data, then:
+docker compose stop dashboard
+scripts/pct-data-backup.sh restore --data-dir /data --force /backups/pct-2026-06-19.tar.gz
+docker compose start dashboard   # first-run setup re-creates the venv / AdGuard binary
+```
+
+Restore refuses a non-empty `--data-dir` without `--force` so it can't clobber a
+live deployment by accident. With `--force` it **replaces** the in-scope paths
+(`policy.sqlite` and its WAL/SHM sidecars, `secrets/`, `adguard/conf/`,
+`ansible/inventory.yml`) wholesale rather than merging onto whatever was there —
+so a restore reproduces exactly the backed-up state and never resurrects a
+rotated key or replays a stale WAL — while leaving the regenerable siblings (the
+Ansible venv, the AdGuard binary) untouched. It then re-runs `PRAGMA
+integrity_check` on the restored database. The host needs `sqlite3` and `tar` on
+its `PATH`.
+
+If your storage does volume-level snapshots (e.g. TrueNAS SCALE dataset
+snapshots of `pct_data`), those remain a valid coarse backup of the whole
+volume — but take them with the container stopped, since they copy
+`policy.sqlite` at the file level rather than through the SQLite backup API.
 
 ## Upgrade path
 
