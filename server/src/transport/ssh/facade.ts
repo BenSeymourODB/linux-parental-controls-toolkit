@@ -424,7 +424,13 @@ export class SshTransport {
         settled = true;
         resolve(client);
       });
-      client.once("error", (err: Error) => {
+      // `on`, not `once`: some peers (e.g. a server that drops the TCP
+      // connection before the SSH handshake) make `ssh2` emit `error` more
+      // than once. A second `error` with no listener is an unhandled-error
+      // crash, so absorb repeats here — the `settled` guard means only the
+      // first rejects, and later ones just keep the (now-dead) connection
+      // evicted.
+      client.on("error", (err: Error) => {
         this.#connections.delete(resolved.key);
         if (!settled) {
           settled = true;
