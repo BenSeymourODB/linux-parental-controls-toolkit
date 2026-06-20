@@ -46,8 +46,8 @@ export const retentionEntryResponseSchema = z.object({
   /** Whether this entry is inherited from the default or pinned by an override. */
   source: z.enum(["default", "override"]),
   keepForever: z.boolean(),
-  /** The window in days, or `null` when `keepForever`. */
-  days: z.number().int().nullable(),
+  /** The window in days (positive), or `null` when `keepForever`. Mirrors the write contract's bound. */
+  days: z.number().int().positive().nullable(),
   /** When the override was last changed; `null` for a default-inherited entry. */
   updatedAt: z.string().nullable(),
 });
@@ -86,9 +86,10 @@ export function defaultEntry(
 /**
  * Build the full config response from the global default and the override rows.
  * Every known category appears exactly once: a category with an override row
- * shows it, the rest inherit the default. Category order follows the rows'
- * `ORDER BY category` for the overridden ones; callers pass all categories via
- * {@link allCategoriesResponse} when they want the complete, ordered set.
+ * shows it, the rest inherit the default. Output order follows the passed
+ * `categories` array (the route passes `retentionCategoryValues`, i.e.
+ * declaration order); the rows' SQL order is irrelevant since they are looked
+ * up by category.
  */
 export function toRetentionConfigResponse(
   defaultDays: number,
