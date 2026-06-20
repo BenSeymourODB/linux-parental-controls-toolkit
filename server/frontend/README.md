@@ -30,11 +30,15 @@ stage (#6) runs this build and copies the output into the runtime image
 landed in Phase 2, #40 — see `server/src/web/frontend.ts`).
 
 The mount root is `PCT_FRONTEND_ROOT` (default `/app/frontend`), so local dev
-can point it at `server/frontend/build`. The slash-free surface URLs
-(`/admin`, `/app`) serve `admin.html` / `app.html`; the trailing-slash forms
-redirect to them so the pages' relative asset paths (`./_app/…`) resolve
-correctly. If the directory is absent the mount is skipped (the surfaces 404)
-rather than failing startup. `/` and `/api/*` stay owned by the backend.
+can point it at `server/frontend/build`. The surface URLs (`/admin`, `/app`)
+serve `admin.html` / `app.html`, and each surface also owns a `…/*` fallback so
+a deep client-side route on a hard refresh (e.g. `/admin/settings`) serves the
+entry page rather than 404ing — letting the client router take over (#59). That
+works because asset references are **root-absolute** (`/_app/…`, via
+`kit.paths.relative = false`), so they resolve at any document depth; the
+trailing-slash form just falls through the same fallback (no redirect). If the
+directory is absent the mount is skipped (the surfaces 404) rather than failing
+startup. `/`, `/healthz`, and `/api/*` stay owned by the backend.
 
 `build/` is git-ignored (by both the repo-root `.gitignore` and the local
 `server/frontend/.gitignore`) — it is a build artefact, produced at
