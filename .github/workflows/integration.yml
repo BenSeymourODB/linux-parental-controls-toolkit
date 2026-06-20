@@ -133,7 +133,8 @@ jobs:
         id: check
         run: |
           if [ -f server/package.json ] \
-             && find server/tests/transport/ssh -name '*.int.test.ts' -type f 2>/dev/null | grep -q .; then
+             && find server/tests/transport/ssh server/tests/transport/timekpr \
+                  -name '*.int.test.ts' -type f 2>/dev/null | grep -q .; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
@@ -155,25 +156,45 @@ jobs:
         if: steps.check.outputs.run == 'true'
         run: chmod +x server/tests/stubs/timekpra
 
-      - name: Start SSH target container with stub timekpra
+      - name: Generate a key pair and start the SSH target container
         if: steps.check.outputs.run == 'true'
         run: |
+          # Key-based auth only (the transport facade never uses passwords).
+          # The container adds the public key to the user's authorized_keys on
+          # start (linuxserver/openssh-server's PUBLIC_KEY); the tests read the
+          # private key via SSH_TARGET_KEY_FILE.
+          ssh-keygen -t ed25519 -N '' -C pct-int-test -f "$RUNNER_TEMP/pct_int_key"
+          echo "SSH_TARGET_KEY_FILE=$RUNNER_TEMP/pct_int_key" >> "$GITHUB_ENV"
+          # linuxserver/openssh-server runs sshd as an unprivileged user, so it
+          # listens on container port 2222 (not 22) — map host 2222 -> 2222.
           docker run -d --name ssh-target \
-            -p 2222:22 \
+            -p 2222:2222 \
             -v "${{ github.workspace }}/server/tests/stubs:/usr/local/bin:ro" \
             -e PUID=1000 -e PGID=1000 \
+            -e USER_NAME=pctagent \
+            -e PUBLIC_KEY="$(cat "$RUNNER_TEMP/pct_int_key.pub")" \
             lscr.io/linuxserver/openssh-server:latest
+          # Wait for the s6 init to finish (the user + authorized_keys are set up
+          # during it), then for the SSH port to accept connections.
+          for i in $(seq 1 60); do
+            docker logs ssh-target 2>&1 | grep -qF '[ls.io-init] done.' && break
+            sleep 2
+          done
           for i in $(seq 1 15); do
             nc -z localhost 2222 && break
             sleep 2
           done
+          echo "----- ssh-target container logs -----"
+          docker logs ssh-target 2>&1 | tail -n 40
 
       - name: Integration tests — SSH transport
         if: steps.check.outputs.run == 'true'
-        run: cd server && npm run test:integration -- tests/transport/ssh/
+        run: cd server && npm run test:integration -- tests/transport/ssh/ tests/transport/timekpr/
         env:
           SSH_TARGET_HOST: localhost
           SSH_TARGET_PORT: 2222
+          SSH_TARGET_USER: pctagent
+          SSH_TARGET_KEY_FILE: ${{ env.SSH_TARGET_KEY_FILE }}
 
   migrations:
     name: Drizzle migration round-trip
