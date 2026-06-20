@@ -44,13 +44,17 @@ export type IsoWeekday = 1 | 2 | 3 | 4 | 5 | 6 | 7;
 export const ALL_DAYS = "ALL";
 
 /**
- * Which day(s) an allowed-hours rule applies to:
- * - a single ISO weekday (`3`),
- * - a non-empty list of ISO weekdays (`[1, 2, 3, 4, 5]`), which `timekpra`
- *   accepts as a `;`-joined set in the day position, or
+ * Which day an allowed-hours rule applies to:
+ * - a single ISO weekday (`3`), or
  * - the {@link ALL_DAYS} sentinel for every day.
+ *
+ * `timekpra --setallowedhours` requires a *single* day or `ALL` in the day
+ * position — verified live against the real binary (#207). A weekday list
+ * (`'1;2;3;4;5'`) is rejected at parse time with
+ * `User's "<user>" day number must be between 1 and 7`. To apply the same
+ * hours across N weekdays, callers loop and emit one invocation per day.
  */
-export type AllowedHoursDay = IsoWeekday | readonly IsoWeekday[] | typeof ALL_DAYS;
+export type AllowedHoursDay = IsoWeekday | typeof ALL_DAYS;
 
 /**
  * One entry in a `timekpra` allowed-hours list.
@@ -58,10 +62,13 @@ export type AllowedHoursDay = IsoWeekday | readonly IsoWeekday[] | typeof ALL_DA
  * Renders as `[!]H[(start)-(end)]`:
  * - `hour` — the clock hour, `0`–`23`.
  * - `startMinute`/`endMinute` — optional minute window *within* the hour,
- *   `0 ≤ start < end ≤ 60`. Both must be given together or neither (the
- *   bracket needs both bounds); omit both for the whole hour.
- * - `unaccounted` — when true, prefixes `!`: the hour is *allowed but free*
- *   (does not count against the time limit).
+ *   `0 ≤ start < end ≤ 59`. Both must be given together or neither (the
+ *   bracket needs both bounds); omit both for the whole hour. The upper
+ *   bound is `59`, not `60`: the daemon accepts `[mm-60]` at parse time but
+ *   silently canonicalises it to "the whole hour" (verified live against the
+ *   real binary, #207), so emitting `60` round-trips badly through
+ *   `--userinfo` and the re-apply loop. Use the whole-hour form (omit the
+ *   bracket) when you want the entire hour.
  */
 export interface AllowedHour {
   readonly hour: number;
@@ -140,20 +147,15 @@ function formatDays(days: readonly IsoWeekday[], label: string): string {
   return days.join(LIST_SEPARATOR);
 }
 
-/** Render the day position of an allowed-hours command: a weekday, list, or `ALL`. */
+/** Render the day position of an allowed-hours command: a weekday or `ALL`. */
 function formatAllowedHoursDay(day: AllowedHoursDay): string {
   if (day === ALL_DAYS) return ALL_DAYS;
-  // `typeof === "number"` narrows the single-weekday case cleanly out of the
-  // union (unlike `Array.isArray`, which does not narrow a `readonly` array).
-  if (typeof day === "number") {
-    if (!Number.isInteger(day) || day < 1 || day > 7) {
-      throw new TimekprArgumentError(
-        `timekpra: allowed-hours day must be an ISO weekday 1..7, a weekday list, or "ALL", got ${day}`,
-      );
-    }
-    return String(day);
+  if (!Number.isInteger(day) || day < 1 || day > 7) {
+    throw new TimekprArgumentError(
+      `timekpra: allowed-hours day must be an ISO weekday 1..7 or "ALL", got ${day}`,
+    );
   }
-  return formatDays(day, "allowed-hours days");
+  return String(day);
 }
 
 /** Render one {@link AllowedHour} as `[!]H[(start)-(end)]`. */
@@ -177,11 +179,11 @@ function formatAllowedHour(entry: AllowedHour): string {
       !Number.isInteger(start) ||
       !Number.isInteger(end) ||
       start < 0 ||
-      end > 60 ||
+      end > 59 ||
       start >= end
     ) {
       throw new TimekprArgumentError(
-        `timekpra: allowed hour ${hour} minute window must satisfy 0 <= start < end <= 60, got [${start}-${end}]`,
+        `timekpra: allowed hour ${hour} minute window must satisfy 0 <= start < end <= 59, got [${start}-${end}] (use the whole-hour form — omit both minutes — for "the entire hour")`,
       );
     }
     bracket = `[${pad2(start)}-${pad2(end)}]`;

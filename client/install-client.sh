@@ -69,6 +69,24 @@ PCT_STATE_DIR="${PCT_STATE_DIR:-/etc/pct}"
 # bash — see pct_orch_build_enrol_body / pct_orch_json_*).
 PCT_CURL="${PCT_CURL:-curl}"
 
+# Version-reporting probes (#164). The enrol body reports the pct-client agent
+# `.deb` version and the installed managed-tool versions so the dashboard has a
+# fleet inventory to diff against (Phase 14). Each probe degrades silently: a
+# missing tool or unparseable output simply omits that field — version
+# reporting never blocks an otherwise-valid enrolment. The binaries (and, for
+# tests, the values themselves) are overridable on the established PCT_* pattern.
+PCT_DPKG_QUERY="${PCT_DPKG_QUERY:-dpkg-query}"
+PCT_AGENT_PACKAGE="${PCT_AGENT_PACKAGE:-pct-client}"
+PCT_TIMEKPRA="${PCT_TIMEKPRA:-timekpra}"
+PCT_E2GUARDIAN="${PCT_E2GUARDIAN:-e2guardian}"
+PCT_AWSERVER="${PCT_AWSERVER:-aw-server}"
+# Explicit value overrides: when set, used verbatim instead of probing (handy
+# for tests and for installs where a probe can't see the tool).
+PCT_AGENT_VERSION="${PCT_AGENT_VERSION:-}"
+PCT_TIMEKPR_VERSION="${PCT_TIMEKPR_VERSION:-}"
+PCT_E2GUARDIAN_VERSION="${PCT_E2GUARDIAN_VERSION:-}"
+PCT_ACTIVITYWATCH_VERSION="${PCT_ACTIVITYWATCH_VERSION:-}"
+
 # --- usage -----------------------------------------------------------------
 
 pct_orch_usage() {
@@ -158,27 +176,94 @@ pct_orch_resolve_uid() {
 
 # --- enrolment -------------------------------------------------------------
 
+# Reduce stdin to the first dotted version token the server's zod schema accepts
+# (#164): a digit-led run over the Debian version charset [A-Za-z0-9._+~:-] that
+# contains at least one dot, truncated to 64 chars. Requiring a dot skips a
+# tool-name prefix even when the name itself contains a digit (e.g.
+# "e2guardian 5.5.8" -> "5.5.8", not "2guardian"). Empty if no such token is
+# found. Constraining to this charset is what makes the hand-rolled JSON
+# encoding below safe (no '"'/'\' can appear) and mirrors the server's guard.
+pct_orch_version_token() {
+  local s
+  s="$(cat)"
+  if [[ "$s" =~ ([0-9][A-Za-z0-9._+~:-]*[.][A-Za-z0-9._+~:-]*) ]]; then
+    printf '%.64s' "${BASH_REMATCH[1]}"
+  fi
+  return 0
+}
+
+# Detect one component's version: echo `$override` if set, else run the probe
+# binary (if on PATH) and reduce its output to a version token. Always succeeds
+# (a missing tool / failed probe yields the empty string), so version reporting
+# can never abort an enrolment.
+pct_orch_detect_version() {
+  local override="$1" bin="$2"
+  shift 2
+  if [ -n "$override" ]; then
+    printf '%s' "$override" | pct_orch_version_token
+    return 0
+  fi
+  if command -v "$bin" >/dev/null 2>&1; then
+    "$bin" "$@" 2>/dev/null | pct_orch_version_token || true
+  fi
+  return 0
+}
+
+# The pct-client agent `.deb` version, from dpkg (or PCT_AGENT_VERSION). Empty
+# if the package isn't installed / dpkg is unavailable.
+pct_orch_detect_agent_version() {
+  # SC2016: '${Version}' is a dpkg-query --showformat placeholder, deliberately
+  # passed literally to dpkg (not expanded by the shell).
+  # shellcheck disable=SC2016
+  pct_orch_detect_version "$PCT_AGENT_VERSION" "$PCT_DPKG_QUERY" \
+    -W -f='${Version}' "$PCT_AGENT_PACKAGE"
+}
+
+# The componentVersions JSON object for the managed tools, or the empty string
+# when none could be detected (the caller then omits the field entirely).
+pct_orch_build_component_versions_json() {
+  local tk e2 aw
+  tk="$(pct_orch_detect_version "$PCT_TIMEKPR_VERSION" "$PCT_TIMEKPRA" --version)"
+  e2="$(pct_orch_detect_version "$PCT_E2GUARDIAN_VERSION" "$PCT_E2GUARDIAN" -v)"
+  aw="$(pct_orch_detect_version "$PCT_ACTIVITYWATCH_VERSION" "$PCT_AWSERVER" --version)"
+  local parts=()
+  [ -n "$tk" ] && parts+=("\"timekpr\":\"${tk}\"")
+  [ -n "$e2" ] && parts+=("\"e2guardian\":\"${e2}\"")
+  [ -n "$aw" ] && parts+=("\"activitywatch\":\"${aw}\"")
+  [ "${#parts[@]}" -gt 0 ] || return 0
+  local IFS=","
+  printf '{%s}' "${parts[*]}"
+}
+
 # Build the JSON body for POST /api/clients/enrol from the hostname, ssh user,
-# and a flat list of (username uid) pairs, matching the zod DTO (#77):
-# {hostname, sshUser, supervisedUsers:[{linuxUsername, linuxUid:<number>}]}.
+# the detected agent version + componentVersions JSON (either may be empty, in
+# which case the field is omitted), and a flat list of (username uid) pairs,
+# matching the zod DTO (#77/#164):
+# {hostname, sshUser, supervisedUsers:[{linuxUsername, linuxUid:<number>}],
+#  agentVersion?, componentVersions?}.
 #
 # Built in pure bash (no JSON library): safe here because every interpolated
 # value is a constrained token — a Linux username (validated [<=32], the usual
-# [a-z_][a-z0-9_-]* charset), a hostname (RFC-1035 charset), or an integer UID —
-# none of which can contain a '"' or '\' to break out of the JSON string. The
-# orchestrator's CLI parsing is the trust boundary; this is not a general JSON
-# encoder and must not be reused for free-form input.
+# [a-z_][a-z0-9_-]* charset), a hostname (RFC-1035 charset), an integer UID, or
+# a version string already reduced to the [A-Za-z0-9._+~:-] charset by
+# pct_orch_version_token — none of which can contain a '"' or '\' to break out
+# of the JSON string. The orchestrator's CLI parsing and the version tokeniser
+# are the trust boundary; this is not a general JSON encoder and must not be
+# reused for free-form input.
 pct_orch_build_enrol_body() {
-  local hostname="$1" sshuser="$2"
-  shift 2
+  local hostname="$1" sshuser="$2" agent_version="$3" components_json="$4"
+  shift 4
   local users_json="" sep=""
   while [ "$#" -ge 2 ]; do
     users_json="${users_json}${sep}{\"linuxUsername\":\"$1\",\"linuxUid\":$2}"
     sep=","
     shift 2
   done
-  printf '{"hostname":"%s","sshUser":"%s","supervisedUsers":[%s]}' \
-    "$hostname" "$sshuser" "$users_json"
+  local extra=""
+  [ -n "$agent_version" ] && extra="${extra},\"agentVersion\":\"${agent_version}\""
+  [ -n "$components_json" ] && extra="${extra},\"componentVersions\":${components_json}"
+  printf '{"hostname":"%s","sshUser":"%s","supervisedUsers":[%s]%s}' \
+    "$hostname" "$sshuser" "$users_json" "$extra"
 }
 
 # Extract a top-level JSON string field's value from stdin, or the empty string
@@ -210,8 +295,12 @@ pct_orch_json_number() {
 pct_orch_enrol() {
   local server="$1" token="$2" hostname="$3" sshuser="$4"
   shift 4
-  local body url
-  body="$(pct_orch_build_enrol_body "$hostname" "$sshuser" "$@")"
+  local body url agent_version components_json
+  # Best-effort version inventory (#164) — detection never fails, so an
+  # undetectable tool just omits its field.
+  agent_version="$(pct_orch_detect_agent_version)"
+  components_json="$(pct_orch_build_component_versions_json)"
+  body="$(pct_orch_build_enrol_body "$hostname" "$sshuser" "$agent_version" "$components_json" "$@")"
   url="${server%/}/api/clients/enrol"
 
   if pct_is_dry_run; then

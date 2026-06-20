@@ -1,251 +1,209 @@
 /**
- * Recurring schedule windows → `timekpra` allowed-hours / allowed-days mapping
- * (#140, Phase 4).
+ * Recurring-window → `timekpra` allowed-hours translation (#140, Phase 4).
  *
- * The effective-policy resolver (#143, {@link import("../../policy/resolve.js")})
- * already projects a user's recurring `overall` schedule rules onto a day and
- * yields `allowedWindows` — half-open `[start, end)` intervals in local
- * minutes-from-midnight. This module is the **enforcement mapping**: it turns
- * those windows into the `timekpra` invocations the architecture's
- * "Enforcement responsibilities" table assigns to Timekpr-nExT ("Total session
- * time … configured by `timekpra` over SSH"):
+ * The effective-policy resolver (#143, {@link ../../policy/resolve.ts}) answers
+ * "what overall-access windows apply for user *U* on local day *D*?" as an
+ * ascending, non-overlapping list of half-open `[start, end)` intervals in
+ * **local minutes from midnight**. This module is the enforcement-mapping half
+ * the resolver and the `timekpra` builders (#83, {@link ./commands.ts}) both
+ * deferred to #140: it turns those windows into the `timekpra` allowed-hours /
+ * allowed-days argv the SSH transport pushes to the client.
  *
- * - `--setalloweddays USER 'd;…'` — the ISO weekdays the user may log in at
- *   all (a day with no allowed windows is excluded);
- * - `--setallowedhours USER (DAY|list) 'H;H[mm-mm];…'` — the hours, optionally
- *   sub-windowed to a single contiguous `[mm-mm]`, allowed on each day.
+ * It is the place ADR 0005 §1 points at — "the purpose-built struct maps 1:1
+ * onto … the Timekpr allowed-hours target … #140 confirms the exact
+ * correspondence against the `timekpra` CLI when it builds the translation."
+ * That correspondence is per-weekday: an overnight span is two per-day rules on
+ * both sides, so each `[start, end)` stays within one local day and maps to one
+ * day's allowed-hours list (ADR 0005 §1, "so no information is lost").
  *
- * Everything here is **pure** and depends only on the `timekpra` command
- * builders ({@link ./commands.js}) plus the structural `AllowedWindow` type —
- * no DB, no SSH, no policy *value* import. The policy→weekday resolution that
- * feeds it lives in {@link import("../../policy/weekly-windows.js")}; wiring
- * the result into the live CRUD→SSH push (replacing the Phase-2 stub) is the
- * broader push-orchestration step the stub's own docstring frames as its
- * swap-point.
+ * Everything here is **pure** — it produces argv vectors, performs no I/O, and
+ * throws {@link TimekprArgumentError} for any window set the `timekpra` grammar
+ * cannot represent. {@link TimekprClient.setWeeklyAllowedHours} runs the result
+ * over the SSH facade.
  *
- * License boundary: none touched — pure TypeScript over our own command
- * builders; Timekpr-nExT (GPL) is still only ever the `timekpra` CLI run as a
- * subprocess over SSH (see `docs/licensing-analysis.md`).
+ * License boundary: none touched — plain TypeScript building an argv vector for
+ * the existing `timekpra` subprocess. No GPL code is linked in-process
+ * (`CLAUDE.md` → "License boundaries"; `docs/licensing-analysis.md`).
  */
-import type { AllowedWindow } from "../../policy/resolve.js";
-
 import {
+  ALL_DAYS,
   buildSetAllowedDays,
   buildSetAllowedHours,
   type AllowedHour,
-  type AllowedHoursDay,
   type IsoWeekday,
 } from "./commands.js";
-import type { TimekprClient } from "./client.js";
 import { TimekprArgumentError } from "./errors.js";
 
-/** Minutes in one clock hour. */
 const MINUTES_PER_HOUR = 60;
-/** Clock hours in a day (`timekpra` allowed-hours are keyed `0..23`). */
-const HOURS_PER_DAY = 24;
-/** Minutes in a full local day; the exclusive end of the window space. */
-const MINUTES_PER_DAY = HOURS_PER_DAY * MINUTES_PER_HOUR;
-
-/** The seven ISO weekdays, Monday (1) … Sunday (7), in order. */
-export const ISO_WEEKDAYS = [1, 2, 3, 4, 5, 6, 7] as const satisfies readonly IsoWeekday[];
+const MINUTES_PER_DAY = 1440;
+/** Every ISO weekday, ascending — the iteration order for a full-week push. */
+const ALL_ISO_WEEKDAYS: readonly IsoWeekday[] = [1, 2, 3, 4, 5, 6, 7];
 
 /**
- * Validate that `windows` are the shape the resolver promises: each interval
- * integer-bounded within `[0, 1440]` with `start < end`, and the list ascending
- * and non-overlapping. The resolver already guarantees this; asserting it here
- * turns a malformed caller (or a future resolver regression) into a clear error
- * rather than a silently wrong `timekpra` invocation.
+ * A half-open allowed-access interval in **local minutes from midnight**
+ * `[start, end)`. Structurally identical to the resolver's `AllowedWindow`
+ * (`policy/resolve.ts`), so `effectivePolicy(...).allowedWindows` feeds these
+ * functions directly; declared here so this transport module need not import
+ * the policy layer.
  */
-function assertWindows(windows: readonly AllowedWindow[]): void {
-  let previousEnd = 0;
-  for (const window of windows) {
-    const { start, end } = window;
-    if (
-      !Number.isInteger(start) ||
-      !Number.isInteger(end) ||
-      start < 0 ||
-      end > MINUTES_PER_DAY ||
-      start >= end
-    ) {
+export interface TimeWindow {
+  readonly start: number;
+  readonly end: number;
+}
+
+/**
+ * The allowed-access windows for a user's week, keyed by ISO weekday
+ * (`1` = Monday … `7` = Sunday). A weekday that is absent — or maps to an empty
+ * list — is **fully denied** that day. This is the shape a caller assembles by
+ * resolving {@link effectivePolicy} once per weekday.
+ */
+export type WeeklyAllowedWindows = ReadonlyMap<IsoWeekday, readonly TimeWindow[]>;
+
+/**
+ * Validate that `windows` are well-formed and in the contract the resolver
+ * guarantees: each interval integer-valued with `0 ≤ start < end ≤ 1440`, and
+ * the list strictly ascending with **adjacent intervals already merged**
+ * (`start > prevEnd`, not merely `≥`). The resolver emits exactly this shape
+ * (it coalesces touching allowed segments into one maximal window), so
+ * requiring it here makes the contract match the producer and lets a hand-built
+ * or future caller fail loudly — with an accurate message — rather than
+ * producing a silently wrong push or tripping the fragmentation check below on
+ * what is really one representable window.
+ */
+function assertWindows(windows: readonly TimeWindow[]): void {
+  let prevEnd = -1;
+  for (const { start, end } of windows) {
+    if (!Number.isInteger(start) || !Number.isInteger(end)) {
+      throw new TimekprArgumentError(
+        `timekpra: allowed window bounds must be integer minutes, got [${start}-${end}]`,
+      );
+    }
+    if (start < 0 || end > MINUTES_PER_DAY || start >= end) {
       throw new TimekprArgumentError(
         `timekpra: allowed window must satisfy 0 <= start < end <= ${MINUTES_PER_DAY}, got [${start}-${end}]`,
       );
     }
-    if (start < previousEnd) {
+    if (start <= prevEnd) {
       throw new TimekprArgumentError(
-        `timekpra: allowed windows must be ascending and non-overlapping, got [${start}-${end}] after a window ending at ${previousEnd}`,
+        `timekpra: allowed windows must be strictly ascending with adjacent intervals merged, got [${start}-${end}] after an interval ending at ${prevEnd}`,
       );
     }
-    previousEnd = end;
+    prevEnd = end;
   }
 }
 
 /**
- * Map one day's allowed-access windows to a `timekpra` allowed-hours list.
+ * Map one local day's allowed windows to a `timekpra` allowed-hours list.
  *
- * Each clock hour `0..23` that any window touches becomes one {@link AllowedHour}:
- * a fully-covered hour renders bare (`8`), a partially-covered hour carries its
- * single `[mm-mm]` sub-window (`8` with `startMinute`/`endMinute`). A day with no
- * windows maps to the empty list (the caller treats that as "denied").
+ * Walks each window across the clock hours it touches: a fully-covered hour
+ * becomes a bare `H`, a partly-covered one becomes `H[mm-mm]` for the sub-hour
+ * interval. A fully-allowed day (`[{ start: 0, end: 1440 }]`) yields all 24
+ * bare hours; an empty list yields `[]` (the day is fully denied — the weekly
+ * builder expresses that by omitting the day from `--setalloweddays`, since
+ * `--setallowedhours` cannot take an empty list).
  *
- * **Granularity limit (throws).** `timekpra` allows at most one contiguous
- * sub-window per hour. A schedule whose deny gap splits a single hour into two
- * allowed sub-windows (e.g. allow-all with a 08:10–08:20 deny) cannot be
- * expressed; widening would over-permit the deny and narrowing would deny
- * allowed time, so this throws {@link TimekprArgumentError} rather than enforce
- * something the admin did not ask for. Align that hour's windows to whole-hour
- * boundaries to resolve it.
+ * **Sub-hour fragmentation throws.** `timekpra` allows at most one minute
+ * bracket per clock hour, so a single hour holding two disjoint allowed
+ * intervals (an allow/deny/allow split finer than the hour) is not
+ * representable. Rather than over-permit (merge the gap) or under-permit (drop
+ * the hour) — either of which would silently misenforce — this throws
+ * {@link TimekprArgumentError} so the boundary surfaces the limitation.
  */
-export function dayWindowsToAllowedHours(windows: readonly AllowedWindow[]): AllowedHour[] {
+export function allowedWindowsToAllowedHours(windows: readonly TimeWindow[]): AllowedHour[] {
   assertWindows(windows);
-  const hours: AllowedHour[] = [];
-  for (let hour = 0; hour < HOURS_PER_DAY; hour += 1) {
-    const hourStart = hour * MINUTES_PER_HOUR;
-    const hourEnd = hourStart + MINUTES_PER_HOUR;
-    // The hour's covered span (in absolute minutes). Windows are ascending and
-    // non-overlapping, so a window that starts past the running end leaves a
-    // gap — a sub-hour deny `timekpra` cannot express as one `[mm-mm]`.
-    let covered: { start: number; end: number } | undefined;
-    let gapped = false;
-    for (const window of windows) {
-      const start = Math.max(window.start, hourStart);
-      const end = Math.min(window.end, hourEnd);
-      if (start >= end) continue;
-      if (covered === undefined) covered = { start, end };
-      else if (start > covered.end) gapped = true;
-      else covered = { start: covered.start, end };
-    }
-    if (covered === undefined) continue;
-    if (gapped) {
-      throw new TimekprArgumentError(
-        `timekpra: hour ${hour} has disjoint allowed sub-windows; allowed-hours can express at most one contiguous [mm-mm] window per hour. Align that hour's windows to whole-hour boundaries.`,
-      );
-    }
-    const startMinute = covered.start - hourStart;
-    const endMinute = covered.end - hourStart;
-    if (startMinute === 0 && endMinute === MINUTES_PER_HOUR) {
-      hours.push({ hour });
-    } else {
-      hours.push({ hour, startMinute, endMinute });
+
+  const byHour = new Map<number, AllowedHour>();
+  for (const { start, end } of windows) {
+    const firstHour = Math.floor(start / MINUTES_PER_HOUR);
+    // `end` is exclusive, so the last hour touched is the hour of `end - 1`.
+    const lastHour = Math.floor((end - 1) / MINUTES_PER_HOUR);
+    for (let hour = firstHour; hour <= lastHour; hour++) {
+      if (byHour.has(hour)) {
+        throw new TimekprArgumentError(
+          `timekpra: cannot map allowed windows to allowed-hours: clock hour ${hour} contains more than one disjoint allowed interval, which the per-hour 'H[mm-mm]' grammar cannot represent — split the schedule so each hour holds a single interval, or align rule boundaries to the hour`,
+        );
+      }
+      const hourStart = hour * MINUTES_PER_HOUR;
+      const startMinute = Math.max(start, hourStart) - hourStart;
+      const endMinute = Math.min(end, hourStart + MINUTES_PER_HOUR) - hourStart;
+      const coversWholeHour = startMinute === 0 && endMinute === MINUTES_PER_HOUR;
+      byHour.set(hour, coversWholeHour ? { hour } : { hour, startMinute, endMinute });
     }
   }
-  return hours;
+
+  return [...byHour.entries()].sort(([a], [b]) => a - b).map(([, entry]) => entry);
 }
 
-/** A weekday's resolved access: either an allowed-hours list, or fully denied. */
-export type DayAllowance =
-  | { readonly kind: "allowed"; readonly hours: readonly AllowedHour[] }
-  | { readonly kind: "denied" };
-
-/**
- * Classify one day's windows: `denied` when no hour is allowed, otherwise
- * `allowed` with the {@link AllowedHour} list.
- */
-export function dayAllowance(windows: readonly AllowedWindow[]): DayAllowance {
-  const hours = dayWindowsToAllowedHours(windows);
-  if (hours.length === 0) return { kind: "denied" };
-  return { kind: "allowed", hours };
-}
-
-/**
- * A group of weekdays that share an identical allowed-hours list — the unit one
- * `--setallowedhours` invocation covers (a single weekday or a weekday list).
- */
-export interface AllowedHoursGroup {
-  readonly days: readonly IsoWeekday[];
-  readonly hours: readonly AllowedHour[];
+/** Are two allowed-hours lists identical? (Deterministic order ⇒ structural compare.) */
+function sameAllowedHours(a: readonly AllowedHour[], b: readonly AllowedHour[]): boolean {
+  if (a.length !== b.length) return false;
+  return a.every((entry, i) => {
+    const other = b[i];
+    return (
+      other !== undefined &&
+      entry.hour === other.hour &&
+      entry.startMinute === other.startMinute &&
+      entry.endMinute === other.endMinute &&
+      entry.unaccounted === other.unaccounted
+    );
+  });
 }
 
 /**
- * The full weekly `timekpra` plan: which weekdays permit any access, and the
- * allowed-hours grouped so identical days collapse to one invocation.
- */
-export interface WeeklyAllowedHoursPlan {
-  readonly allowedDays: readonly IsoWeekday[];
-  readonly hourGroups: readonly AllowedHoursGroup[];
-}
-
-/** A stable key for an {@link AllowedHour} list so identical days can be grouped. */
-function hoursSignature(hours: readonly AllowedHour[]): string {
-  return hours
-    .map((h) => `${h.hour}:${h.startMinute ?? ""}-${h.endMinute ?? ""}:${h.unaccounted ?? false}`)
-    .join(",");
-}
-
-/**
- * Build the {@link WeeklyAllowedHoursPlan} from per-weekday windows. A weekday
- * absent from `perDay` (or mapped to `[]`) is treated as denied and excluded
- * from `allowedDays`.
+ * Translate a user's whole week of allowed windows into the ordered `timekpra`
+ * argv vectors that push it: a single `--setalloweddays` naming the permitted
+ * weekdays, then the `--setallowedhours` commands.
  *
- * **Throws** when every weekday is denied: a whole-week lockout is the Phase-8c
- * lockout flow, not an allowed-hours schedule, and `--setalloweddays` cannot
- * take an empty weekday set.
+ * Each vector is **builder-level** — the `--flag …` argv the pure builders
+ * return, without the `sudo timekpra` prefix; {@link TimekprClient} prepends
+ * that. Allowed-hours commands are emitted **per allowed weekday**, except when
+ * all seven days are allowed and share identical hours, where they collapse to
+ * one `ALL` command (the common "same hours every day" case, e.g. "deny after
+ * 21:00 daily"). A day with no window is omitted from `--setalloweddays`, which
+ * is how full-day denial is expressed.
+ *
+ * Throws {@link TimekprArgumentError} if **no** day is allowed: a full lockout
+ * is a daily-limit / session-kill concern (Phase 8c), not an allowed-hours one,
+ * and `--setalloweddays` cannot take an empty set.
  */
-export function planWeeklyAllowedHours(
-  perDay: ReadonlyMap<number, readonly AllowedWindow[]>,
-): WeeklyAllowedHoursPlan {
-  const allowedDays: IsoWeekday[] = [];
-  const groups = new Map<string, { days: IsoWeekday[]; hours: readonly AllowedHour[] }>();
-  for (const day of ISO_WEEKDAYS) {
-    const allowance = dayAllowance(perDay.get(day) ?? []);
-    if (allowance.kind === "denied") continue;
-    allowedDays.push(day);
-    const signature = hoursSignature(allowance.hours);
-    const existing = groups.get(signature);
-    if (existing) existing.days.push(day);
-    else groups.set(signature, { days: [day], hours: allowance.hours });
+export function buildWeeklyAllowedHoursCommands(
+  username: string,
+  weekly: WeeklyAllowedWindows,
+): string[][] {
+  const allowed: { readonly day: IsoWeekday; readonly hours: AllowedHour[] }[] = [];
+  for (const weekday of ALL_ISO_WEEKDAYS) {
+    const windows = weekly.get(weekday) ?? [];
+    if (windows.length === 0) continue;
+    allowed.push({ day: weekday, hours: allowedWindowsToAllowedHours(windows) });
   }
-  if (allowedDays.length === 0) {
+
+  const first = allowed[0];
+  if (first === undefined) {
     throw new TimekprArgumentError(
-      "timekpra: schedule denies access on every weekday; a whole-week lockout is the lockout flow (Phase 8c), not an allowed-hours mapping",
+      "timekpra: no allowed weekdays — a fully-denied week is enforced via a zero daily limit or session-kill (Phase 8c), not allowed-hours",
     );
   }
-  // Deterministic order: groups by their earliest weekday (`days` is built in
-  // ascending order, so `days[0]` is that group's earliest).
-  const hourGroups = [...groups.values()]
-    .sort((a, b) => (a.days[0] ?? 0) - (b.days[0] ?? 0))
-    .map((group) => ({ days: group.days, hours: group.hours }));
-  return { allowedDays, hourGroups };
-}
 
-/** The day position for a group: a single weekday, or the weekday list. */
-function groupDay(group: AllowedHoursGroup): AllowedHoursDay {
-  const [first, ...rest] = group.days;
-  return rest.length === 0 && first !== undefined ? first : group.days;
-}
+  const commands: string[][] = [
+    buildSetAllowedDays(
+      username,
+      allowed.map((a) => a.day),
+    ),
+  ];
 
-/**
- * Render the weekly plan as the ordered list of `timekpra` argv vectors:
- * `--setalloweddays` first, then one `--setallowedhours` per weekday group.
- * Pure — the argv the SSH transport would run, without running anything.
- */
-export function timekprWeekCommands(
-  username: string,
-  perDay: ReadonlyMap<number, readonly AllowedWindow[]>,
-): string[][] {
-  const plan = planWeeklyAllowedHours(perDay);
-  const commands: string[][] = [buildSetAllowedDays(username, plan.allowedDays)];
-  for (const group of plan.hourGroups) {
-    commands.push(buildSetAllowedHours(username, groupDay(group), group.hours));
+  // Collapse to one `ALL` command only when every weekday is allowed with the
+  // same hours; otherwise a per-day command keeps denied days untouched.
+  const everyDayAllowed = allowed.length === ALL_ISO_WEEKDAYS.length;
+  const allIdentical =
+    everyDayAllowed && allowed.every((a) => sameAllowedHours(a.hours, first.hours));
+
+  if (allIdentical) {
+    commands.push(buildSetAllowedHours(username, ALL_DAYS, first.hours));
+  } else {
+    for (const a of allowed) {
+      commands.push(buildSetAllowedHours(username, a.day, a.hours));
+    }
   }
+
   return commands;
-}
-
-/**
- * Push a user's weekly recurring windows to a client over the existing
- * {@link TimekprClient} seam: set the allowed weekdays, then the allowed hours
- * for each weekday group. Sequential so a later call never races the
- * `--setalloweddays` it depends on. The client's own `username`/target bind the
- * invocation; `perDay` is that user's resolved windows
- * (see {@link import("../../policy/weekly-windows.js").resolveWeeklyAllowedWindows}).
- */
-export async function applyWeeklySchedule(
-  client: TimekprClient,
-  perDay: ReadonlyMap<number, readonly AllowedWindow[]>,
-): Promise<void> {
-  const plan = planWeeklyAllowedHours(perDay);
-  await client.setAllowedDays(plan.allowedDays);
-  for (const group of plan.hourGroups) {
-    await client.setAllowedHours(groupDay(group), group.hours);
-  }
 }

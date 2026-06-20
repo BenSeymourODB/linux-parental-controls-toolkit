@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 
 import { resolveWeeklyAllowedWindows } from "../../src/policy/weekly-windows.js";
 import type { ScheduleRule } from "../../src/policy/schedule-precedence.js";
+import { buildWeeklyAllowedHoursCommands } from "../../src/transport/timekpr/allowed-hours.js";
 
 /** ISO-weekday bits for a Mon–Fri mask (bits 0–4). */
 const WEEKDAYS = 0b0011111;
@@ -52,7 +53,7 @@ describe("resolveWeeklyAllowedWindows", () => {
       tz: "UTC",
       reference: REFERENCE,
     });
-    for (const weekday of [1, 2, 3, 4, 5, 6, 7]) {
+    for (const weekday of [1, 2, 3, 4, 5, 6, 7] as const) {
       expect(byWeekday.get(weekday)).toEqual([{ start: 0, end: 1440 }]);
     }
   });
@@ -71,7 +72,7 @@ describe("resolveWeeklyAllowedWindows", () => {
       mkRule({ id: 2, ordinal: 1, action: "deny" }),
     ];
     const byWeekday = resolveWeeklyAllowedWindows({ schedules, tz: "UTC", reference: REFERENCE });
-    for (const weekday of [1, 2, 3, 4, 5]) {
+    for (const weekday of [1, 2, 3, 4, 5] as const) {
       expect(byWeekday.get(weekday)).toEqual([{ start: 960, end: 1080 }]);
     }
     // Weekend: only the baseline deny applies → no allowed windows.
@@ -82,7 +83,7 @@ describe("resolveWeeklyAllowedWindows", () => {
   it("denies a day a deny-everything daily rule covers", () => {
     const schedules: ScheduleRule[] = [mkRule({ recurrenceDays: EVERY_DAY, action: "deny" })];
     const byWeekday = resolveWeeklyAllowedWindows({ schedules, tz: "UTC", reference: REFERENCE });
-    for (const weekday of [1, 2, 3, 4, 5, 6, 7]) {
+    for (const weekday of [1, 2, 3, 4, 5, 6, 7] as const) {
       expect(byWeekday.get(weekday)).toEqual([]);
     }
   });
@@ -134,10 +135,36 @@ describe("resolveWeeklyAllowedWindows", () => {
       reference: new Date("2024-03-10T16:00:00Z"), // after the 02:00→03:00 jump
     });
     expect([...byWeekday.keys()].sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5, 6, 7]);
-    for (const weekday of [1, 2, 3, 4, 5]) {
+    for (const weekday of [1, 2, 3, 4, 5] as const) {
       expect(byWeekday.get(weekday)).toEqual([{ start: 960, end: 1080 }]);
     }
     expect(byWeekday.get(6)).toEqual([]);
     expect(byWeekday.get(7)).toEqual([]);
+  });
+
+  it("feeds buildWeeklyAllowedHoursCommands end-to-end (#140 push)", () => {
+    // allow 16:00–18:00 Mon–Fri; the bridge's output drives the merged
+    // transport mapping directly (the resolver→timekpra glue this module adds).
+    const schedules: ScheduleRule[] = [
+      mkRule({
+        id: 1,
+        ordinal: 0,
+        action: "allow",
+        recurrenceDays: WEEKDAYS,
+        recurrenceStartMinute: 16 * 60,
+        recurrenceEndMinute: 18 * 60,
+      }),
+      mkRule({ id: 2, ordinal: 1, action: "deny" }),
+    ];
+    const weekly = resolveWeeklyAllowedWindows({ schedules, tz: "UTC", reference: REFERENCE });
+    const commands = buildWeeklyAllowedHoursCommands("alice", weekly);
+    expect(commands).toEqual([
+      ["--setalloweddays", "alice", "1;2;3;4;5"],
+      ["--setallowedhours", "alice", "1", "16;17"],
+      ["--setallowedhours", "alice", "2", "16;17"],
+      ["--setallowedhours", "alice", "3", "16;17"],
+      ["--setallowedhours", "alice", "4", "16;17"],
+      ["--setallowedhours", "alice", "5", "16;17"],
+    ]);
   });
 });

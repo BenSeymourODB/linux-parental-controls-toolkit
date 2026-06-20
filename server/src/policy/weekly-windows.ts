@@ -1,24 +1,29 @@
 /**
  * Weekly recurring allowed-access windows (#140, Phase 4).
  *
- * `timekpra`'s allowed-hours is a **static weekly schedule** — seven days, each
- * with its own allowed hours. To feed it, this resolves a user's recurring
- * `overall` schedule rules into the allowed-access windows for each ISO weekday,
- * by running the effective-policy resolver ({@link ./resolve.js}, #143) over the
- * seven local days of a reference week and keying the result by weekday.
+ * The transport layer (#140, `transport/timekpr/allowed-hours.ts`) can turn a
+ * {@link WeeklyAllowedWindows} — per-ISO-weekday allowed-access windows — into
+ * the `timekpra` allowed-days/allowed-hours push, but it deliberately leaves
+ * *assembling* that weekly shape to its caller ("resolving `effectivePolicy`
+ * once per weekday"). This module is that caller-side bridge: it runs the
+ * effective-policy resolver ({@link ./resolve.js}, #143) over the seven local
+ * days of a reference week and keys the resulting `allowedWindows` by ISO
+ * weekday, ready to hand to {@link TimekprClient.setWeeklyAllowedHours} /
+ * `buildWeeklyAllowedHoursCommands`.
  *
  * Only the **recurring** layer is resolved: no budgets, no grants, no
- * date-specific overrides. Those are date-bound and adjust the daily *limit*,
- * not the static weekly allowed-hours grid; date-specific overrides (#142) are a
- * later, separately-composed layer. The transport-side mapping of these windows
- * to `timekpra` invocations lives in
- * {@link import("../transport/timekpr/allowed-hours.js")}.
+ * date-specific overrides. `timekpra` allowed-hours is a *static weekly* grid;
+ * date-specific overrides (#142) adjust the daily *limit*, not this grid, and
+ * are a later, separately-composed layer.
  *
- * License boundary: none touched — pure TypeScript over the policy model.
+ * License boundary: none touched — pure TypeScript over the policy model and a
+ * type-only import of the transport's weekly shape.
  */
 import { isoWeekday, localCalendarDate } from "./budget-window.js";
-import { effectivePolicy, type AllowedWindow } from "./resolve.js";
+import { effectivePolicy } from "./resolve.js";
 import type { ScheduleRule } from "./schedule-precedence.js";
+import type { TimeWindow, WeeklyAllowedWindows } from "../transport/timekpr/allowed-hours.js";
+import type { IsoWeekday } from "../transport/timekpr/commands.js";
 
 /** A local calendar date with a 1-12 month, as the resolver consumes. */
 interface CalendarDate {
@@ -37,6 +42,9 @@ export interface WeeklyWindowsInput {
   readonly reference: Date;
 }
 
+/** The seven ISO weekdays, Monday (1) … Sunday (7), in order. */
+const ISO_WEEKDAYS = [1, 2, 3, 4, 5, 6, 7] as const satisfies readonly IsoWeekday[];
+
 /**
  * Add `days` calendar days to a 1-12-month date, via UTC date arithmetic (no
  * timezone involved — this is pure calendar maths, the TZ only matters when the
@@ -54,24 +62,22 @@ function addCalendarDays(date: CalendarDate, days: number): CalendarDate {
 /**
  * Resolve a user's recurring allowed-access windows for each ISO weekday
  * (`1` = Monday … `7` = Sunday) of the week containing `reference`, in the
- * user's effective timezone.
+ * user's effective timezone — the {@link WeeklyAllowedWindows} the `timekpra`
+ * allowed-hours push consumes.
  *
- * Returns a map keyed by ISO weekday; each value is the day's
- * `allowedWindows` from the resolver (ascending, non-overlapping local
- * minute intervals; `[]` = denied all day, `[{0,1440}]` = unrestricted).
+ * Each value is the day's `allowedWindows` from the resolver (ascending,
+ * non-overlapping local minute intervals; `[]` = denied all day,
+ * `[{0,1440}]` = unrestricted).
  */
-export function resolveWeeklyAllowedWindows(
-  input: WeeklyWindowsInput,
-): Map<number, AllowedWindow[]> {
+export function resolveWeeklyAllowedWindows(input: WeeklyWindowsInput): WeeklyAllowedWindows {
   const { schedules, tz, reference } = input;
   const today = localCalendarDate(reference, tz);
   const referenceWeekday = isoWeekday(today.year, today.month, today.day);
   const monday = addCalendarDays(today, -(referenceWeekday - 1));
 
-  const byWeekday = new Map<number, AllowedWindow[]>();
-  for (let offset = 0; offset < 7; offset += 1) {
+  const byWeekday = new Map<IsoWeekday, readonly TimeWindow[]>();
+  for (const [offset, weekday] of ISO_WEEKDAYS.entries()) {
     const date = addCalendarDays(monday, offset);
-    const weekday = isoWeekday(date.year, date.month, date.day);
     const effective = effectivePolicy({ date, tz, schedules, budgets: [], grants: [] });
     byWeekday.set(weekday, effective.allowedWindows);
   }

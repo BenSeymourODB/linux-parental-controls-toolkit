@@ -50,6 +50,34 @@
       "when": 1781821514993,
       "tag": "20260618222514_pink_speed_demon",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1781838453345,
+      "tag": "20260619030733_cold_cargill",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1781880545044,
+      "tag": "20260619144905_vengeful_retro_girl",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1781883667142,
+      "tag": "20260619154107_fluffy_radioactive_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1781934668452,
+      "tag": "20260620055108_mushy_johnny_blaze",
+      "breakpoints": true
     }
   ]
 }

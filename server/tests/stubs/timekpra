@@ -1,15 +1,26 @@
-#!/usr/bin/env bash
-# Stub timekpra binary for SSH integration tests.
+#!/bin/sh
+# Stub timekpra binary for the SSH integration tests.
 #
-# Records every invocation to /tmp/timekpra-invocations.log so the test
-# can SSH-read the log and assert correct arguments were passed.
-# Always exits 0 (success). Does not simulate Timekpr-nExT behaviour.
+# Records every invocation to /tmp/timekpra-invocations.log so the test can
+# SSH-read the log and assert the exact arguments survived the wire intact.
+# Always exits 0 (success). It does NOT simulate Timekpr-nExT behaviour — its
+# only job is to prove the dashboard sent the right argv over SSH
+# (docs/testing.md -> "The stub timekpra binary").
+#
+# POSIX sh (no bashisms) so it runs under the OpenSSH test container's busybox.
 
 LOG=/tmp/timekpra-invocations.log
-echo "$(date -Iseconds) $*" >> "$LOG"
+printf '%s %s\n' "$(date +%Y-%m-%dT%H:%M:%S)" "$*" >> "$LOG"
 
-# Emit minimal stdout for subcommands that our transport layer parses.
+# Emit minimal stdout for the subcommands the transport layer parses.
 case "$1" in
+  --userinfo)
+    # A well-formed KEY: VALUE block so the dashboard's --userinfo parser
+    # (timekprUserInfoSchema) can be exercised over the wire.
+    printf 'USER_NAME: %s\n' "${2:-testuser}"
+    printf 'TIME_LIMIT_PER_WEEK: 86400\n'
+    printf 'TIME_LIMIT_PER_MONTH: 360000\n'
+    ;;
   --gettimelimitforday)
     # Format: <user> <seconds-used> <seconds-allowed>
     echo "${2:-testuser} 0 7200"

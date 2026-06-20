@@ -1,258 +1,306 @@
 /**
- * Recurring-window → `timekpra` allowed-hours / allowed-days mapping (#140).
- *
- * The pure mappers are asserted against the `timekpra` grammar exhaustively
- * (whole/partial hours, boundaries, the split-hour limit, weekday grouping, the
- * whole-week-lockout guard); the applier is driven over the real
- * {@link TimekprClient} on a lightweight {@link TimekprTransport} fake so it
- * asserts *what would run* without opening a socket.
+ * Unit tests for the recurring-window → `timekpra` allowed-hours translation
+ * (#140). Everything under test is pure: window lists in, argv vectors out, with
+ * a {@link TimekprArgumentError} for any set the grammar cannot represent. The
+ * one I/O-shaped case ({@link TimekprClient.setWeeklyAllowedHours}) runs against
+ * a recording fake transport, asserting *what* it would run and *in what order*.
  */
 import type { ZodType } from "zod";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import type { AllowedWindow } from "../../../src/policy/resolve.js";
+import type { ExecResult, SshTarget } from "../../../src/transport/ssh/facade.js";
+import { SshCommandError } from "../../../src/transport/ssh/errors.js";
 import {
-  ISO_WEEKDAYS,
-  applyWeeklySchedule,
-  dayAllowance,
-  dayWindowsToAllowedHours,
-  planWeeklyAllowedHours,
-  timekprWeekCommands,
+  allowedWindowsToAllowedHours,
+  buildWeeklyAllowedHoursCommands,
+  type TimeWindow,
+  type WeeklyAllowedWindows,
 } from "../../../src/transport/timekpr/allowed-hours.js";
 import { TimekprClient, type TimekprTransport } from "../../../src/transport/timekpr/client.js";
 import { TimekprArgumentError } from "../../../src/transport/timekpr/errors.js";
-import type { ExecResult, SshTarget } from "../../../src/transport/ssh/facade.js";
 
-const TARGET: SshTarget = { host: "client.local", username: "pct-agent", privateKey: "KEY" };
-const OK_RESULT: ExecResult = { stdout: "ok", stderr: "", code: 0, signal: null };
+const USER = "alice";
 
-/** A fake transport that records the argv every checked exec is handed. */
-class FakeTransport implements TimekprTransport {
-  readonly checked: (readonly string[])[] = [];
-  async execChecked(_target: SshTarget, argv: readonly string[]): Promise<ExecResult> {
-    this.checked.push(argv);
-    return OK_RESULT;
-  }
-  async execAndParse<T>(
-    _target: SshTarget,
-    _argv: readonly string[],
-    schema: ZodType<T>,
-  ): Promise<T> {
-    return schema.parse("USER_NAME: alice");
-  }
-}
-
-/** All seven weekdays mapped to the same windows, for whole-week cases. */
-function everyDay(windows: readonly AllowedWindow[]): Map<number, readonly AllowedWindow[]> {
-  return new Map(ISO_WEEKDAYS.map((day) => [day, windows]));
-}
-
-describe("dayWindowsToAllowedHours", () => {
-  it("maps an empty day to an empty list (denied)", () => {
-    expect(dayWindowsToAllowedHours([])).toEqual([]);
-  });
-
-  it("maps a full day to every bare hour", () => {
-    const hours = dayWindowsToAllowedHours([{ start: 0, end: 1440 }]);
+describe("allowedWindowsToAllowedHours", () => {
+  it("maps a full day to all 24 bare hours", () => {
+    const hours = allowedWindowsToAllowedHours([{ start: 0, end: 1440 }]);
     expect(hours).toHaveLength(24);
-    expect(hours).toEqual(Array.from({ length: 24 }, (_, hour) => ({ hour })));
+    expect(hours.map((h) => h.hour)).toEqual([...Array(24).keys()]);
+    expect(hours.every((h) => h.startMinute === undefined && h.endMinute === undefined)).toBe(true);
   });
 
-  it("maps whole-hour windows to bare hours", () => {
-    // 08:00–10:00
-    expect(dayWindowsToAllowedHours([{ start: 480, end: 600 }])).toEqual([
-      { hour: 8 },
-      { hour: 9 },
+  it("maps a single whole clock hour to a bare hour", () => {
+    expect(allowedWindowsToAllowedHours([{ start: 60, end: 120 }])).toEqual([{ hour: 1 }]);
+  });
+
+  it("brackets a sub-hour interval at the start of the day", () => {
+    expect(allowedWindowsToAllowedHours([{ start: 30, end: 60 }])).toEqual([
+      { hour: 0, startMinute: 30, endMinute: 60 },
     ]);
   });
 
-  it("emits a [mm-mm] sub-window for a partial start hour", () => {
-    // 08:30–10:00 → hour 8 windowed [30-60], hour 9 whole
-    expect(dayWindowsToAllowedHours([{ start: 510, end: 600 }])).toEqual([
-      { hour: 8, startMinute: 30, endMinute: 60 },
-      { hour: 9 },
-    ]);
-  });
-
-  it("emits a [mm-mm] sub-window for a partial end hour", () => {
-    // 08:00–09:30 → hour 8 whole, hour 9 windowed [0-30]
-    expect(dayWindowsToAllowedHours([{ start: 480, end: 570 }])).toEqual([
-      { hour: 8 },
-      { hour: 9, startMinute: 0, endMinute: 30 },
-    ]);
-  });
-
-  it("handles a window inside a single hour", () => {
-    // 08:15–08:45
-    expect(dayWindowsToAllowedHours([{ start: 495, end: 525 }])).toEqual([
-      { hour: 8, startMinute: 15, endMinute: 45 },
-    ]);
-  });
-
-  it("allows a window ending exactly at end-of-day (minute 60 of hour 23)", () => {
-    // 23:30–24:00
-    expect(dayWindowsToAllowedHours([{ start: 1410, end: 1440 }])).toEqual([
+  it("brackets a sub-hour interval that ends mid-hour", () => {
+    expect(allowedWindowsToAllowedHours([{ start: 1410, end: 1440 }])).toEqual([
       { hour: 23, startMinute: 30, endMinute: 60 },
     ]);
   });
 
-  it("maps multiple separate windows across the day", () => {
-    // 06:00–07:00 and 18:00–18:30
-    expect(
-      dayWindowsToAllowedHours([
-        { start: 360, end: 420 },
-        { start: 1080, end: 1110 },
-      ]),
-    ).toEqual([{ hour: 6 }, { hour: 18, startMinute: 0, endMinute: 30 }]);
+  it("splits a multi-hour window into partial first/last hours and bare middles", () => {
+    // 16:30 → 18:15 = [990, 1095): h16 [30-60], h17 whole, h18 [00-15]
+    expect(allowedWindowsToAllowedHours([{ start: 990, end: 1095 }])).toEqual([
+      { hour: 16, startMinute: 30, endMinute: 60 },
+      { hour: 17 },
+      { hour: 18, startMinute: 0, endMinute: 15 },
+    ]);
   });
 
-  it("merges abutting windows within one hour into a single sub-window", () => {
-    // 08:00–08:20 then 08:20–08:40 → one [00-40] window, not two
-    expect(
-      dayWindowsToAllowedHours([
-        { start: 480, end: 500 },
-        { start: 500, end: 520 },
-      ]),
-    ).toEqual([{ hour: 8, startMinute: 0, endMinute: 40 }]);
+  it("brackets a one-minute window", () => {
+    expect(allowedWindowsToAllowedHours([{ start: 0, end: 1 }])).toEqual([
+      { hour: 0, startMinute: 0, endMinute: 1 },
+    ]);
   });
 
-  it("throws when a deny gap splits one hour into two sub-windows", () => {
-    // allow 08:00–08:10 and 08:20–09:00 → hour 8 needs two [mm-mm] windows
+  it("emits a bare last hour when a partial-first window ends exactly on an hour boundary", () => {
+    // 00:30 → 02:00 = [30, 120): h0 [30-60], h1 whole (ends exactly at 120).
+    expect(allowedWindowsToAllowedHours([{ start: 30, end: 120 }])).toEqual([
+      { hour: 0, startMinute: 30, endMinute: 60 },
+      { hour: 1 },
+    ]);
+  });
+
+  it("emits ascending hours across two windows in different hours", () => {
+    expect(
+      allowedWindowsToAllowedHours([
+        { start: 0, end: 60 },
+        { start: 1380, end: 1440 },
+      ]),
+    ).toEqual([{ hour: 0 }, { hour: 23 }]);
+  });
+
+  it("treats an empty window list as a fully-denied day (no hours)", () => {
+    expect(allowedWindowsToAllowedHours([])).toEqual([]);
+  });
+
+  it("throws when one clock hour holds two disjoint allowed intervals", () => {
+    // Allowed 09:00-09:10 and 09:20-09:30 — a within-hour allow/deny/allow split.
     expect(() =>
-      dayWindowsToAllowedHours([
-        { start: 480, end: 490 },
-        { start: 500, end: 540 },
+      allowedWindowsToAllowedHours([
+        { start: 540, end: 550 },
+        { start: 560, end: 570 },
       ]),
     ).toThrow(TimekprArgumentError);
   });
 
   it.each([
-    [{ start: -1, end: 60 }],
-    [{ start: 0, end: 1441 }],
-    [{ start: 60, end: 60 }],
-    [{ start: 30.5, end: 60 }],
-  ])("rejects an out-of-range window %o", (window) => {
-    expect(() => dayWindowsToAllowedHours([window])).toThrow(TimekprArgumentError);
+    ["non-integer start", [{ start: 0.5, end: 60 }]],
+    ["non-integer end", [{ start: 0, end: 59.9 }]],
+    ["negative start", [{ start: -1, end: 60 }]],
+    ["end past midnight", [{ start: 0, end: 1441 }]],
+    ["empty interval", [{ start: 60, end: 60 }]],
+    ["inverted interval", [{ start: 120, end: 60 }]],
+    [
+      "overlapping windows",
+      [
+        { start: 0, end: 120 },
+        { start: 60, end: 180 },
+      ],
+    ],
+    [
+      "adjacent (unmerged) windows",
+      [
+        { start: 0, end: 30 },
+        { start: 30, end: 60 },
+      ],
+    ],
+    [
+      "descending windows",
+      [
+        { start: 120, end: 180 },
+        { start: 0, end: 60 },
+      ],
+    ],
+  ])("throws on malformed windows: %s", (_label, windows) => {
+    expect(() => allowedWindowsToAllowedHours(windows as TimeWindow[])).toThrow(
+      TimekprArgumentError,
+    );
   });
 
-  it("rejects non-ascending / overlapping windows", () => {
+  it("accepts the resolver's AllowedWindow type directly (structural compatibility)", () => {
+    const fromResolver: AllowedWindow[] = [{ start: 0, end: 60 }];
+    const windows: readonly TimeWindow[] = fromResolver;
+    expect(allowedWindowsToAllowedHours(windows)).toEqual([{ hour: 0 }]);
+  });
+});
+
+/** Build a weekly map from a `{ weekday: windows }` literal for terse fixtures. */
+function weekly(
+  entries: Partial<Record<1 | 2 | 3 | 4 | 5 | 6 | 7, TimeWindow[]>>,
+): WeeklyAllowedWindows {
+  const map = new Map<1 | 2 | 3 | 4 | 5 | 6 | 7, readonly TimeWindow[]>();
+  for (const [day, windows] of Object.entries(entries)) {
+    if (windows !== undefined) map.set(Number(day) as 1 | 2 | 3 | 4 | 5 | 6 | 7, windows);
+  }
+  return map;
+}
+
+/** Allowed-hours list for a window ending at 21:00 (`[0, 1260)`): bare hours 0..20. */
+const HOURS_UNTIL_2100 = Array.from({ length: 21 }, (_, h) => h).join(";");
+/** Allowed-hours list for a window ending at 22:00 (`[0, 1320)`): bare hours 0..21. */
+const HOURS_UNTIL_2200 = Array.from({ length: 22 }, (_, h) => h).join(";");
+
+describe("buildWeeklyAllowedHoursCommands", () => {
+  it("emits set-allowed-days then per-day allowed-hours for the allowed weekdays", () => {
+    const commands = buildWeeklyAllowedHoursCommands(
+      USER,
+      weekly({ 1: [{ start: 960, end: 1080 }], 6: [{ start: 660, end: 1320 }] }),
+    );
+    expect(commands).toEqual([
+      ["--setalloweddays", USER, "1;6"],
+      ["--setallowedhours", USER, "1", "16;17"],
+      ["--setallowedhours", USER, "6", "11;12;13;14;15;16;17;18;19;20;21"],
+    ]);
+  });
+
+  it("omits a denied (empty / absent) weekday from the allowed days", () => {
+    const commands = buildWeeklyAllowedHoursCommands(
+      USER,
+      weekly({ 1: [{ start: 0, end: 60 }], 2: [] }),
+    );
+    expect(commands[0]).toEqual(["--setalloweddays", USER, "1"]);
+    expect(commands).toHaveLength(2);
+  });
+
+  it("collapses to a single ALL command when all seven days share identical hours", () => {
+    const everyDay = { start: 0, end: 1260 }; // allow until 21:00 daily
+    const commands = buildWeeklyAllowedHoursCommands(
+      USER,
+      weekly({
+        1: [everyDay],
+        2: [everyDay],
+        3: [everyDay],
+        4: [everyDay],
+        5: [everyDay],
+        6: [everyDay],
+        7: [everyDay],
+      }),
+    );
+    expect(commands).toEqual([
+      ["--setalloweddays", USER, "1;2;3;4;5;6;7"],
+      ["--setallowedhours", USER, "ALL", "0;1;2;3;4;5;6;7;8;9;10;11;12;13;14;15;16;17;18;19;20"],
+    ]);
+  });
+
+  it("does not collapse to ALL when the seven days differ", () => {
+    const commands = buildWeeklyAllowedHoursCommands(
+      USER,
+      weekly({
+        1: [{ start: 0, end: 1260 }],
+        2: [{ start: 0, end: 1260 }],
+        3: [{ start: 0, end: 1260 }],
+        4: [{ start: 0, end: 1260 }],
+        5: [{ start: 0, end: 1260 }],
+        6: [{ start: 0, end: 1320 }], // weekend differs
+        7: [{ start: 0, end: 1320 }],
+      }),
+    );
+    // 1 set-allowed-days + 7 per-day allowed-hours, no ALL.
+    expect(commands).toHaveLength(8);
+    expect(commands[0]).toEqual(["--setalloweddays", USER, "1;2;3;4;5;6;7"]);
+    expect(commands.slice(1).every((c) => c[2] !== "ALL")).toBe(true);
+    // The weekday and weekend days carry their own (differing) hour lists.
+    expect(commands[1]).toEqual(["--setallowedhours", USER, "1", HOURS_UNTIL_2100]);
+    expect(commands[6]).toEqual(["--setallowedhours", USER, "6", HOURS_UNTIL_2200]);
+  });
+
+  it("does not collapse to ALL when a day is denied even if allowed days match", () => {
+    const same = { start: 0, end: 1260 };
+    const commands = buildWeeklyAllowedHoursCommands(
+      USER,
+      weekly({ 1: [same], 2: [same], 3: [same], 4: [same], 5: [same] }), // weekend denied
+    );
+    expect(commands[0]).toEqual(["--setalloweddays", USER, "1;2;3;4;5"]);
+    expect(commands).toHaveLength(6);
+    expect(commands.slice(1).every((c) => c[2] !== "ALL")).toBe(true);
+    expect(commands[1]).toEqual(["--setallowedhours", USER, "1", HOURS_UNTIL_2100]);
+  });
+
+  it("throws when no day is allowed", () => {
+    expect(() => buildWeeklyAllowedHoursCommands(USER, weekly({ 1: [], 2: [] }))).toThrow(
+      TimekprArgumentError,
+    );
+    expect(() => buildWeeklyAllowedHoursCommands(USER, weekly({}))).toThrow(TimekprArgumentError);
+  });
+
+  it("propagates a username grammar error", () => {
     expect(() =>
-      dayWindowsToAllowedHours([
-        { start: 480, end: 600 },
-        { start: 540, end: 660 },
-      ]),
+      buildWeeklyAllowedHoursCommands("bad;name", weekly({ 1: [{ start: 0, end: 60 }] })),
     ).toThrow(TimekprArgumentError);
   });
 });
 
-describe("dayAllowance", () => {
-  it("classifies no windows as denied", () => {
-    expect(dayAllowance([])).toEqual({ kind: "denied" });
-  });
+// --- TimekprClient.setWeeklyAllowedHours -----------------------------------
 
-  it("classifies windows as allowed with their hours", () => {
-    expect(dayAllowance([{ start: 480, end: 540 }])).toEqual({
-      kind: "allowed",
-      hours: [{ hour: 8 }],
-    });
-  });
+const TARGET: SshTarget = { host: "client.local", username: "pct-agent", privateKey: "KEY" };
+const OK_RESULT: ExecResult = { stdout: "ok", stderr: "", code: 0, signal: null };
+
+interface RecordedCall {
+  argv: readonly string[];
+}
+
+class FakeTransport implements TimekprTransport {
+  readonly checked: RecordedCall[] = [];
+  checkedError: Error | undefined;
+
+  async execChecked(_target: SshTarget, argv: readonly string[]): Promise<ExecResult> {
+    this.checked.push({ argv });
+    if (this.checkedError !== undefined) throw this.checkedError;
+    return OK_RESULT;
+  }
+
+  async execAndParse<T>(_t: SshTarget, _a: readonly string[], schema: ZodType<T>): Promise<T> {
+    return schema.parse("");
+  }
+}
+
+let transport: FakeTransport;
+
+beforeEach(() => {
+  transport = new FakeTransport();
 });
 
-describe("planWeeklyAllowedHours", () => {
-  it("excludes fully-denied weekdays from allowedDays", () => {
-    const perDay = new Map<number, readonly AllowedWindow[]>([
-      [1, [{ start: 480, end: 540 }]],
-      [2, [{ start: 480, end: 540 }]],
-      // 3..7 absent → denied
-    ]);
-    const plan = planWeeklyAllowedHours(perDay);
-    expect(plan.allowedDays).toEqual([1, 2]);
-  });
-
-  it("coalesces weekdays with identical hours into one group", () => {
-    const plan = planWeeklyAllowedHours(everyDay([{ start: 480, end: 540 }]));
-    expect(plan.allowedDays).toEqual([1, 2, 3, 4, 5, 6, 7]);
-    expect(plan.hourGroups).toEqual([{ days: [1, 2, 3, 4, 5, 6, 7], hours: [{ hour: 8 }] }]);
-  });
-
-  it("keeps distinct hour lists as separate groups, ordered by earliest weekday", () => {
-    const perDay = new Map<number, readonly AllowedWindow[]>([
-      [1, [{ start: 480, end: 1080 }]], // Mon: 08:00–18:00
-      [2, [{ start: 480, end: 1080 }]], // Tue: same as Mon
-      [6, [{ start: 600, end: 720 }]], // Sat: 10:00–12:00
-      [7, [{ start: 600, end: 720 }]], // Sun: same as Sat
-    ]);
-    const plan = planWeeklyAllowedHours(perDay);
-    expect(plan.allowedDays).toEqual([1, 2, 6, 7]);
-    expect(plan.hourGroups.map((g) => g.days)).toEqual([
-      [1, 2],
-      [6, 7],
-    ]);
-  });
-
-  it("throws when every weekday is denied", () => {
-    expect(() => planWeeklyAllowedHours(new Map())).toThrow(TimekprArgumentError);
-  });
-});
-
-describe("timekprWeekCommands", () => {
-  it("renders --setalloweddays then one --setallowedhours per group", () => {
-    const perDay = new Map<number, readonly AllowedWindow[]>([
-      [1, [{ start: 480, end: 540 }]],
-      [2, [{ start: 480, end: 540 }]],
-      [6, [{ start: 600, end: 630 }]],
-    ]);
-    expect(timekprWeekCommands("alice", perDay)).toEqual([
-      ["--setalloweddays", "alice", "1;2;6"],
-      ["--setallowedhours", "alice", "1;2", "8"],
-      ["--setallowedhours", "alice", "6", "10[00-30]"],
-    ]);
-  });
-
-  it("uses the ALL-bare-hour rendering for a full unrestricted week", () => {
-    const [days, ...hours] = timekprWeekCommands("alice", everyDay([{ start: 0, end: 1440 }]));
-    expect(days).toEqual(["--setalloweddays", "alice", "1;2;3;4;5;6;7"]);
-    expect(hours).toEqual([
-      [
-        "--setallowedhours",
-        "alice",
-        "1;2;3;4;5;6;7",
-        Array.from({ length: 24 }, (_, h) => h).join(";"),
-      ],
-    ]);
-  });
-
-  it("rejects an invalid username before building anything", () => {
-    expect(() => timekprWeekCommands("bad user", everyDay([{ start: 0, end: 60 }]))).toThrow(
-      TimekprArgumentError,
+describe("TimekprClient.setWeeklyAllowedHours", () => {
+  it("runs the built commands, prefixed with the binary, in order", async () => {
+    const client = new TimekprClient(transport, TARGET, USER);
+    const results = await client.setWeeklyAllowedHours(
+      weekly({ 1: [{ start: 960, end: 1080 }], 6: [{ start: 660, end: 1320 }] }),
     );
-  });
-});
-
-describe("applyWeeklySchedule", () => {
-  it("pushes --setalloweddays then --setallowedhours per group over the client", async () => {
-    const transport = new FakeTransport();
-    const client = new TimekprClient(transport, TARGET, "alice");
-    const perDay = new Map<number, readonly AllowedWindow[]>([
-      [1, [{ start: 480, end: 540 }]],
-      [2, [{ start: 480, end: 540 }]],
-      [6, [{ start: 600, end: 630 }]],
-    ]);
-
-    await applyWeeklySchedule(client, perDay);
-
-    // The client prefixes `sudo timekpra`; assert the trailing argv it built.
-    expect(transport.checked.map((argv) => argv.slice(2))).toEqual([
-      ["--setalloweddays", "alice", "1;2;6"],
-      ["--setallowedhours", "alice", "1;2", "8"],
-      ["--setallowedhours", "alice", "6", "10[00-30]"],
+    expect(results).toHaveLength(3);
+    expect(transport.checked.map((c) => c.argv)).toEqual([
+      ["sudo", "timekpra", "--setalloweddays", USER, "1;6"],
+      ["sudo", "timekpra", "--setallowedhours", USER, "1", "16;17"],
+      ["sudo", "timekpra", "--setallowedhours", USER, "6", "11;12;13;14;15;16;17;18;19;20;21"],
     ]);
   });
 
-  it("propagates the whole-week-lockout guard without touching the client", async () => {
-    const transport = new FakeTransport();
-    const client = new TimekprClient(transport, TARGET, "alice");
-    await expect(applyWeeklySchedule(client, new Map())).rejects.toThrow(TimekprArgumentError);
+  it("propagates an SshCommandError and stops after the failing command", async () => {
+    transport.checkedError = new SshCommandError(
+      { host: "client.local", port: 22, username: "pct-agent" },
+      ["sudo", "timekpra", "--setalloweddays"],
+      { code: 1, signal: null, stdout: "", stderr: "boom" },
+    );
+    const client = new TimekprClient(transport, TARGET, USER);
+    await expect(
+      client.setWeeklyAllowedHours(weekly({ 1: [{ start: 0, end: 60 }] })),
+    ).rejects.toBeInstanceOf(SshCommandError);
+    // Rejected on the first command — no further commands attempted.
+    expect(transport.checked).toHaveLength(1);
+  });
+
+  it("rejects (does not throw synchronously) when the windows are unrepresentable", async () => {
+    const client = new TimekprClient(transport, TARGET, USER);
+    const promise = client.setWeeklyAllowedHours(weekly({}));
+    await expect(promise).rejects.toBeInstanceOf(TimekprArgumentError);
     expect(transport.checked).toHaveLength(0);
   });
 });

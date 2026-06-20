@@ -39,13 +39,8 @@ export {
 } from "./client.js";
 export { TimekprUserInfo, timekprUserInfoSchema } from "./userinfo.js";
 export {
-  type DayAllowance,
-  type AllowedHoursGroup,
-  type WeeklyAllowedHoursPlan,
-  ISO_WEEKDAYS,
-  dayWindowsToAllowedHours,
-  dayAllowance,
-  planWeeklyAllowedHours,
-  timekprWeekCommands,
-  applyWeeklySchedule,
+  allowedWindowsToAllowedHours,
+  buildWeeklyAllowedHoursCommands,
+  type TimeWindow,
+  type WeeklyAllowedWindows,
 } from "./allowed-hours.js";
