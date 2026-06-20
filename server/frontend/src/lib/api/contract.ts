@@ -40,5 +40,12 @@ export type {
   LinkResponse,
   UpsertLinkRequest,
 } from "../../../../src/api/policy/dtos.js";
-export type { ActivityKind, MatchType, Scope, BudgetWindow } from "../../../../src/policy/enums.js";
+export type { AuditEntryResponse, AuditListResponse } from "../../../../src/api/audit/dtos.js";
+export type {
+  ActivityKind,
+  MatchType,
+  Scope,
+  BudgetWindow,
+  AuditOutcome,
+} from "../../../../src/policy/enums.js";
 export type { ErrorEnvelope, ErrorDetail } from "../../../../src/api/errors.js";
