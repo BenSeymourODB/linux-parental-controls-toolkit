@@ -117,10 +117,15 @@
     minted = null;
     copied = false;
     try {
-      const supervisedUsers = enrolRows.map((r) => ({
-        userId: r.userId as number,
-        linuxUsername: r.linuxUsername.trim(),
-      }));
+      // `enrolReady` already guarantees every row has a non-null userId; this
+      // loop narrows the type without an `as` cast (CLAUDE.md → no casts).
+      const supervisedUsers: { userId: number; linuxUsername: string }[] = [];
+      for (const r of enrolRows) {
+        if (r.userId === null) {
+          return;
+        }
+        supervisedUsers.push({ userId: r.userId, linuxUsername: r.linuxUsername.trim() });
+      }
       const hostname = enrolHostname.trim();
       minted = await mintEnrolmentToken({
         supervisedUsers,
@@ -144,7 +149,13 @@
     enrolRows = [{ userId: null, linuxUsername: "" }];
   }
 
-  /** The install one-liner shown to the admin, per `docs/client-install.md`. */
+  /**
+   * The install one-liner shown to the admin, per `docs/client-install.md` →
+   * "Usage" (non-interactive form). The dashboard's own origin is the server
+   * URL the client enrols against, so `--server-url` is filled from it — the
+   * piped (`bash -s --`) form is non-interactive and the script can't prompt
+   * for it over the consumed stdin.
+   */
   let installCommand = $derived.by(() => {
     if (minted === null) {
       return "";
@@ -154,6 +165,7 @@
     return (
       `curl -fsSL ${origin}/install-client.sh \\\n` +
       `  | sudo bash -s -- \\\n` +
+      `    --server-url ${origin} \\\n` +
       `    --enrolment-token ${minted.token} \\\n` +
       userFlags
     );

@@ -45,5 +45,6 @@ describe("client-health API", () => {
 
     expect(result).toEqual(health);
     expect(fetchMock.mock.calls[0]![0]).toBe("/api/clients/1/health");
+    expect((fetchMock.mock.calls[0]![1] as RequestInit).method).toBe("GET");
   });
 });
