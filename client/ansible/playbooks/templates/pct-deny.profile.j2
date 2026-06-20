@@ -1,0 +1,12 @@
+{# Managed by linux-parental-controls-toolkit (#92) — do not edit by hand. #}
+{# Rendered from policy by playbooks/apparmor-profiles.yml. #}
+{# Hard-deny profile for {{ executable }}. #}
+#include <tunables/global>
+
+# An empty profile in enforce mode grants no permissions, so the executable
+# cannot read/map its own libraries and fails to start — a per-app hard block.
+# We deliberately do NOT `#include <abstractions/base>`: that would grant the
+# very file/lib access we are withholding.
+profile {{ profile_name }} {{ executable }} flags=(enforce) {
+
+}
