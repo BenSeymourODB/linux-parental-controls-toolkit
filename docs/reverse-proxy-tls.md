@@ -364,9 +364,9 @@ Two things follow:
 2. **Forward `X-Forwarded-For`** (the nginx config does; Caddy and
    Traefik do by default). A planned opt-in `trustProxy` setting will let
    the dashboard recover the real client IP from that header so its own
-   per-IP limiter works correctly behind a proxy — tracked in the
-   follow-up issue linked from this section's PR. Until then, rely on the
-   proxy tier for per-IP limits.
+   per-IP limiter works correctly behind a proxy — tracked in
+   [#235](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/235).
+   Until then, rely on the proxy tier for per-IP limits.
 
 ---
 
