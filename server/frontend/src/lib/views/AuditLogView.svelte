@@ -187,7 +187,7 @@
               <span class="chip {entry.outcome}">{entry.outcome}</span>
             </td>
             <td class="num muted">
-              {entry.exitCode ?? (entry.signal !== null ? entry.signal : "—")}
+              {entry.exitCode ?? entry.signal ?? "—"}
             </td>
             <td class="num muted nowrap">{entry.durationMs} ms</td>
             <td class="muted detail">{detailOf(entry)}</td>
