@@ -87,19 +87,6 @@ describe("buildSetAllowedHours", () => {
     ).toEqual(["--setallowedhours", "alice", "ALL", "9;12[00-30];!15;!20[00-45]"]);
   });
 
-  it("renders a weekday list in the day position", () => {
-    expect(buildSetAllowedHours(USER, [1, 2, 3, 4, 5], [{ hour: 9 }])).toEqual([
-      "--setallowedhours",
-      "alice",
-      "1;2;3;4;5",
-      "9",
-    ]);
-  });
-
-  it("rejects an empty weekday list in the day position", () => {
-    expect(() => buildSetAllowedHours(USER, [], [{ hour: 9 }])).toThrow(/at least one weekday/);
-  });
-
   it("zero-pads minute bounds to two digits", () => {
     const [, , , hours] = buildSetAllowedHours(USER, 1, [
       { hour: 6, startMinute: 5, endMinute: 9 },
@@ -118,7 +105,7 @@ describe("buildSetAllowedHours", () => {
   it("rejects a day outside 1..7 and not ALL", () => {
     const bad = 9 as unknown as IsoWeekday;
     expect(() => buildSetAllowedHours(USER, bad, [{ hour: 1 }])).toThrow(
-      /ISO weekday 1\.\.7, a weekday list, or "ALL"/,
+      /ISO weekday 1\.\.7 or "ALL"/,
     );
   });
 
@@ -128,12 +115,17 @@ describe("buildSetAllowedHours", () => {
     );
   });
 
+  // The upper bound is 59, not 60. The real timekpra binary accepts `[mm-60]`
+  // at parse time but silently canonicalises it to "the whole hour" (no
+  // bracket), which would break the re-apply reconciliation loop in #93 —
+  // verified live against the real binary (#207).
   it.each([
     ["start >= end", { hour: 8, startMinute: 30, endMinute: 30 }],
-    ["end > 60", { hour: 8, startMinute: 0, endMinute: 61 }],
+    ["end > 59", { hour: 8, startMinute: 0, endMinute: 60 }],
+    ["end > 59 (61)", { hour: 8, startMinute: 0, endMinute: 61 }],
     ["negative start", { hour: 8, startMinute: -1, endMinute: 10 }],
   ])("rejects an invalid minute window (%s)", (_label, entry) => {
-    expect(() => buildSetAllowedHours(USER, 1, [entry])).toThrow(/0 <= start < end <= 60/);
+    expect(() => buildSetAllowedHours(USER, 1, [entry])).toThrow(/0 <= start < end <= 59/);
   });
 });
 

@@ -20,7 +20,7 @@
 import { and, eq } from "drizzle-orm";
 
 import type { PolicyDb } from "./db.js";
-import type { ActivityKind, BudgetWindow, ScheduleAction, Scope } from "./enums.js";
+import type { ActivityKind, BudgetWindow, MatchType, ScheduleAction, Scope } from "./enums.js";
 import {
   activities,
   activitiesToGroups,
@@ -147,6 +147,17 @@ export function deleteClient(db: PolicyDb, id: number): boolean {
   return (
     db.delete(clients).where(eq(clients.id, id)).returning({ id: clients.id }).get() !== undefined
   );
+}
+
+/**
+ * Record that the client was confirmed reachable at `at`, returning the updated
+ * row (or `undefined` if it no longer exists). Kept separate from
+ * {@link updateClient}: `last_seen` is a system observation written by the
+ * transport/health paths (#81), not an admin-editable field, so it stays out of
+ * {@link ClientUpdate}.
+ */
+export function recordClientLastSeen(db: PolicyDb, id: number, at: Date): ClientRow | undefined {
+  return db.update(clients).set({ lastSeen: at }).where(eq(clients.id, id)).returning().get();
 }
 
 // --- User-on-client links --------------------------------------------------
@@ -356,12 +367,15 @@ export type ActivityGroupMembershipRow = typeof activitiesToGroups.$inferSelect;
 export interface ActivityCreate {
   kind: ActivityKind;
   matcher: string;
+  /** How `matcher` is interpreted (ADR 0006). Omitted → DB default `exact`. */
+  matchType?: MatchType | undefined;
 }
 
 /** Mutable fields on an {@link activities} row; omitted keys are unchanged. */
 export interface ActivityUpdate {
   kind?: ActivityKind | undefined;
   matcher?: string | undefined;
+  matchType?: MatchType | undefined;
 }
 
 /** All activities, ascending by id. */
@@ -378,7 +392,12 @@ export function getActivity(db: PolicyDb, id: number): ActivityRow | undefined {
 export function createActivity(db: PolicyDb, input: ActivityCreate): ActivityRow {
   return db
     .insert(activities)
-    .values({ kind: input.kind, matcher: input.matcher })
+    .values({
+      kind: input.kind,
+      matcher: input.matcher,
+      // Omit when undefined so the column's DEFAULT 'exact' applies (ADR 0006).
+      ...(input.matchType !== undefined ? { matchType: input.matchType } : {}),
+    })
     .returning()
     .get();
 }
@@ -472,6 +491,7 @@ export function listGroupActivities(db: PolicyDb, groupId: number): ActivityRow[
       id: activities.id,
       kind: activities.kind,
       matcher: activities.matcher,
+      matchType: activities.matchType,
     })
     .from(activitiesToGroups)
     .innerJoin(activities, eq(activitiesToGroups.activityId, activities.id))

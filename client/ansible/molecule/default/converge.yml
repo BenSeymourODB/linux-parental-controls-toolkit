@@ -1,0 +1,4 @@
+---
+# Converge: apply the real playbook exactly as the dashboard's runner would.
+- name: Converge
+  ansible.builtin.import_playbook: ../../playbooks/activitywatch.yml
