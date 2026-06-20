@@ -123,6 +123,20 @@ describe("policy repository — user/client links", () => {
     expect(repo.listUserLinks(db, userId)).toEqual([replaced]);
   });
 
+  it("listClientLinks returns a client's links ascending by user id, isolated per client", () => {
+    const bob = repo.createUser(db, { displayName: "Bob" }).id;
+    const otherClient = repo.createClient(db, { hostname: "mint-02", sshUser: "pct-agent" }).id;
+    const aliceLink = repo.upsertLink(db, userId, clientId, {
+      linuxUsername: "alice",
+      linuxUid: 1001,
+    });
+    const bobLink = repo.upsertLink(db, bob, clientId, { linuxUsername: "bob", linuxUid: 1002 });
+    repo.upsertLink(db, userId, otherClient, { linuxUsername: "alice", linuxUid: 1001 });
+
+    expect(repo.listClientLinks(db, clientId)).toEqual([aliceLink, bobLink]);
+    expect(repo.listClientLinks(db, 999)).toEqual([]);
+  });
+
   it("rejects a duplicate (client, uid) for a different user with a unique violation", () => {
     const otherUser = repo.createUser(db, { displayName: "Bob" }).id;
     repo.upsertLink(db, userId, clientId, { linuxUsername: "alice", linuxUid: 1001 });

@@ -172,6 +172,16 @@ export function listUserLinks(db: PolicyDb, userId: number): UserOnClientRow[] {
     .all();
 }
 
+/** All links for a client, ascending by user id (inverse of {@link listUserLinks}). */
+export function listClientLinks(db: PolicyDb, clientId: number): UserOnClientRow[] {
+  return db
+    .select()
+    .from(usersOnClients)
+    .where(eq(usersOnClients.clientId, clientId))
+    .orderBy(usersOnClients.userId)
+    .all();
+}
+
 /**
  * Create or replace the link between `userId` and `clientId` (idempotent on the
  * composite key). Throws on the `(client, linux_uid)` uniqueness collision —
