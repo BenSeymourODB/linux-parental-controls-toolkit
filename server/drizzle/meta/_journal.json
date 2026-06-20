@@ -71,6 +71,13 @@
       "when": 1781883667142,
       "tag": "20260619154107_fluffy_radioactive_man",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1781914441120,
+      "tag": "20260620001401_yielding_carnage",
+      "breakpoints": true
     }
   ]
 }
