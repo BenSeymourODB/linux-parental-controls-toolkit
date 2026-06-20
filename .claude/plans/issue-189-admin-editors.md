@@ -59,3 +59,57 @@ in-page `*View.svelte` with list/create/inline-edit/delete, wired into the
   + `npm run build` (svelte-kit sync && vite build) all green.
 - The server quality gate is unaffected (no `server/src` change) but re-run
   `format:check`/`lint`/`typecheck`/`test` from `server/` to be safe.
+
+---
+
+# Slice 2 — Activity Groups (+ membership), Budgets, User ↔ Client links
+
+The Clients + Activities slice above has landed on `main`. This slice picks up
+the next three editors, repeating the same proven pattern. Schedules /
+Exceptions are intentionally **still deferred** to avoid colliding with the
+in-flight schedule/exception work (#182 group-targeting, #140 recurring
+windows) and the #63 drag-to-order editor; they remain tracked on #189.
+
+## Scope of this PR
+
+1. **Activity Groups** — `/api/activity-groups` CRUD plus **membership**:
+   `GET /activity-groups/:groupId/activities`, `PUT|DELETE
+   /activity-groups/:groupId/activities/:activityId`. The view is master-detail:
+   a groups list (create/edit/delete name) with an expandable member panel that
+   adds activities from a dropdown and removes them.
+2. **Budgets** — `/api/budgets` CRUD. Create needs `userId`, `scope`
+   (overall/activity/group), `targetId` (null for overall, an `activity.id` for
+   `activity`, an `activity_group.id` for `group`), `window`
+   (daily/weekly/monthly), `secondsAllowed`. The view loads users + activities +
+   activity-groups for the target pickers and to render target names.
+3. **User ↔ Client links** — `/api/users/:userId/clients` (list per user),
+   `PUT|DELETE /users/:userId/clients/:clientId` (upsert/remove with
+   `linuxUsername` + `linuxUid`). The view loads users + clients for the
+   pickers and is scoped to the selected user.
+
+## Files
+
+- `server/frontend/src/lib/api/contract.ts` — add type-only re-exports:
+  `ActivityGroupResponse`, `Create/UpdateActivityGroupRequest`,
+  `BudgetResponse`, `Create/UpdateBudgetRequest`, `LinkResponse`,
+  `UpsertLinkRequest`, plus the `Scope` / `BudgetWindow` enums.
+- `server/frontend/src/lib/api/activity-groups.ts` — group CRUD +
+  `listGroupActivities` / `addActivityToGroup` / `removeActivityFromGroup`.
+- `server/frontend/src/lib/api/budgets.ts` — `listBudgets(userId?)` +
+  create/update/delete.
+- `server/frontend/src/lib/api/links.ts` — `listUserLinks` / `upsertLink` /
+  `deleteLink`.
+- `server/frontend/src/lib/views/ActivityGroupsView.svelte`,
+  `BudgetsView.svelte`, `LinksView.svelte`.
+- `server/frontend/src/routes/admin/+page.svelte` — add the three nav items +
+  render the views.
+- `server/frontend/tests/api/{activity-groups,budgets,links}.test.ts` — vitest
+  unit tests mirroring `tests/api/activities.test.ts`.
+
+## Still deferred — stays tracked on #189
+
+- Schedules / Exceptions editors (`/api/schedules`, `/api/exceptions`).
+- Deep `/admin/*` URL routes + SPA fallback — #59.
+
+Same constraints honoured as Slice 1 (only `/api/*`, browser-guarded calls,
+type-only DTO imports, no GPL surface).
