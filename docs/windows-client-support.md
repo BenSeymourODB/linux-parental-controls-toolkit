@@ -320,7 +320,12 @@ them require building anything Windows-specific now.
    (e.g. `session_budget`, `per_app_close`, `applocker_deny`, `dns_filter`).
    Then the server can withhold `enforce.*` frames a client can't honour and
    the admin UI can grey out unsupported controls per client — the mechanism a
-   mixed Linux/Windows fleet needs, designed once.
+   mixed Linux/Windows fleet needs, designed once. **This is now decided** in
+   [`adr/0007-event-stream-version-compatibility.md`](adr/0007-event-stream-version-compatibility.md):
+   capabilities are an additive flag set in the handshake, a Linux and a Windows
+   client speak the same `eventProtocol` and differ only in advertised
+   capabilities, and the server withholds `enforce.*` frames a client can't
+   honour.
 5. **Don't hardcode "distro" as the only client-shape axis.** The
    `client/distros/<id>.sh` adapter pattern (`client-install.md` → "Other
    distributions") is a Debian/Fedora/Arch split. A Windows client is not a
