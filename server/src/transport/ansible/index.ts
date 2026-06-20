@@ -37,6 +37,30 @@ export const moduleName = "transport/ansible";
 export * from "./errors.js";
 export { buildInventory, INVENTORY_GROUP, type AnsibleHost } from "./inventory.js";
 
+/** A JSON value, as accepted by Ansible's `--extra-vars` JSON form. */
+export type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+/** A JSON object — the top-level shape `--extra-vars` is given. */
+export type JsonObject = Record<string, JsonValue>;
+
+export {
+  E2GUARDIAN_PLAYBOOK,
+  DEFAULT_PROXY_PORT,
+  e2guardianPlanSchema,
+  e2guardianUserFilterSchema,
+  buildE2guardianPlan,
+  pushE2guardianFiltering,
+  type E2guardianPlan,
+  type E2guardianUserFilter,
+  type BuildE2guardianPlanOptions,
+  type PushE2guardianFilteringOptions,
+} from "./e2guardian.js";
+
 /**
  * Ansible's `TaskQueueManager` encodes the run outcome as an OR-able bit set
  * in the process exit code: `2` = one or more hosts failed, `4` = one or more
@@ -74,8 +98,13 @@ export interface RunPlaybookOptions {
   playbook: string;
   /** Target clients; rendered into a per-run dynamic inventory. */
   hosts: readonly AnsibleHost[];
-  /** Optional `--extra-vars`, passed to Ansible as a single JSON object. */
-  extraVars?: Record<string, string | number | boolean>;
+  /**
+   * Optional `--extra-vars`, passed to Ansible as a single JSON object. Nested
+   * objects and arrays are allowed (the value is `JSON.stringify`d straight to
+   * Ansible's JSON `--extra-vars` form), so a structured plan — e.g. the
+   * per-UID e2guardian filter plan (#90) — can be handed to a playbook whole.
+   */
+  extraVars?: JsonObject;
   /** Optional `--limit` host pattern to narrow the run within the inventory. */
   limit?: string;
 }

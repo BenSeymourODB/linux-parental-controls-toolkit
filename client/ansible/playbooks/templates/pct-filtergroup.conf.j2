@@ -1,0 +1,14 @@
+{#
+  e2guardian filter-group config for a single supervised user. groupmode = 1
+  (filtered) with a per-user banned-site list; the permissive baseline stays on
+  group 1 (client/install-baseline-tools.sh). The dashboard assigns the group
+  number + listen port deterministically. Managed by #90 — do not hand-edit.
+-#}
+# Managed by pct e2guardian-filtering.yml (#90).
+# Filter group {{ item.filterGroup }} for supervised user '{{ item.linuxUsername }}'
+# (uid={{ item.linuxUid }}); traffic arrives on listen port {{ item.listenPort }}.
+groupname = 'pct-{{ item.linuxUsername }}'
+groupmode = 1
+naughtynesslimit = 9999
+reportinglevel = 0
+.Include<{{ "/etc/e2guardian/pct.d/" ~ item.linuxUsername ~ ".bannedsites" }}>

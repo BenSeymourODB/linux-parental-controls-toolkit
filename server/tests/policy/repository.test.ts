@@ -153,6 +153,18 @@ describe("policy repository — user/client links", () => {
     expect(repo.deleteLink(db, userId, clientId)).toBe(false);
   });
 
+  it("listClientLinks returns every linked user on a client, ascending by uid", () => {
+    expect(repo.listClientLinks(db, clientId)).toEqual([]);
+    const bob = repo.createUser(db, { displayName: "Bob" }).id;
+    // Insert out of UID order to prove the ordering is by linux_uid.
+    repo.upsertLink(db, bob, clientId, { linuxUsername: "bob", linuxUid: 1002 });
+    repo.upsertLink(db, userId, clientId, { linuxUsername: "alice", linuxUid: 1001 });
+    expect(repo.listClientLinks(db, clientId)).toEqual([
+      { userId, clientId, linuxUsername: "alice", linuxUid: 1001 },
+      { userId: bob, clientId, linuxUsername: "bob", linuxUid: 1002 },
+    ]);
+  });
+
   it("listUserClientIds returns the linked client ids ascending, [] when none", () => {
     expect(repo.listUserClientIds(db, userId)).toEqual([]);
     const second = repo.createClient(db, { hostname: "mint-02", sshUser: "pct-agent" }).id;

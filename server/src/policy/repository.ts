@@ -186,6 +186,22 @@ export function upsertLink(
 }
 
 /**
+ * All links for a client, ascending by linux UID. The inverse of
+ * {@link listUserLinks}: used by the per-client enforcement push (Phase 6,
+ * #90) to resolve every supervised user — and their `linuxUsername` / `linuxUid`
+ * — that a client-scoped config run (e2guardian filter groups, iptables OUTPUT
+ * redirect) must cover.
+ */
+export function listClientLinks(db: PolicyDb, clientId: number): UserOnClientRow[] {
+  return db
+    .select()
+    .from(usersOnClients)
+    .where(eq(usersOnClients.clientId, clientId))
+    .orderBy(usersOnClients.linuxUid)
+    .all();
+}
+
+/**
  * The ids of every client a user is linked to, ascending. Used by the stub
  * transport (#54) to resolve the clients a user-level policy change would push
  * to — captured *before* a delete, since the links cascade away with the user.
