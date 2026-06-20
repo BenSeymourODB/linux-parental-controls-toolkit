@@ -18,6 +18,10 @@
  * order of the workers is not guaranteed, but the returned array is always
  * aligned to the input so callers can rely on positional ordering. `limit` is
  * floored and clamped to at least 1.
+ *
+ * An element that is literally `undefined` is skipped (no `worker` call, its
+ * result slot left empty) — `noUncheckedIndexedAccess` can't prove an in-bounds
+ * index is populated, and the callers here only ever map arrays of objects.
  */
 export async function mapWithConcurrency<T, R>(
   items: readonly T[],

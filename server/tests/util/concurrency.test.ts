@@ -39,9 +39,11 @@ describe("mapWithConcurrency", () => {
       return inFlight;
     });
 
-    // Let the first batch start, then release in waves.
+    // Once the first batch is running, only `limit` workers should be live.
     await Promise.resolve();
     expect(maxInFlight).toBe(2);
+    // Release the first two; the runners then pick the remaining two off the
+    // shared cursor — still never exceeding the limit.
     for (const gate of gates) gate.resolve(0);
 
     await all;
