@@ -25,5 +25,12 @@ export type {
   UserResponse,
   CreateUserRequest,
   UpdateUserRequest,
+  ClientResponse,
+  CreateClientRequest,
+  UpdateClientRequest,
+  ActivityResponse,
+  CreateActivityRequest,
+  UpdateActivityRequest,
 } from "../../../../src/api/policy/dtos.js";
+export type { ActivityKind, MatchType } from "../../../../src/policy/enums.js";
 export type { ErrorEnvelope, ErrorDetail } from "../../../../src/api/errors.js";

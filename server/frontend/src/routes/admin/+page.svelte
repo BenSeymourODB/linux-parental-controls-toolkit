@@ -22,6 +22,8 @@
   import LoginForm from "$lib/components/LoginForm.svelte";
   import DashboardView from "$lib/views/DashboardView.svelte";
   import UsersView from "$lib/views/UsersView.svelte";
+  import ClientsView from "$lib/views/ClientsView.svelte";
+  import ActivitiesView from "$lib/views/ActivitiesView.svelte";
 
   // `null` while the initial session probe is in flight.
   let session = $state<SessionResponse | null>(null);
@@ -33,6 +35,8 @@
   const navItems: NavItem[] = [
     { id: "dashboard", label: "Dashboard" },
     { id: "users", label: "Users" },
+    { id: "clients", label: "Clients" },
+    { id: "activities", label: "Activities" },
   ];
   let activeView = $state<string>("dashboard");
 
@@ -103,6 +107,10 @@
   >
     {#if activeView === "users"}
       <UsersView />
+    {:else if activeView === "clients"}
+      <ClientsView />
+    {:else if activeView === "activities"}
+      <ActivitiesView />
     {:else}
       <DashboardView {username} onnavigate={(id) => (activeView = id)} />
     {/if}
