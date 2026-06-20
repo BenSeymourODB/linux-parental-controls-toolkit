@@ -16,6 +16,8 @@ describe("loadSettings", () => {
     expect(settings.logLevel).toBe("info");
     expect(settings.secretKey).toBeUndefined();
     expect(settings.ansibleDir).toBe("/data/ansible");
+    expect(settings.sshPublicKeyPath).toBe("/data/secrets/ssh/id_ed25519.pub");
+    expect(settings.sshPrivateKeyPath).toBe("/data/secrets/ssh/id_ed25519");
     expect(settings.adguard).toEqual({ mode: "disabled" });
     expect(settings.telemetry).toEqual({ pullCron: "*/5 * * * *", pullConcurrency: 4 });
     expect(settings.reapply).toEqual({ cron: "0 * * * *", playbooks: [] });
@@ -23,6 +25,15 @@ describe("loadSettings", () => {
 
   it("honours an explicit PCT_ANSIBLE_DIR", () => {
     expect(loadSettings({ PCT_ANSIBLE_DIR: "/srv/ansible" }).ansibleDir).toBe("/srv/ansible");
+  });
+
+  it("honours explicit SSH key paths", () => {
+    const settings = loadSettings({
+      PCT_SSH_PUBLIC_KEY_PATH: "/keys/server.pub",
+      PCT_SSH_PRIVATE_KEY_PATH: "/keys/server",
+    });
+    expect(settings.sshPublicKeyPath).toBe("/keys/server.pub");
+    expect(settings.sshPrivateKeyPath).toBe("/keys/server");
   });
 
   it("round-trips explicit base values", () => {

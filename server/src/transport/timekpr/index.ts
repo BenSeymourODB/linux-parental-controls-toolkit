@@ -38,3 +38,9 @@ export {
   type TimekprTransport,
 } from "./client.js";
 export { TimekprUserInfo, timekprUserInfoSchema } from "./userinfo.js";
+export {
+  allowedWindowsToAllowedHours,
+  buildWeeklyAllowedHoursCommands,
+  type TimeWindow,
+  type WeeklyAllowedWindows,
+} from "./allowed-hours.js";

@@ -154,6 +154,15 @@ const settingsSchema = z
      */
     sshPublicKeyPath: z.string().min(1).default("/data/secrets/ssh/id_ed25519.pub"),
     /**
+     * Path to the dashboard's SSH **private** key (`PCT_SSH_PRIVATE_KEY_PATH`).
+     * The key pair is generated server-side on first run (#39, the Phase-4
+     * step) if absent; the `transport/ssh` facade authenticates to clients with
+     * it. Defaults to the documented `/data/secrets/ssh` layout, paired with
+     * {@link settingsSchema}'s `sshPublicKeyPath` (`docs/server-deployment.md`
+     * → "Volume layout").
+     */
+    sshPrivateKeyPath: z.string().min(1).default("/data/secrets/ssh/id_ed25519"),
+    /**
      * Phase-5 telemetry pull (#86): the croner schedule and per-pass
      * concurrency for opening SSH port-forwards to each client's `aw-server`.
      */
@@ -266,6 +275,7 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
     adminPassword: env.PCT_ADMIN_PASSWORD,
     ansibleDir: env.PCT_ANSIBLE_DIR,
     sshPublicKeyPath: env.PCT_SSH_PUBLIC_KEY_PATH,
+    sshPrivateKeyPath: env.PCT_SSH_PRIVATE_KEY_PATH,
     telemetry: {
       pullCron: env.PCT_TELEMETRY_PULL_CRON,
       pullConcurrency: env.PCT_TELEMETRY_PULL_CONCURRENCY,

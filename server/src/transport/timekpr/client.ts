@@ -20,6 +20,7 @@
 import type { ZodType } from "zod";
 
 import type { ExecOptions, ExecResult, SshTarget } from "../ssh/facade.js";
+import { buildWeeklyAllowedHoursCommands, type WeeklyAllowedWindows } from "./allowed-hours.js";
 import {
   buildSetAllowedDays,
   buildSetAllowedHours,
@@ -123,6 +124,36 @@ export class TimekprClient {
   /** Set the allowed hours for one weekday (or every day) (`--setallowedhours`). */
   setAllowedHours(day: AllowedHoursDay, hours: readonly AllowedHour[]): Promise<ExecResult> {
     return this.#exec(() => buildSetAllowedHours(this.#username, day, hours));
+  }
+
+  /**
+   * Push a whole week of recurring allowed-access windows (#140) — the
+   * effective-policy resolver's per-weekday `allowedWindows` translated to
+   * `timekpra` allowed-days + allowed-hours via
+   * {@link buildWeeklyAllowedHoursCommands}. Runs `--setalloweddays` first, then
+   * the `--setallowedhours` command(s), **in order**, returning each result.
+   *
+   * Not atomic: a failed step rejects (the facade's `SshCommandError` /
+   * `SshUnreachableError` taxonomy propagates unchanged) and leaves earlier
+   * steps applied; the offline queue (#84) replays the whole push on the next
+   * reachable probe, so a partial application is transient. A window set the
+   * `timekpra` grammar cannot represent surfaces as a rejected promise (the
+   * builder throws {@link TimekprArgumentError} synchronously, caught by this
+   * async method), uniformly with the per-command setters.
+   */
+  async setWeeklyAllowedHours(weekly: WeeklyAllowedWindows): Promise<ExecResult[]> {
+    const commands = buildWeeklyAllowedHoursCommands(this.#username, weekly);
+    const results: ExecResult[] = [];
+    for (const argv of commands) {
+      results.push(
+        await this.#transport.execChecked(
+          this.#target,
+          [...this.#binary, ...argv],
+          this.#execOptions,
+        ),
+      );
+    }
+    return results;
   }
 
   /** Set the per-weekday daily session-time limits in seconds (`--settimelimits`). */

@@ -101,10 +101,24 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Build SvelteKit frontend (/admin + /app)
+      - name: Install server deps (for the shared /api type check)
+        # `npm run check` (svelte-check) type-checks the frontend's type-only
+        # imports of the inferred zod DTOs from server/src (CLAUDE.md →
+        # "Validation / DTOs"; #53), resolving the server graph's bare imports
+        # (zod, drizzle-orm) from server/node_modules. So the server package
+        # must be installed for the *check*. The production build (`npm run
+        # build` = `vite build`) erases the type-only imports and needs neither
+        # the server source nor its deps — which is why the Docker image's
+        # frontend stage builds standalone.
+        run: |
+          if [ -f server/package.json ]; then
+            cd server && npm ci
+          fi
+
+      - name: Build + check + test the SvelteKit frontend (/admin + /app)
         run: |
           if [ -f server/frontend/package.json ]; then
-            cd server/frontend && npm ci && npm run build
+            cd server/frontend && npm ci && npm run check && npm test && npm run build
           else
             echo "Frontend not yet scaffolded — skipping"
           fi
