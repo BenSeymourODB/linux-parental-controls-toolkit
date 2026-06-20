@@ -34,9 +34,12 @@
     aw_port: 5600
     aw_arch: linux-x86_64
     aw_release_base: https://github.com/ActivityWatch/activitywatch/releases/download
-    # The supervised Linux usernames to manage on this host. The dashboard
-    # passes this from the host's UserOnClient links; empty = bundle-only.
-    aw_supervised_users: []
+    # `aw_supervised_users` is intentionally not declared as a play var: play
+    # vars beat inventory group_vars in Ansible's precedence, so a default of
+    # `[]` here would silently mask the list Molecule's group_vars and the
+    # dashboard's `--extra-vars` pass in. The empty-list safety net is applied
+    # below via `set_fact ... when: ... is not defined`, which only fires when
+    # no caller provided a value at all.
     # The three per-user units. Content differs by unit; the path layout is the
     # extracted bundle's, matching the baseline's ExecStart lines.
     aw_units:
@@ -51,6 +54,11 @@
         exec: "{{ aw_prefix }}/activitywatch/aw-watcher-window/aw-watcher-window"
 
   tasks:
+    - name: Apply the empty-list default for aw_supervised_users when unset
+      ansible.builtin.set_fact:
+        aw_supervised_users: []
+      when: aw_supervised_users is not defined
+
     - name: Read the passwd database for supervised-user home/uid lookup
       ansible.builtin.getent:
         database: passwd
@@ -81,6 +89,18 @@
         owner: root
         group: root
         mode: "0755"
+
+    # Mint ships unzip by default, but a freshly imaged client (or the Molecule
+    # converge image) may not — the bundle is a .zip and `ansible.builtin.
+    # unarchive` requires `unzip` on the target. Ensure it's present before the
+    # upgrade step so the playbook converges on a stock distro image.
+    - name: Ensure the unzip binary is present (needed by the unarchive step)
+      ansible.builtin.apt:
+        name: unzip
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+      when: aw_upgrade_required
 
     # --- bundle deploy/upgrade (idempotent via the version stamp) -----------
 
