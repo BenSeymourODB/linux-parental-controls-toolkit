@@ -128,13 +128,14 @@ describe("clients.platform reservation (#229)", () => {
     expect(row?.platform).toBe("linux");
   });
 
-  it("accepts the reserved 'windows' value", () => {
-    expect(() =>
-      db
-        .insert(clients)
-        .values({ hostname: "box-b", sshUser: "pct-agent", platform: "windows" })
-        .run(),
-    ).not.toThrow();
+  it("accepts and stores the reserved 'windows' value", () => {
+    const row = db
+      .insert(clients)
+      .values({ hostname: "box-b", sshUser: "pct-agent", platform: "windows" })
+      .returning()
+      .get();
+
+    expect(row?.platform).toBe("windows");
   });
 
   it("rejects a platform outside the tuple", () => {
