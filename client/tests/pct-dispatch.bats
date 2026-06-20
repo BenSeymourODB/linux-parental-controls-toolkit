@@ -90,8 +90,12 @@ teardown() {
 
 @test "pct_require_supported_client accepts a Linux Debian-family host" {
   printf 'ID=ubuntu\nID_LIKE=debian\n' >"$OSREL"
+  # Called without `run` so the in-process side effects (sourcing the adapter)
+  # are observable; capture the exit status explicitly since bats does not run
+  # tests under `set -e`.
   PCT_UNAME=Linux PCT_OS_RELEASE="$OSREL" pct_require_supported_client
-  # Sourcing the adapter is a side effect we can observe in-process.
+  local rc=$?
+  [ "$rc" -eq 0 ]
   [ "$PCT_OS_FAMILY" = "linux" ]
   [ "$PCT_DISTRO_FAMILY" = "debian" ]
   [[ "$PCT_DISTRO_ADAPTER" == *"/distros/debian.sh" ]]
@@ -102,6 +106,15 @@ teardown() {
   PCT_UNAME=Windows_NT run pct_require_supported_client
   [ "$status" -ne 0 ]
   [[ "$output" == *"OS family 'windows'"* ]]
+  [[ "$output" == *"only 'linux' is implemented"* ]]
+}
+
+@test "pct_require_supported_client gates every non-Linux family, not just Windows" {
+  # macOS (Darwin) is also rejected — proving the family gate is general, not a
+  # Windows special case. Linux is the only family with an installer today.
+  PCT_UNAME=Darwin run pct_require_supported_client
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"OS family 'macos'"* ]]
   [[ "$output" == *"only 'linux' is implemented"* ]]
 }
 
