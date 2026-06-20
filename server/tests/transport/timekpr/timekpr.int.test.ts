@@ -61,12 +61,16 @@ describe.skipIf(!liveSshEnabled)("TimekprClient over live SSH (stub timekpra)", 
     await client.setTimeLimits([3600, 3600, 3600, 3600, 3600, 7200, 7200]);
     await client.setTimeLimitWeek(86_400);
     await client.setTimeLimitMonth(360_000);
-    // Weekday-list day position + a [mm-60] minute window + an unaccounted
-    // hour — the exact grammar items PR #155's review flagged.
-    await client.setAllowedHours(
-      [1, 2, 3, 4, 5],
-      [{ hour: 8, startMinute: 30, endMinute: 60 }, { hour: 9 }, { hour: 22, unaccounted: true }],
-    );
+    // A representative single-day rule and an `ALL`-day rule, including a
+    // minute window and an unaccounted hour. The day position is intentionally
+    // not a `;`-joined weekday list — the real binary rejects that form (#207
+    // findings); callers loop the setter to apply the same hours across
+    // multiple weekdays.
+    await client.setAllowedHours(1, [
+      { hour: 8, startMinute: 30, endMinute: 45 },
+      { hour: 9 },
+      { hour: 22, unaccounted: true },
+    ]);
     await client.setAllowedHours(ALL_DAYS, [{ hour: 0 }, { hour: 23 }]);
     await client.setPlayTimeActivities([
       { mask: "minetest", description: "Minetest" },
@@ -77,7 +81,7 @@ describe.skipIf(!liveSshEnabled)("TimekprClient over live SSH (stub timekpra)", 
     expect(log).toContain("--settimelimits alice 3600;3600;3600;3600;3600;7200;7200");
     expect(log).toContain("--settimelimitweek alice 86400");
     expect(log).toContain("--settimelimitmonth alice 360000");
-    expect(log).toContain("--setallowedhours alice 1;2;3;4;5 8[30-60];9;!22");
+    expect(log).toContain("--setallowedhours alice 1 8[30-45];9;!22");
     expect(log).toContain("--setallowedhours alice ALL 0;23");
     expect(log).toContain("--setplaytimeactivities alice minetest[Minetest];steam");
   });
