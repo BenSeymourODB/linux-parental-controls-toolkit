@@ -20,6 +20,24 @@ import { isValidCronPattern } from "./transport/activitywatch/telemetry.js";
 const LOG_LEVELS = ["trace", "debug", "info", "warn", "error", "fatal", "silent"] as const;
 
 /**
+ * A bare playbook file name — letters, digits, `.`, `_`, `-`, no path
+ * separators — matching the Ansible runner's own `assertSafePlaybookName`
+ * guard (`transport/ansible/index.ts`). Validating the re-apply playbook list
+ * here fails a typo fast at startup; the runner re-checks defensively at run
+ * time.
+ */
+const PLAYBOOK_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
+
+/** Split a comma-separated `PCT_REAPPLY_PLAYBOOKS` value into trimmed names. */
+function splitPlaybookList(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  return value
+    .split(",")
+    .map((name) => name.trim())
+    .filter((name) => name.length > 0);
+}
+
+/**
  * Normalize a `DATABASE_URL` value to a bare filesystem path.
  *
  * `DATABASE_URL` is accepted in two interchangeable forms: a bare path
@@ -136,6 +154,15 @@ const settingsSchema = z
      */
     sshPublicKeyPath: z.string().min(1).default("/data/secrets/ssh/id_ed25519.pub"),
     /**
+     * Path to the dashboard's SSH **private** key (`PCT_SSH_PRIVATE_KEY_PATH`).
+     * The key pair is generated server-side on first run (#39, the Phase-4
+     * step) if absent; the `transport/ssh` facade authenticates to clients with
+     * it. Defaults to the documented `/data/secrets/ssh` layout, paired with
+     * {@link settingsSchema}'s `sshPublicKeyPath` (`docs/server-deployment.md`
+     * → "Volume layout").
+     */
+    sshPrivateKeyPath: z.string().min(1).default("/data/secrets/ssh/id_ed25519"),
+    /**
      * Phase-5 telemetry pull (#86): the croner schedule and per-pass
      * concurrency for opening SSH port-forwards to each client's `aw-server`.
      */
@@ -155,6 +182,40 @@ const settingsSchema = z
        * (`PCT_TELEMETRY_PULL_CONCURRENCY`). Defaults to 4.
        */
       pullConcurrency: z.coerce.number().int().positive().default(4),
+    }),
+    /**
+     * Phase-6 periodic re-apply / tamper-reversion scheduler (#93): the croner
+     * cadence and the ordered list of playbooks re-run against the fleet to
+     * revert local config drift. Consumed by the activation wiring once the
+     * first-run venv (#39) and the playbooks (#90/#91/#92) land — like the
+     * `telemetry` block above, it is parsed-and-ready ahead of that wiring.
+     */
+    reapply: z.object({
+      /**
+       * croner pattern for the re-apply pass (`PCT_REAPPLY_CRON`). Validated
+       * here so a typo fails fast. Defaults to hourly — drift reversion is not
+       * latency-critical.
+       */
+      cron: z
+        .string()
+        .min(1)
+        .default("0 * * * *")
+        .refine(isValidCronPattern, { message: "must be a valid cron pattern (e.g. 0 * * * *)" }),
+      /**
+       * Comma-separated playbook names to re-apply (`PCT_REAPPLY_PLAYBOOKS`,
+       * e.g. `e2guardian.yml,activitywatch.yml`). Defaults to empty — every
+       * pass is a no-op until the Phase-6 playbooks exist.
+       */
+      playbooks: z.preprocess(
+        splitPlaybookList,
+        z
+          .array(
+            z.string().regex(PLAYBOOK_NAME_PATTERN, {
+              message: "must be a bare playbook file name (letters, digits, '.', '_', '-')",
+            }),
+          )
+          .default([]),
+      ),
     }),
     adguard: adguardSchema,
   })
@@ -214,9 +275,14 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
     adminPassword: env.PCT_ADMIN_PASSWORD,
     ansibleDir: env.PCT_ANSIBLE_DIR,
     sshPublicKeyPath: env.PCT_SSH_PUBLIC_KEY_PATH,
+    sshPrivateKeyPath: env.PCT_SSH_PRIVATE_KEY_PATH,
     telemetry: {
       pullCron: env.PCT_TELEMETRY_PULL_CRON,
       pullConcurrency: env.PCT_TELEMETRY_PULL_CONCURRENCY,
+    },
+    reapply: {
+      cron: env.PCT_REAPPLY_CRON,
+      playbooks: env.PCT_REAPPLY_PLAYBOOKS,
     },
     adguard: {
       mode: env.PCT_ADGUARD_MODE ?? "disabled",

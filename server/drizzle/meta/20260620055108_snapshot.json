@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "442d7c7f-837d-4479-a445-ae3e682ce75e",
+  "id": "7a2031e5-547d-456f-8129-406f2a5499d1",
   "prevId": "adb56c36-e171-4f6f-8bee-52f8580caaeb",
   "tables": {
     "activities": {
@@ -27,6 +27,14 @@
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
+        },
+        "match_type": {
+          "name": "match_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'exact'"
         }
       },
       "indexes": {},
@@ -37,6 +45,10 @@
         "activities_kind_check": {
           "name": "activities_kind_check",
           "value": "\"activities\".\"kind\" in ('app', 'app_group', 'domain', 'domain_group')"
+        },
+        "activities_match_type_check": {
+          "name": "activities_match_type_check",
+          "value": "\"activities\".\"match_type\" in ('exact', 'substring', 'glob', 'regex')"
         }
       }
     },
@@ -870,256 +882,6 @@
         "grants_source_check": {
           "name": "grants_source_check",
           "value": "\"grants\".\"source\" = 'admin' or \"grants\".\"source\" like 'integration:%'"
-        }
-      }
-    },
-    "group_exceptions": {
-      "name": "group_exceptions",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "integer",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": true
-        },
-        "user_group_id": {
-          "name": "user_group_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "target_kind": {
-          "name": "target_kind",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "target_id": {
-          "name": "target_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "action": {
-          "name": "action",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "reason": {
-          "name": "reason",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "effective_from": {
-          "name": "effective_from",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "expires_at": {
-          "name": "expires_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "(unixepoch())"
-        }
-      },
-      "indexes": {
-        "group_exceptions_group_expires_idx": {
-          "name": "group_exceptions_group_expires_idx",
-          "columns": [
-            "user_group_id",
-            "expires_at"
-          ],
-          "isUnique": false
-        }
-      },
-      "foreignKeys": {
-        "group_exceptions_user_group_id_user_groups_id_fk": {
-          "name": "group_exceptions_user_group_id_user_groups_id_fk",
-          "tableFrom": "group_exceptions",
-          "tableTo": "user_groups",
-          "columnsFrom": [
-            "user_group_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {
-        "group_exceptions_target_kind_check": {
-          "name": "group_exceptions_target_kind_check",
-          "value": "\"group_exceptions\".\"target_kind\" in ('overall', 'activity', 'group')"
-        },
-        "group_exceptions_action_check": {
-          "name": "group_exceptions_action_check",
-          "value": "\"group_exceptions\".\"action\" in ('allow', 'deny', 'extend')"
-        },
-        "group_exceptions_target_coherence_check": {
-          "name": "group_exceptions_target_coherence_check",
-          "value": "(\"group_exceptions\".\"target_kind\" = 'overall') = (\"group_exceptions\".\"target_id\" is null)"
-        },
-        "group_exceptions_effective_window_check": {
-          "name": "group_exceptions_effective_window_check",
-          "value": "\"group_exceptions\".\"effective_from\" is null or \"group_exceptions\".\"effective_from\" < \"group_exceptions\".\"expires_at\""
-        }
-      }
-    },
-    "group_schedules": {
-      "name": "group_schedules",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "integer",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": true
-        },
-        "user_group_id": {
-          "name": "user_group_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "target_kind": {
-          "name": "target_kind",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "target_id": {
-          "name": "target_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "recurrence_days": {
-          "name": "recurrence_days",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "recurrence_start_minute": {
-          "name": "recurrence_start_minute",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "recurrence_end_minute": {
-          "name": "recurrence_end_minute",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "effective_from": {
-          "name": "effective_from",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "effective_to": {
-          "name": "effective_to",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "action": {
-          "name": "action",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "ordinal": {
-          "name": "ordinal",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": 0
-        }
-      },
-      "indexes": {
-        "group_schedules_group_ordinal_idx": {
-          "name": "group_schedules_group_ordinal_idx",
-          "columns": [
-            "user_group_id",
-            "ordinal"
-          ],
-          "isUnique": false
-        }
-      },
-      "foreignKeys": {
-        "group_schedules_user_group_id_user_groups_id_fk": {
-          "name": "group_schedules_user_group_id_user_groups_id_fk",
-          "tableFrom": "group_schedules",
-          "tableTo": "user_groups",
-          "columnsFrom": [
-            "user_group_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {
-        "group_schedules_target_kind_check": {
-          "name": "group_schedules_target_kind_check",
-          "value": "\"group_schedules\".\"target_kind\" in ('overall', 'activity', 'group')"
-        },
-        "group_schedules_action_check": {
-          "name": "group_schedules_action_check",
-          "value": "\"group_schedules\".\"action\" in ('allow', 'deny', 'extend')"
-        },
-        "group_schedules_target_coherence_check": {
-          "name": "group_schedules_target_coherence_check",
-          "value": "(\"group_schedules\".\"target_kind\" = 'overall') = (\"group_schedules\".\"target_id\" is null)"
-        },
-        "group_schedules_recurrence_days_check": {
-          "name": "group_schedules_recurrence_days_check",
-          "value": "\"group_schedules\".\"recurrence_days\" is null or (\"group_schedules\".\"recurrence_days\" between 1 and 127)"
-        },
-        "group_schedules_recurrence_minutes_check": {
-          "name": "group_schedules_recurrence_minutes_check",
-          "value": "(\"group_schedules\".\"recurrence_start_minute\" is null) = (\"group_schedules\".\"recurrence_end_minute\" is null) and (\"group_schedules\".\"recurrence_start_minute\" is null or (\"group_schedules\".\"recurrence_start_minute\" >= 0 and \"group_schedules\".\"recurrence_end_minute\" <= 1440 and \"group_schedules\".\"recurrence_start_minute\" < \"group_schedules\".\"recurrence_end_minute\"))"
-        },
-        "group_schedules_effective_window_check": {
-          "name": "group_schedules_effective_window_check",
-          "value": "\"group_schedules\".\"effective_from\" is null or \"group_schedules\".\"effective_to\" is null or \"group_schedules\".\"effective_from\" < \"group_schedules\".\"effective_to\""
         }
       }
     },

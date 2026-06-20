@@ -117,6 +117,20 @@ export {
   type EnrolmentTokenResponse,
 } from "./clients/index.js";
 
+// Client health/status DTOs (#81): the contract the admin "Clients" page reads
+// (per-client reachability, component health, offline + queued-change state).
+export {
+  clientHealthSchema,
+  clientHealthListSchema,
+  clientQueueSchema,
+  componentHealthSchema,
+  queuedActionSummarySchema,
+  type ClientHealthResponse,
+  type ClientQueueDto,
+  type ComponentHealthDto,
+  type QueuedActionSummary,
+} from "./clients/index.js";
+
 // Transport-audit DTOs (#85): the read-only contract for the admin audit view.
 // Schemas live in `./audit/dtos.ts` next to the route.
 export {

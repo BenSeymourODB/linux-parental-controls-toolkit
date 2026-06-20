@@ -1,0 +1,214 @@
+---
+# ActivityWatch managed deploy/upgrade — Phase 6, issue #91.
+#
+# Deploys and upgrades ActivityWatch (aw-server + the window/AFK watchers) as
+# `systemd --user` units across supervised users, and reconciles drift on every
+# run so a local edit is reverted on the next re-apply (the Phase-6 periodic
+# re-apply scheduler, #93). It owns the *managed* lifecycle on top of the
+# Phase-3 baseline laid down by `client/install-baseline-tools.sh` (#79); the
+# version pin, prefix, loopback binding and unit shapes mirror that script
+# exactly so the two never disagree about on-disk state.
+#
+# License boundary: ActivityWatch (MPL-2.0) is fetched onto the CLIENT here,
+# exactly like an `apt` install — never into the dashboard image. Ansible
+# (GPL-3.0) is only ever exec'd as a subprocess by the `transport/ansible`
+# runner; nothing is linked, imported, or vendored. aw-server stays bound to
+# loopback and is only ever reached over its REST API (CLAUDE.md → "License
+# boundaries"; docs/licensing-analysis.md).
+#
+# Invoked by the dashboard's Ansible runner as `playbooks/activitywatch.yml`
+# with the supervised users supplied as `--extra-vars` (e.g.
+# `{"aw_supervised_users": ["alice", "bob"]}`).
+- name: Deploy and upgrade ActivityWatch as per-user systemd units
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    # Kept in step with client/install-baseline-tools.sh (#79). Override via
+    # --extra-vars to roll the fleet forward to a new ActivityWatch release.
+    aw_version: v0.13.2
+    aw_sha256: 8f62b10babf8a8f108cbdf7267c02fbc1ce2a970fa9535f230b3416b803e3360
+    aw_prefix: /opt/activitywatch
+    aw_host: 127.0.0.1
+    aw_port: 5600
+    aw_arch: linux-x86_64
+    aw_release_base: https://github.com/ActivityWatch/activitywatch/releases/download
+    # `aw_supervised_users` is intentionally not declared as a play var: play
+    # vars beat inventory group_vars in Ansible's precedence, so a default of
+    # `[]` here would silently mask the list Molecule's group_vars and the
+    # dashboard's `--extra-vars` pass in. The empty-list safety net is applied
+    # below via `set_fact ... when: ... is not defined`, which only fires when
+    # no caller provided a value at all.
+    # The three per-user units. Content differs by unit; the path layout is the
+    # extracted bundle's, matching the baseline's ExecStart lines.
+    aw_units:
+      - name: aw-server
+        description: ActivityWatch server (loopback only)
+        exec: "{{ aw_prefix }}/activitywatch/aw-server-rust/aw-server-rust --host {{ aw_host }} --port {{ aw_port }}"
+      - name: aw-watcher-afk
+        description: ActivityWatch AFK watcher
+        exec: "{{ aw_prefix }}/activitywatch/aw-watcher-afk/aw-watcher-afk"
+      - name: aw-watcher-window
+        description: ActivityWatch window watcher
+        exec: "{{ aw_prefix }}/activitywatch/aw-watcher-window/aw-watcher-window"
+
+  tasks:
+    - name: Apply the empty-list default for aw_supervised_users when unset
+      ansible.builtin.set_fact:
+        aw_supervised_users: []
+      when: aw_supervised_users is not defined
+
+    - name: Read the passwd database for supervised-user home/uid lookup
+      ansible.builtin.getent:
+        database: passwd
+
+    - name: Read the installed ActivityWatch version stamp
+      ansible.builtin.slurp:
+        src: "{{ aw_prefix }}/.pct-aw-version"
+      register: aw_stamp
+      failed_when: false
+      changed_when: false
+
+    - name: Decide whether a deploy/upgrade is required
+      ansible.builtin.set_fact:
+        aw_installed_version: >-
+          {{ (aw_stamp.content | b64decode | trim)
+             if (aw_stamp.content is defined) else '' }}
+      changed_when: false
+
+    - name: Record the deploy/upgrade decision
+      ansible.builtin.set_fact:
+        aw_upgrade_required: "{{ aw_installed_version != aw_version }}"
+      changed_when: false
+
+    - name: Ensure the ActivityWatch prefix exists
+      ansible.builtin.file:
+        path: "{{ aw_prefix }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    # Mint ships unzip by default, but a freshly imaged client (or the Molecule
+    # converge image) may not — the bundle is a .zip and `ansible.builtin.
+    # unarchive` requires `unzip` on the target. Ensure it's present before the
+    # upgrade step so the playbook converges on a stock distro image.
+    - name: Ensure the unzip binary is present (needed by the unarchive step)
+      ansible.builtin.apt:
+        name: unzip
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+      when: aw_upgrade_required
+
+    # --- bundle deploy/upgrade (idempotent via the version stamp) -----------
+
+    - name: Download the ActivityWatch release bundle (checksum-verified)
+      ansible.builtin.get_url:
+        url: "{{ aw_release_base }}/{{ aw_version }}/activitywatch-{{ aw_version }}-{{ aw_arch }}.zip"
+        dest: "{{ aw_prefix }}/activitywatch-{{ aw_version }}-{{ aw_arch }}.zip"
+        checksum: "sha256:{{ aw_sha256 }}"
+        owner: root
+        group: root
+        mode: "0644"
+      when: aw_upgrade_required
+
+    - name: Extract the ActivityWatch bundle
+      ansible.builtin.unarchive:
+        src: "{{ aw_prefix }}/activitywatch-{{ aw_version }}-{{ aw_arch }}.zip"
+        dest: "{{ aw_prefix }}"
+        remote_src: true
+        owner: root
+        group: root
+      when: aw_upgrade_required
+
+    - name: Record the installed ActivityWatch version
+      ansible.builtin.copy:
+        dest: "{{ aw_prefix }}/.pct-aw-version"
+        content: "{{ aw_version }}\n"
+        owner: root
+        group: root
+        mode: "0644"
+      when: aw_upgrade_required
+
+    # --- per-user configuration + units (drift reconciled every run) --------
+
+    - name: Reconcile per-user ActivityWatch configuration and units
+      when: aw_supervised_users | length > 0
+      block:
+        - name: Ensure the aw-server config directory exists
+          ansible.builtin.file:
+            path: "{{ ansible_facts.getent_passwd[item][4] }}/.config/activitywatch/aw-server-rust"
+            state: directory
+            owner: "{{ item }}"
+            group: "{{ item }}"
+            mode: "0755"
+          loop: "{{ aw_supervised_users }}"
+
+        - name: Ensure the systemd --user unit directory exists
+          ansible.builtin.file:
+            path: "{{ ansible_facts.getent_passwd[item][4] }}/.config/systemd/user"
+            state: directory
+            owner: "{{ item }}"
+            group: "{{ item }}"
+            mode: "0755"
+          loop: "{{ aw_supervised_users }}"
+
+        - name: Render the loopback-only aw-server config
+          ansible.builtin.template:
+            src: aw-server-config.toml.j2
+            dest: "{{ ansible_facts.getent_passwd[item][4] }}/.config/activitywatch/aw-server-rust/config.toml"
+            owner: "{{ item }}"
+            group: "{{ item }}"
+            mode: "0644"
+          loop: "{{ aw_supervised_users }}"
+
+        - name: Render the per-user systemd --user units
+          ansible.builtin.template:
+            src: aw-unit.service.j2
+            dest: "{{ ansible_facts.getent_passwd[item.0][4] }}/.config/systemd/user/{{ item.1.name }}.service"
+            owner: "{{ item.0 }}"
+            group: "{{ item.0 }}"
+            mode: "0644"
+          vars:
+            unit: "{{ item.1 }}"
+          loop: "{{ aw_supervised_users | product(aw_units) | list }}"
+          loop_control:
+            label: "{{ item.0 }}/{{ item.1.name }}"
+
+        - name: Enable lingering so user units run without an active login
+          ansible.builtin.command:
+            cmd: "loginctl enable-linger {{ item }}"
+            creates: "/var/lib/systemd/linger/{{ item }}"
+          loop: "{{ aw_supervised_users }}"
+
+        - name: Reload the user manager and enable the ActivityWatch units
+          ansible.builtin.systemd_service:
+            name: "{{ item.1.name }}.service"
+            scope: user
+            enabled: true
+            daemon_reload: true
+          become: true
+          become_user: "{{ item.0 }}"
+          environment:
+            XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts.getent_passwd[item.0][1] }}"
+          loop: "{{ aw_supervised_users | product(aw_units) | list }}"
+          loop_control:
+            label: "{{ item.0 }}/{{ item.1.name }}"
+
+        # aw-server is display-independent, so an upgrade restarts it now. The
+        # watchers need a desktop session; they pick up the new binary on the
+        # user's next login (the units stay enabled), so we don't force-restart
+        # them here and fail on a headless host.
+        - name: Restart aw-server after an upgrade
+          ansible.builtin.systemd_service:
+            name: aw-server.service
+            scope: user
+            state: restarted
+          become: true
+          become_user: "{{ item }}"
+          environment:
+            XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts.getent_passwd[item][1] }}"
+          loop: "{{ aw_supervised_users }}"
+          when: aw_upgrade_required
