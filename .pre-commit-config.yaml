@@ -33,7 +33,7 @@ repos:
     rev: v0.10.0
     hooks:
       - id: shellcheck
-        files: ^client/.*\.sh$
+        files: ^(client|scripts)/.*\.sh$
 
   # ansible-lint is intentionally kept in ci.yml only (not here), because
   # the pre-commit hook has environment sensitivity with ansible-core versions

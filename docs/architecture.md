@@ -110,10 +110,16 @@ User          (id, display_name, tz?)
               --  The user's effective TZ defines daily/weekly/monthly
               --  budget rollover. See docs/adr/0001-budget-timezone.md.
 Client        (id, hostname, ssh_user, bearer_token_hash?, enrolled_at,
-                last_seen)
+                last_seen, agent_version?, component_versions?,
+                versions_reported_at?)
               --  bearer_token_hash is the SHA-256 of the per-client bearer
               --  token issued at enrolment (the /api/events/stream credential);
               --  NULL for a client created via admin CRUD, set at enrol time.
+              --  agent_version / component_versions (JSON: {timekpr?,
+              --  e2guardian?, activitywatch?}) / versions_reported_at are the
+              --  fleet inventory the client reports at enrolment (#164); all
+              --  NULL until reported. The Phase-8b heartbeat (#165/#101)
+              --  refreshes agent_version + versions_reported_at later.
 UserOnClient  (user_id, client_id, linux_username, linux_uid)
 
 EnrolmentToken (id, token_hash, hostname?, supervised_users[],

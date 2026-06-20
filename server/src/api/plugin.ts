@@ -10,6 +10,7 @@ import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 
 import { registerAuth } from "../auth/index.js";
 import type { Settings } from "../config.js";
+import { registerAuditRoutes } from "./audit/index.js";
 import { registerClientEnrolmentRoutes, registerClientHealthRoutes } from "./clients/index.js";
 import { registerMetaRoute } from "./meta.js";
 import { registerEffectiveRoutes, registerPolicyRoutes } from "./policy/index.js";
@@ -44,6 +45,8 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (scope, opt
   // until then the routes degrade to `unknown` reachability/components while
   // still surfacing real enrolment + offline-queue state.
   registerClientHealthRoutes(scope);
+  // Transport audit log (#85): admin-only read of every command issued to a client.
+  registerAuditRoutes(scope);
 };
 
 /** Mount the JSON API under `/api` on the given app. */

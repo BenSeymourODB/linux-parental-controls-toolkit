@@ -63,6 +63,14 @@ export {
   type ActivityGroupResponse,
   type CreateActivityGroupRequest,
   type UpdateActivityGroupRequest,
+  // User groups + membership (#124)
+  createUserGroupSchema,
+  updateUserGroupSchema,
+  userGroupResponseSchema,
+  userGroupMemberParamsSchema,
+  type CreateUserGroupRequest,
+  type UpdateUserGroupRequest,
+  type UserGroupResponse,
   // Budgets (#148)
   budgetResponseSchema,
   createBudgetSchema,
@@ -113,6 +121,17 @@ export {
   type ComponentHealthDto,
   type QueuedActionSummary,
 } from "./clients/index.js";
+
+// Transport-audit DTOs (#85): the read-only contract for the admin audit view.
+// Schemas live in `./audit/dtos.ts` next to the route.
+export {
+  auditEntryResponseSchema,
+  auditListResponseSchema,
+  listAuditQuerySchema,
+  type AuditEntryResponse,
+  type AuditListResponse,
+  type ListAuditQuery,
+} from "./audit/index.js";
 
 // Auth DTOs (#52). Re-exported here so the frontend imports the auth contract
 // from the same `/api` surface as every other DTO; the schemas themselves live
