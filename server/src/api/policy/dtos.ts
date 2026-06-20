@@ -23,7 +23,12 @@ import {
   budgetWindowSchema,
   scheduleActionSchema,
   scopeSchema,
+  soundProfileSchema,
 } from "../../policy/enums.js";
+import {
+  defaultNotificationPolicy,
+  notificationGraceSecondsSchema,
+} from "../../policy/notification.js";
 import {
   scheduleRecurrenceSchema,
   minuteOfDaySchema,
@@ -35,6 +40,7 @@ import type {
   BudgetRow,
   ClientRow,
   ExceptionRow,
+  NotificationPolicyRow,
   ScheduleRow,
   UserGroupRow,
   UserOnClientRow,
@@ -481,4 +487,67 @@ export function toExceptionResponse(row: ExceptionRow): ExceptionResponse {
     expiresAt: row.expiresAt.toISOString(),
     createdAt: row.createdAt.toISOString(),
   };
+}
+
+// --- Notification policy (#104) --------------------------------------------
+
+/**
+ * Per-user notification settings (`docs/client-notifications.md` →
+ * "Configuration knobs"). Bounds and the sound-profile enum come from their
+ * single source (`policy/notification.ts`, `policy/enums.ts`) so the wire
+ * contract, the storage `CHECK`, and the synthesized defaults can't drift.
+ *
+ * `cadenceOverrides` is an optional object of per-budget warning-cadence
+ * overrides (the override grammar itself is the agent's concern, #103); `null`
+ * means "use the built-in 15/5/1-minute cadence".
+ */
+const cadenceOverridesSchema = z.record(z.string(), z.unknown());
+
+/**
+ * Notification-policy upsert body (`PUT`). Every field is optional: an omitted
+ * field takes the documented default on first write, or is left unchanged on a
+ * later write. The body must carry at least one field.
+ */
+export const upsertNotificationPolicySchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    soundProfile: soundProfileSchema.optional(),
+    graceSeconds: notificationGraceSecondsSchema.optional(),
+    // Present (incl. explicit null) ⇒ change; absent ⇒ leave unchanged.
+    cadenceOverrides: cadenceOverridesSchema.nullable().optional(),
+  })
+  .refine(nonEmpty, { message: "At least one field must be provided" });
+
+export const notificationPolicyResponseSchema = z.object({
+  userId: z.number().int(),
+  enabled: z.boolean(),
+  soundProfile: soundProfileSchema,
+  graceSeconds: z.number().int(),
+  cadenceOverrides: cadenceOverridesSchema.nullable(),
+});
+
+export type UpsertNotificationPolicyRequest = z.infer<typeof upsertNotificationPolicySchema>;
+export type NotificationPolicyResponse = z.infer<typeof notificationPolicyResponseSchema>;
+
+/** Map a stored notification-policy row to its wire DTO. */
+export function toNotificationPolicyResponse(
+  row: NotificationPolicyRow,
+): NotificationPolicyResponse {
+  return {
+    userId: row.userId,
+    enabled: row.enabled,
+    soundProfile: row.soundProfile,
+    graceSeconds: row.graceSeconds,
+    cadenceOverrides: row.cadenceOverridesJson ?? null,
+  };
+}
+
+/**
+ * The effective notification policy for a user when no row is persisted — the
+ * documented defaults. Every user always *has* an effective policy; it sits at
+ * defaults until the admin customises it.
+ */
+export function defaultNotificationPolicyResponse(userId: number): NotificationPolicyResponse {
+  const defaults = defaultNotificationPolicy();
+  return { userId, ...defaults };
 }
