@@ -10,8 +10,10 @@ import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { installApiConventions } from "../../src/api/validation.js";
+import { hashToken } from "../../src/auth/secret-token.js";
 import { makeRequireIntegrationToken } from "../../src/integrations/guard.js";
 import { issueIntegrationToken, revokeIntegrationToken } from "../../src/integrations/tokens.js";
+import { findIntegrationTokenByHash } from "../../src/policy/integration-tokens.js";
 import { testDb, type TestDb } from "../helpers/db.js";
 
 describe("integration-token guard", () => {
@@ -53,6 +55,14 @@ describe("integration-token guard", () => {
     });
     expect(malformed.statusCode).toBe(401);
     expect(malformed.json().error.code).toBe("unauthorized");
+
+    // An empty bearer credential is rejected before any DB lookup.
+    const empty = await app.inject({
+      method: "GET",
+      url: "/needs-auth",
+      headers: { authorization: "Bearer " },
+    });
+    expect(empty.statusCode).toBe(401);
   });
 
   it("rejects an unknown token with 401", async () => {
@@ -85,6 +95,12 @@ describe("integration-token guard", () => {
     });
     expect(res.statusCode).toBe(403);
     expect(res.json().error.code).toBe("insufficient_scope");
+
+    // The token authenticated (it was validly presented), so `last_used_at` is
+    // stamped even though authorization failed — the documented semantics.
+    expect(findIntegrationTokenByHash(db, hashToken(issued.secret))?.lastUsedAt).toBeInstanceOf(
+      Date,
+    );
   });
 
   it("admits a valid, sufficiently-scoped token and sets request.integration", async () => {

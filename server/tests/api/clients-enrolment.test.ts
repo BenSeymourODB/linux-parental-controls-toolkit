@@ -12,7 +12,7 @@ import { join } from "node:path";
 import type { InjectOptions } from "fastify";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { ENROL_RATE_LIMIT_MAX_ATTEMPTS, parseBearer } from "../../src/api/clients/routes.js";
+import { ENROL_RATE_LIMIT_MAX_ATTEMPTS } from "../../src/api/clients/routes.js";
 import { hashToken } from "../../src/auth/secret-token.js";
 import { SESSION_COOKIE } from "../../src/auth/session.js";
 import { loadSettings, type Settings } from "../../src/config.js";
@@ -36,16 +36,6 @@ function sessionCookie(res: { headers: Record<string, unknown> }): string {
   if (match === undefined) throw new Error("no session cookie set");
   return match.split(";")[0] ?? "";
 }
-
-describe("parseBearer", () => {
-  it("extracts a bearer token, and rejects missing/malformed/empty headers", () => {
-    expect(parseBearer("Bearer abc123")).toBe("abc123");
-    expect(parseBearer(undefined)).toBeNull();
-    expect(parseBearer("Basic abc123")).toBeNull();
-    expect(parseBearer("Bearer ")).toBeNull();
-    expect(parseBearer("Bearer    ")).toBeNull();
-  });
-});
 
 describe("client enrolment routes", () => {
   let harness: TestApp;

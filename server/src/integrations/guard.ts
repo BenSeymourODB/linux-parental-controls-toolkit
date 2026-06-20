@@ -19,7 +19,7 @@
 import type { preHandlerHookHandler } from "fastify";
 
 import { ApiError } from "../api/errors.js";
-import { parseBearer } from "../api/clients/routes.js";
+import { parseBearer } from "../auth/bearer.js";
 import type { PolicyDb } from "../policy/db.js";
 import { authenticateIntegrationToken, type AuthenticatedIntegration } from "./tokens.js";
 import type { IntegrationScope } from "./scopes.js";

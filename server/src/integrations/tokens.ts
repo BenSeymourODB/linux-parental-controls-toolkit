@@ -124,6 +124,12 @@ export function revokeIntegrationToken(db: PolicyDb, id: number): IntegrationTok
  * the guard. An unknown or revoked secret is a 401 — the same code for both so a
  * caller can't distinguish "wrong token" from "revoked token". On success the
  * token's `last_used_at` is touched and its scopes are returned.
+ *
+ * `last_used_at` records the **last successful authentication**, not the last
+ * *authorized* request: a token that authenticates here but is then rejected
+ * `403` by the guard for a missing scope still has its `last_used_at` bumped,
+ * because the credential was validly presented. That is the semantics the admin
+ * audit view should describe.
  */
 export function authenticateIntegrationToken(
   db: PolicyDb,

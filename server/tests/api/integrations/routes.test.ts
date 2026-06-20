@@ -107,6 +107,12 @@ describe("integration-token routes", () => {
     expect(res.json().error.code).toBe("validation_error");
   });
 
+  it("rejects duplicate scopes with a 400", async () => {
+    const res = await mint("calendar", ["grants:write", "grants:write"]);
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.code).toBe("validation_error");
+  });
+
   it("rejects a duplicate name with a 409", async () => {
     expect((await mint("calendar", ["grants:write"])).statusCode).toBe(201);
     const dup = await mint("calendar", ["policy:read"]);
