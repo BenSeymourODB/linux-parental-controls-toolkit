@@ -117,6 +117,13 @@ describe("frontend static mount (build present)", () => {
     expect(res.statusCode).toBe(404);
   });
 
+  it("404s a non-GET method on a deep surface route (fallback is GET-only)", async () => {
+    // The `…/*` fallback only registers `scope.get`, so a write verb to a deep
+    // client-side path is not silently absorbed into the entry page.
+    const res = await app.inject({ method: "POST", url: "/admin/settings" });
+    expect(res.statusCode).toBe(404);
+  });
+
   it("serves root-level static files (e.g. favicon.png)", async () => {
     const res = await app.inject({ method: "GET", url: "/favicon.png" });
     expect(res.statusCode).toBe(200);

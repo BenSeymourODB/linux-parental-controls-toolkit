@@ -27,9 +27,9 @@
  * Per-surface (not a single shared SPA fallback page) because `/admin` and
  * `/app` must fall back to *their own* entry page. The fallback only ever
  * shadows paths under the surface prefix; the shared `/_app/…` assets and the
- * root-level static files (`favicon.png`, `/service-worker.js`,
- * `/app.webmanifest`, `/app-icons/…`) live at the root, not under `/admin/` or
- * `/app/`, so they are untouched.
+ * root-level static files (`/service-worker.js`, `/app.webmanifest`,
+ * `/app-icons/…`) live at the root, not under `/admin/` or `/app/`, so they are
+ * untouched.
  *
  * This works because the prerendered pages reference their assets with
  * **root-absolute** URLs (`/_app/…`, via `kit.paths.relative = false` in
