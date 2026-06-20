@@ -26,6 +26,8 @@ import {
   schedules,
   transportQueue,
   usageSamples,
+  userGroupMemberships,
+  userGroups,
   usersOnClients,
   users,
 } from "../../src/policy/schema.js";
@@ -48,6 +50,8 @@ const allTables: Record<string, SQLiteTable> = {
   notificationPolicies,
   enrolmentTokens,
   transportQueue,
+  userGroups,
+  userGroupMemberships,
 };
 
 let db: TestDb;
@@ -570,6 +574,60 @@ describe("activity groups", () => {
       .pluck()
       .get() as number;
     expect(linked).toBe(1);
+  });
+});
+
+describe("user groups (#124)", () => {
+  it("enforces a unique group name", () => {
+    db.insert(userGroups).values({ name: "kids" }).run();
+    expect(() => db.insert(userGroups).values({ name: "kids" }).run()).toThrow(
+      /UNIQUE constraint/i,
+    );
+  });
+
+  it("defaults created_at on a group", () => {
+    const row = db.insert(userGroups).values({ name: "kids" }).returning().get();
+    expect(row?.createdAt).toBeInstanceOf(Date);
+  });
+
+  it("links users to groups many-to-many", () => {
+    const userId = insertUser("Alice");
+    const groupId = db
+      .insert(userGroups)
+      .values({ name: "kids" })
+      .returning({ id: userGroups.id })
+      .get()?.id;
+    if (groupId === undefined) throw new Error("group insert returned no row");
+
+    db.insert(userGroupMemberships).values({ userId, groupId }).run();
+
+    // The composite PK rejects a duplicate (user, group) membership.
+    expect(() => db.insert(userGroupMemberships).values({ userId, groupId }).run()).toThrow(
+      /UNIQUE constraint|PRIMARY KEY/i,
+    );
+    const linked = db.$client
+      .prepare("SELECT count(*) FROM user_group_memberships")
+      .pluck()
+      .get() as number;
+    expect(linked).toBe(1);
+  });
+
+  it("cascades membership away when the group is deleted", () => {
+    const userId = insertUser("Alice");
+    const groupId = db
+      .insert(userGroups)
+      .values({ name: "kids" })
+      .returning({ id: userGroups.id })
+      .get()?.id;
+    if (groupId === undefined) throw new Error("group insert returned no row");
+    db.insert(userGroupMemberships).values({ userId, groupId }).run();
+
+    db.delete(userGroups).where(eq(userGroups.id, groupId)).run();
+    const remaining = db.$client
+      .prepare("SELECT count(*) FROM user_group_memberships")
+      .pluck()
+      .get() as number;
+    expect(remaining).toBe(0);
   });
 });
 

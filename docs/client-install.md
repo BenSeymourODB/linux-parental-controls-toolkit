@@ -95,6 +95,11 @@ dashboard, has a short TTL, and is single-use.
 8. **Register with the server**
    - POST to `<server>/api/clients/enrol` with hostname, distro info,
      supervised-user details, and the local SSH host key fingerprint.
+   - Also reports the installed versions it could detect (#164) — the
+     `pct-client` agent `.deb` version and the managed-tool versions
+     (`timekpr`, `e2guardian`, `activitywatch`) — so the dashboard keeps a
+     fleet inventory for Phase 14 updates. Detection is best-effort: an
+     undetectable tool is simply omitted, never blocking enrolment.
    - On success, the dashboard now lists the client in its inventory and
      can run an initial Ansible playbook to push the rest of the
      configuration.
