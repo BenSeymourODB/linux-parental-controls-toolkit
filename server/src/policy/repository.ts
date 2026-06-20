@@ -157,6 +157,17 @@ export function deleteClient(db: PolicyDb, id: number): boolean {
   );
 }
 
+/**
+ * Record that the client was confirmed reachable at `at`, returning the updated
+ * row (or `undefined` if it no longer exists). Kept separate from
+ * {@link updateClient}: `last_seen` is a system observation written by the
+ * transport/health paths (#81), not an admin-editable field, so it stays out of
+ * {@link ClientUpdate}.
+ */
+export function recordClientLastSeen(db: PolicyDb, id: number, at: Date): ClientRow | undefined {
+  return db.update(clients).set({ lastSeen: at }).where(eq(clients.id, id)).returning().get();
+}
+
 // --- User-on-client links --------------------------------------------------
 
 /** All links for a user, ascending by client id. */

@@ -16,9 +16,12 @@ describe("loadSettings", () => {
     expect(settings.logLevel).toBe("info");
     expect(settings.secretKey).toBeUndefined();
     expect(settings.ansibleDir).toBe("/data/ansible");
+    expect(settings.sshPublicKeyPath).toBe("/data/secrets/ssh/id_ed25519.pub");
+    expect(settings.sshPrivateKeyPath).toBe("/data/secrets/ssh/id_ed25519");
     expect(settings.adguard).toEqual({ mode: "disabled" });
     expect(settings.telemetry).toEqual({ pullCron: "*/5 * * * *", pullConcurrency: 4 });
     expect(settings.retention).toEqual({ defaultDays: 365 });
+    expect(settings.reapply).toEqual({ cron: "0 * * * *", playbooks: [] });
   });
 
   it("honours an explicit PCT_ANSIBLE_DIR", () => {
@@ -42,6 +45,15 @@ describe("loadSettings", () => {
     it("rejects an absurdly large window (use keep-forever instead)", () => {
       expect(() => loadSettings({ PCT_RETENTION_DEFAULT_DAYS: "99999999" })).toThrow(SettingsError);
     });
+  });
+
+  it("honours explicit SSH key paths", () => {
+    const settings = loadSettings({
+      PCT_SSH_PUBLIC_KEY_PATH: "/keys/server.pub",
+      PCT_SSH_PRIVATE_KEY_PATH: "/keys/server",
+    });
+    expect(settings.sshPublicKeyPath).toBe("/keys/server.pub");
+    expect(settings.sshPrivateKeyPath).toBe("/keys/server");
   });
 
   it("round-trips explicit base values", () => {
@@ -231,6 +243,33 @@ describe("loadSettings", () => {
       expect(() => loadSettings({ PCT_TELEMETRY_PULL_CONCURRENCY: "0" })).toThrow(SettingsError);
       expect(() => loadSettings({ PCT_TELEMETRY_PULL_CONCURRENCY: "-3" })).toThrow(SettingsError);
       expect(() => loadSettings({ PCT_TELEMETRY_PULL_CONCURRENCY: "many" })).toThrow(SettingsError);
+    });
+  });
+
+  describe("PCT_REAPPLY_*", () => {
+    it("honours an explicit cron and a comma-separated playbook list", () => {
+      const settings = loadSettings({
+        PCT_REAPPLY_CRON: "0 */6 * * *",
+        PCT_REAPPLY_PLAYBOOKS: "e2guardian.yml, activitywatch.yml ,apparmor.yml",
+      });
+
+      expect(settings.reapply).toEqual({
+        cron: "0 */6 * * *",
+        // Whitespace around each entry is trimmed and empties dropped.
+        playbooks: ["e2guardian.yml", "activitywatch.yml", "apparmor.yml"],
+      });
+    });
+
+    it("rejects an invalid cron pattern with a readable error", () => {
+      expect(() => loadSettings({ PCT_REAPPLY_CRON: "not a cron" })).toThrow(SettingsError);
+      expect(() => loadSettings({ PCT_REAPPLY_CRON: "not a cron" })).toThrow(/valid cron pattern/);
+    });
+
+    it("rejects a playbook name with path separators", () => {
+      expect(() => loadSettings({ PCT_REAPPLY_PLAYBOOKS: "../escape.yml" })).toThrow(SettingsError);
+      expect(() => loadSettings({ PCT_REAPPLY_PLAYBOOKS: "ok.yml,sub/dir.yml" })).toThrow(
+        /bare playbook file name/,
+      );
     });
   });
 });

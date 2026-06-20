@@ -1,0 +1,33 @@
+---
+# Molecule scenario for the ActivityWatch deploy/upgrade playbook (#91).
+#
+# Docker driver against a systemd-enabled image so `systemctl --user` and user
+# lingering behave as they do on a real Mint desktop. See docs/testing.md →
+# "Ansible playbooks — Molecule". Run with:
+#
+#   pip install molecule molecule-plugins[docker]
+#   cd client/ansible && molecule test
+#
+# (Molecule is never added to the dashboard's dependency tree — it is an
+# Ansible-ecosystem test tool installed into a throwaway environment.)
+driver:
+  name: docker
+platforms:
+  - name: pct-aw-ubuntu2204
+    image: geerlingguy/docker-ubuntu2204-ansible:latest
+    pre_build_image: true
+    command: /lib/systemd/systemd
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+provisioner:
+  name: ansible
+  inventory:
+    group_vars:
+      all:
+        # The supervised users the converge creates and the playbook manages.
+        aw_supervised_users:
+          - alice
+verifier:
+  name: ansible
