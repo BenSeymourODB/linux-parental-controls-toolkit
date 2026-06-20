@@ -39,6 +39,7 @@ import type {
   ClientRow,
   ExceptionRow,
   ScheduleRow,
+  UserGroupRow,
   UserOnClientRow,
   UserRow,
 } from "../../policy/repository.js";
@@ -270,6 +271,43 @@ export const groupActivityParamsSchema = z.object({
  */
 export const userIdQuerySchema = z.object({
   userId: z.coerce.number().int().positive().optional(),
+});
+
+// --- User groups (#124) ----------------------------------------------------
+
+export const createUserGroupSchema = z.object({
+  name: z.string().trim().min(1).max(200),
+});
+
+export const updateUserGroupSchema = z
+  .object({
+    name: z.string().trim().min(1).max(200).optional(),
+  })
+  .refine(nonEmpty, { message: "At least one field must be provided" });
+
+export const userGroupResponseSchema = z.object({
+  id: z.number().int(),
+  name: z.string(),
+  createdAt: z.string(),
+});
+
+export type CreateUserGroupRequest = z.infer<typeof createUserGroupSchema>;
+export type UpdateUserGroupRequest = z.infer<typeof updateUserGroupSchema>;
+export type UserGroupResponse = z.infer<typeof userGroupResponseSchema>;
+
+/** Map a stored user-group row to its wire DTO. */
+export function toUserGroupResponse(row: UserGroupRow): UserGroupResponse {
+  return { id: row.id, name: row.name, createdAt: row.createdAt.toISOString() };
+}
+
+/**
+ * `:groupId`/`:userId` path params for a single user-group membership. (The
+ * `:groupId`-only routes reuse {@link groupIdParamsSchema}, which is the same
+ * `{ groupId }` shape the activity-group membership routes already use.)
+ */
+export const userGroupMemberParamsSchema = z.object({
+  groupId: z.coerce.number().int().positive(),
+  userId: z.coerce.number().int().positive(),
 });
 
 // --- Budgets ---------------------------------------------------------------

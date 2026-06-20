@@ -12,11 +12,11 @@ import { join } from "node:path";
 import type { InjectOptions } from "fastify";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { parseBearer } from "../../src/api/clients/routes.js";
+import { ENROL_RATE_LIMIT_MAX_ATTEMPTS, parseBearer } from "../../src/api/clients/routes.js";
 import { hashToken } from "../../src/auth/secret-token.js";
 import { SESSION_COOKIE } from "../../src/auth/session.js";
 import { loadSettings, type Settings } from "../../src/config.js";
-import { enrolmentTokens } from "../../src/policy/schema.js";
+import { clients, enrolmentTokens } from "../../src/policy/schema.js";
 import { buildTestApp, type TestApp } from "../helpers/app.js";
 
 function settingsWith(env: Record<string, string> = {}): Settings {
@@ -202,6 +202,62 @@ describe("client enrolment routes", () => {
     expect(links.json()).toEqual([
       { userId, clientId: body.clientId, linuxUsername: "alice", linuxUid: 1000 },
     ]);
+  });
+
+  it("records reported component versions at enrolment and echoes them back (#164)", async () => {
+    const userId = await createUser("Alice");
+    const token = await mintFor(userId, "alice");
+
+    const res = await enrol(token, {
+      hostname: "mint-01",
+      sshUser: "pct-agent",
+      supervisedUsers: [{ linuxUsername: "alice", linuxUid: 1000 }],
+      agentVersion: "1.4.0",
+      componentVersions: { timekpr: "0.5.3", activitywatch: "0.13.2" },
+    });
+    expect(res.statusCode).toBe(201);
+    const body = res.json();
+    expect(body.agentVersion).toBe("1.4.0");
+    expect(body.componentVersions).toEqual({ timekpr: "0.5.3", activitywatch: "0.13.2" });
+
+    // The inventory is persisted, with a report timestamp set.
+    const stored = harness.db.select().from(clients).all();
+    expect(stored).toHaveLength(1);
+    expect(stored[0]?.agentVersion).toBe("1.4.0");
+    expect(stored[0]?.componentVersions).toEqual({ timekpr: "0.5.3", activitywatch: "0.13.2" });
+    expect(stored[0]?.versionsReportedAt).toBeInstanceOf(Date);
+  });
+
+  it("leaves the version inventory null when the client reports none (#164)", async () => {
+    const userId = await createUser("Alice");
+    const token = await mintFor(userId, "alice");
+
+    const res = await enrol(token, {
+      hostname: "mint-01",
+      sshUser: "pct-agent",
+      supervisedUsers: [{ linuxUsername: "alice", linuxUid: 1000 }],
+    });
+    expect(res.statusCode).toBe(201);
+    const body = res.json();
+    expect(body.agentVersion).toBeNull();
+    expect(body.componentVersions).toBeNull();
+
+    const stored = harness.db.select().from(clients).all();
+    expect(stored[0]?.versionsReportedAt).toBeNull();
+  });
+
+  it("400s an enrol whose reported version is malformed (#164)", async () => {
+    const userId = await createUser("Alice");
+    const token = await mintFor(userId, "alice");
+
+    const res = await enrol(token, {
+      hostname: "mint-01",
+      sshUser: "pct-agent",
+      supervisedUsers: [{ linuxUsername: "alice", linuxUid: 1000 }],
+      componentVersions: { timekpr: 'bad" version' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.code).toBe("validation_error");
   });
 
   it("401s reuse of a consumed token (single-use)", async () => {
@@ -417,5 +473,111 @@ describe("client enrolment routes", () => {
     });
     expect(res.statusCode).toBe(401);
     expect(res.json().error.code).toBe("enrolment_token_expired");
+  });
+
+  // --- rate limiting (#154) ------------------------------------------------
+
+  describe("rate limiting (#154)", () => {
+    const validPayload = {
+      hostname: "mint-rl",
+      sshUser: "pct-agent",
+      supervisedUsers: [{ linuxUsername: "alice", linuxUid: 1000 }],
+    };
+
+    it("429s once the failed-attempt budget is exhausted (missing-bearer failures)", async () => {
+      const userId = await createUser("Alice");
+      const token = await mintFor(userId, "alice");
+
+      // Exhaust the budget with bearer-less attempts (each a 401).
+      for (let i = 0; i < ENROL_RATE_LIMIT_MAX_ATTEMPTS; i += 1) {
+        const fail = await enrol(null, validPayload);
+        expect(fail.statusCode).toBe(401);
+        expect(fail.json().error.code).toBe("unauthorized");
+      }
+
+      // The next request is refused before processing — even with a valid token.
+      const blocked = await enrol(token, validPayload);
+      expect(blocked.statusCode).toBe(429);
+      expect(blocked.json().error.code).toBe("too_many_requests");
+    });
+
+    it("a successful enrol clears the IP's failure count", async () => {
+      const userId = await createUser("Alice");
+      const token = await mintFor(userId, "alice");
+
+      // One short of the budget with invalid-token failures (service 401s).
+      for (let i = 0; i < ENROL_RATE_LIMIT_MAX_ATTEMPTS - 1; i += 1) {
+        expect((await enrol("not-a-real-token", validPayload)).statusCode).toBe(401);
+      }
+
+      // A success resets the window.
+      expect((await enrol(token, validPayload)).statusCode).toBe(201);
+
+      // Another near-budget run of failures still doesn't trip the limiter —
+      // without the reset, the cumulative count would have blocked us by now.
+      for (let i = 0; i < ENROL_RATE_LIMIT_MAX_ATTEMPTS - 1; i += 1) {
+        const after = await enrol("not-a-real-token", validPayload);
+        expect(after.statusCode).toBe(401);
+      }
+    });
+
+    it("tracks the failed-attempt budget independently per source IP", async () => {
+      const userId = await createUser("Alice");
+      const token = await mintFor(userId, "alice");
+
+      // Exhaust one IP's budget with bearer-less failures.
+      for (let i = 0; i < ENROL_RATE_LIMIT_MAX_ATTEMPTS; i += 1) {
+        const fail = await harness.app.inject({
+          method: "POST",
+          url: "/api/clients/enrol",
+          payload: validPayload,
+          remoteAddress: "10.0.0.1",
+        });
+        expect(fail.statusCode).toBe(401);
+      }
+
+      // That IP is now blocked, even presenting a valid token...
+      const blocked = await harness.app.inject({
+        method: "POST",
+        url: "/api/clients/enrol",
+        payload: validPayload,
+        headers: { authorization: `Bearer ${token}` },
+        remoteAddress: "10.0.0.1",
+      });
+      expect(blocked.statusCode).toBe(429);
+
+      // ...but a different IP is unaffected and enrols normally.
+      const other = await harness.app.inject({
+        method: "POST",
+        url: "/api/clients/enrol",
+        payload: validPayload,
+        headers: { authorization: `Bearer ${token}` },
+        remoteAddress: "10.0.0.2",
+      });
+      expect(other.statusCode).toBe(201);
+    });
+
+    it("valid-token rejections (400/409) don't count toward the budget", async () => {
+      const userId = await createUser("Alice");
+      // A 400 mismatch is thrown before the token is consumed, so one token
+      // drives every mismatch attempt — none of which should accrue.
+      const token = await mintFor(userId, "alice");
+      const mismatch = {
+        hostname: "mint-rl",
+        sshUser: "pct-agent",
+        supervisedUsers: [{ linuxUsername: "bob", linuxUid: 1000 }],
+      };
+
+      for (let i = 0; i < ENROL_RATE_LIMIT_MAX_ATTEMPTS + 2; i += 1) {
+        const res = await enrol(token, mismatch);
+        expect(res.statusCode).toBe(400);
+        expect(res.json().error.code).toBe("enrolment_user_mismatch");
+      }
+
+      // Despite more than a budget's worth of 400s, the same token still enrols:
+      // the limiter never blocked, because valid-token rejections are neutral.
+      const ok = await enrol(token, validPayload);
+      expect(ok.statusCode).toBe(201);
+    });
   });
 });
