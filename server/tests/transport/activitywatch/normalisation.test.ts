@@ -98,7 +98,10 @@ describe("normaliseWindowEvents", () => {
     expect(result).toEqual([]);
   });
 
-  it("ignores non-app-kind activities when resolving window events", () => {
+  it("ignores domain-kind activities but resolves app_group from window events (ADR 0006)", () => {
+    // `domain`/`domain_group` match web requests (web-proxy telemetry, Phase
+    // 6/7), not window events, so they never resolve here. `app_group` is
+    // window-resolvable — an activity whose matcher spans apps — so it does.
     const result = normaliseWindowEvents(
       input({
         windowEvents: [windowEvent("firefox", "2024-03-10T11:00:00.000Z", 600)],
@@ -108,7 +111,15 @@ describe("normaliseWindowEvents", () => {
         ],
       }),
     );
-    expect(result).toEqual([]);
+    expect(result).toEqual([
+      {
+        userId: 1,
+        clientId: 2,
+        activityId: 6,
+        startedAt: new Date("2024-03-10T11:00:00.000Z"),
+        endedAt: new Date("2024-03-10T11:10:00.000Z"),
+      },
+    ]);
   });
 
   it("drops zero-duration events (empty interval)", () => {
@@ -370,5 +381,87 @@ describe("normaliseWindowEvents", () => {
 
   it("returns an empty list for no events", () => {
     expect(normaliseWindowEvents(input({ activities: [appActivity(7, "firefox")] }))).toEqual([]);
+  });
+});
+
+describe("normaliseWindowEvents — richer matcher grammar (#178, ADR 0006)", () => {
+  function resolvedIds(activities: ActivityMatcher[], app: string): number[] {
+    return normaliseWindowEvents(
+      input({
+        windowEvents: [windowEvent(app, "2024-03-10T11:00:00.000Z", 60)],
+        activities,
+      }),
+    ).map((c) => c.activityId);
+  }
+
+  it("resolves a substring matcher against the AW app", () => {
+    expect(
+      resolvedIds([{ id: 1, kind: "app", matchType: "substring", matcher: "fox" }], "firefox-esr"),
+    ).toEqual([1]);
+  });
+
+  it("resolves a glob matcher (prefix wildcard)", () => {
+    expect(
+      resolvedIds(
+        [{ id: 2, kind: "app", matchType: "glob", matcher: "jetbrains*" }],
+        "jetbrains-idea",
+      ),
+    ).toEqual([2]);
+  });
+
+  it("resolves a regex matcher (alternation)", () => {
+    expect(
+      resolvedIds(
+        [{ id: 3, kind: "app", matchType: "regex", matcher: "(chrome|chromium)" }],
+        "google-chrome",
+      ),
+    ).toEqual([3]);
+  });
+
+  it("resolves an app_group via a pattern matcher spanning several apps", () => {
+    const browsers: ActivityMatcher = {
+      id: 4,
+      kind: "app_group",
+      matchType: "regex",
+      matcher: "(firefox|chrome)",
+    };
+    expect(resolvedIds([browsers], "firefox")).toEqual([4]);
+    expect(resolvedIds([browsers], "google-chrome")).toEqual([4]);
+  });
+
+  it("treats an absent matchType as exact (v1 compatibility)", () => {
+    // appActivity() omits matchType; it must still mean exact, not substring.
+    expect(resolvedIds([appActivity(5, "firefox")], "firefox")).toEqual([5]);
+    expect(resolvedIds([appActivity(5, "firefox")], "firefox-esr")).toEqual([]);
+  });
+
+  it("lets an exact match win over a lower-id pattern match", () => {
+    const result = resolvedIds(
+      [
+        { id: 1, kind: "app", matchType: "substring", matcher: "fire" },
+        { id: 2, kind: "app", matchType: "exact", matcher: "firefox" },
+      ],
+      "firefox",
+    );
+    expect(result).toEqual([2]);
+  });
+
+  it("breaks a pattern-vs-pattern tie by lowest activity id", () => {
+    const result = resolvedIds(
+      [
+        { id: 9, kind: "app", matchType: "glob", matcher: "fire*" },
+        { id: 4, kind: "app", matchType: "substring", matcher: "fox" },
+      ],
+      "firefox",
+    );
+    expect(result).toEqual([4]);
+  });
+
+  it("never throws on a stored regex that does not compile — it simply never matches", () => {
+    // Defence in depth: write-time validation rejects these, but a row that
+    // slipped through must not wedge a telemetry pull.
+    expect(
+      resolvedIds([{ id: 1, kind: "app", matchType: "regex", matcher: "([bad" }], "firefox"),
+    ).toEqual([]);
   });
 });
