@@ -1,0 +1,14 @@
+---
+# Stand up the supervised test users before the converge, mirroring what
+# `client/install-baseline-tools.sh` (#79) assumes already exists on a real
+# enrolled client.
+- name: Prepare supervised users
+  hosts: all
+  become: true
+  tasks:
+    - name: Create the supervised test users
+      ansible.builtin.user:
+        name: "{{ item }}"
+        shell: /bin/bash
+        create_home: true
+      loop: "{{ aw_supervised_users }}"

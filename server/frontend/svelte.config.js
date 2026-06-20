@@ -31,6 +31,13 @@ const config = {
     prerender: {
       entries: ["/admin", "/app"],
     },
+    // The service worker (`src/service-worker.ts`) is still bundled, but we
+    // register it manually from the `/app` layout (prod-only) so the `/admin`
+    // surface — which is not a PWA — never installs a worker unless the user
+    // actually opens `/app`. See `src/routes/app/+layout.svelte`.
+    serviceWorker: {
+      register: false,
+    },
   },
 };
 
