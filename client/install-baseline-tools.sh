@@ -43,6 +43,8 @@ PCT_BASELINE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # shellcheck source=client/lib/pct-common.sh
 . "${PCT_BASELINE_DIR}/lib/pct-common.sh"
+# shellcheck source=client/lib/pct-dispatch.sh
+. "${PCT_BASELINE_DIR}/lib/pct-dispatch.sh"
 
 # --- pinned upstream artifacts ---------------------------------------------
 #
@@ -317,7 +319,7 @@ pct_install_baseline_tools() {
     pct_err "no supervised users given; pass at least one --supervised-user"
     return 2
   fi
-  pct_require_debian_family
+  pct_require_supported_client
   pct_baseline_add_repositories
   pct_baseline_install_packages
   pct_baseline_install_activitywatch

@@ -55,6 +55,8 @@ PCT_INSTALL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "${PCT_INSTALL_DIR}/lib/provision-agent-user.sh"
 # shellcheck source=client/lib/pct-common.sh
 . "${PCT_INSTALL_DIR}/lib/pct-common.sh"
+# shellcheck source=client/lib/pct-dispatch.sh
+. "${PCT_INSTALL_DIR}/lib/pct-dispatch.sh"
 # shellcheck source=client/install-baseline-tools.sh
 . "${PCT_INSTALL_DIR}/install-baseline-tools.sh"
 
@@ -427,7 +429,7 @@ pct_install_client() {
   pct_step "Pre-flight checks"
   pct_orch_require_root
   pct_orch_require_tools
-  pct_require_debian_family
+  pct_require_supported_client
   pct_orch_check_reachable "$server_url"
 
   # Resolve each supervised user's UID up front (fails fast on a missing user)

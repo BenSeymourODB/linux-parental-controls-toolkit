@@ -133,8 +133,28 @@ most Debian-family distros. Future per-distro adapters:
 - **Arch** — Timekpr-nExT is in the AUR. Lower priority; document
   manual install steps rather than supporting AUR in-script.
 
-Each distro adapter should live in `client/distros/<id>.sh` and be
-sourced by the main script based on the detected OS.
+### Dispatch: OS family first, then distro
+
+The install entry point branches on **OS family first**, and only *within*
+the Linux family selects a per-distro adapter (#231). This keeps a future
+non-Linux client (e.g. a Windows installer, per
+[`windows-client-support.md`](windows-client-support.md) → "Modularity
+tweaks to make cheaply now") an *additive* sibling rather than something
+wedged under the distro tree — a Windows client is not a "distro".
+
+- `client/lib/pct-dispatch.sh` provides `pct_require_supported_client`, the
+  family-first gate the install scripts call. It detects the OS family
+  (`pct_detect_os_family`; only `linux` is implemented today — any other
+  family fails with a clear "not implemented yet" message), then, for Linux,
+  resolves and sources the distro adapter.
+- Each distro adapter lives in `client/distros/<id>.sh`, selected by
+  `/etc/os-release` `ID` (exact `<id>.sh`) or `ID_LIKE` (family fallback).
+  An adapter declares `PCT_DISTRO_FAMILY` and implements the
+  `pct_distro_assert_supported` hook. The shipped
+  [`client/distros/debian.sh`](../client/distros/debian.sh) adapter covers
+  the Debian / Ubuntu / Linux Mint family (the `apt` path above); adding
+  Fedora / openSUSE / Arch is a new sibling file, not a change to the
+  dispatch.
 
 ## Tamper resistance posture
 
