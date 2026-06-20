@@ -15,6 +15,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import { registerApi } from "../api/index.js";
 import { loadSettings, type Settings } from "../config.js";
 import { createDb, type PolicyDb } from "../policy/db.js";
+import { createPolicyPushTransport } from "../transport/policy-push/index.js";
 import { registerFrontend } from "./frontend.js";
 import { REQUEST_ID_HEADER, buildLoggerOptions, genRequestId, type LogStream } from "./logger.js";
 
@@ -71,7 +72,14 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   const db = options.db ?? createDb(settings);
   const ownsDb = options.db === undefined;
   app.decorate("db", db);
+
+  // Outbound policy-push transport (#201): the live `timekpra`-over-SSH
+  // dispatcher when the SSH key exists (#39), else the logging stub. It also
+  // owns the offline-queue drainer + pooled SSH connections, torn down on close
+  // — before the db it reads from (when buildApp owns that db).
+  const policyPush = createPolicyPushTransport({ settings, db, log: app.log });
   app.addHook("onClose", async () => {
+    policyPush.dispose();
     if (ownsDb) db.$client.close();
   });
 
@@ -88,7 +96,7 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   // within this prefix, leaving /, /healthz, /admin and /app untouched. Auth
   // (#52) is wired inside this scope and needs the settings (PCT_SECRET_KEY,
   // first-admin bootstrap) threaded through.
-  registerApi(app, settings);
+  registerApi(app, settings, policyPush.dispatcher);
 
   // Serve the prerendered SvelteKit build at /admin and /app (#40). Skipped
   // (with a warning) when the build directory is absent, so /, /healthz, and
