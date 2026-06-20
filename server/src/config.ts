@@ -14,6 +14,7 @@
  */
 import { z } from "zod";
 import { isValidTimeZone } from "./policy/budget-window.js";
+import { DEFAULT_RETENTION_DAYS, MAX_RETENTION_DAYS } from "./policy/retention.js";
 import { isValidCronPattern } from "./transport/activitywatch/telemetry.js";
 
 /** pino log levels, in increasing severity, plus `silent`. */
@@ -156,6 +157,24 @@ const settingsSchema = z
        */
       pullConcurrency: z.coerce.number().int().positive().default(4),
     }),
+    /**
+     * Data retention (#136, epic #135). `defaultDays` is the global default
+     * window applied to every dated-data category that has no per-category
+     * override in the policy store (`PCT_RETENTION_DEFAULT_DAYS`, default 365).
+     * Per-category overrides (custom window or "keep forever") are persisted in
+     * `retention_overrides` and managed via `/api/retention`; only the default
+     * lives in the environment. Bounded by {@link MAX_RETENTION_DAYS} so an
+     * absurd value is rejected at startup — "effectively forever" is the
+     * explicit per-category keep-forever mode, not a giant day count.
+     */
+    retention: z.object({
+      defaultDays: z.coerce
+        .number()
+        .int()
+        .min(1)
+        .max(MAX_RETENTION_DAYS)
+        .default(DEFAULT_RETENTION_DAYS),
+    }),
     adguard: adguardSchema,
   })
   .superRefine((settings, ctx) => {
@@ -217,6 +236,9 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
     telemetry: {
       pullCron: env.PCT_TELEMETRY_PULL_CRON,
       pullConcurrency: env.PCT_TELEMETRY_PULL_CONCURRENCY,
+    },
+    retention: {
+      defaultDays: env.PCT_RETENTION_DEFAULT_DAYS,
     },
     adguard: {
       mode: env.PCT_ADGUARD_MODE ?? "disabled",

@@ -20,7 +20,14 @@
 import { and, eq } from "drizzle-orm";
 
 import type { PolicyDb } from "./db.js";
-import type { ActivityKind, BudgetWindow, ScheduleAction, Scope } from "./enums.js";
+import type {
+  ActivityKind,
+  BudgetWindow,
+  RetentionCategory,
+  ScheduleAction,
+  Scope,
+} from "./enums.js";
+import type { ResolvedRetention } from "./retention.js";
 import {
   activities,
   activitiesToGroups,
@@ -28,6 +35,7 @@ import {
   budgets,
   clients,
   exceptions,
+  retentionOverrides,
   schedules,
   userGroupMemberships,
   userGroups,
@@ -793,6 +801,61 @@ export function deleteException(db: PolicyDb, id: number): boolean {
   return (
     db.delete(exceptions).where(eq(exceptions.id, id)).returning({ id: exceptions.id }).get() !==
     undefined
+  );
+}
+
+// --- Retention overrides (#136) --------------------------------------------
+
+/** A persisted {@link retentionOverrides} row. */
+export type RetentionOverrideRow = typeof retentionOverrides.$inferSelect;
+
+/**
+ * Every per-category retention override, ascending by category. A category
+ * absent from this list inherits the global default (see `policy/retention.ts`
+ * → {@link RetentionPolicy.fromOverrides}); the row layer never invents a
+ * default-inheriting row.
+ */
+export function listRetentionOverrides(db: PolicyDb): RetentionOverrideRow[] {
+  return db.select().from(retentionOverrides).orderBy(retentionOverrides.category).all();
+}
+
+/**
+ * Set (insert or replace) the override for one category and return the stored
+ * row. The {@link ResolvedRetention} is split onto the `keep_forever` / `days`
+ * columns the storage CHECK enforces: keep-forever rows carry no day count,
+ * custom rows carry the positive count. `updated_at` is refreshed on every
+ * write so the admin surface can show when a window last changed.
+ */
+export function upsertRetentionOverride(
+  db: PolicyDb,
+  category: RetentionCategory,
+  retention: ResolvedRetention,
+): RetentionOverrideRow {
+  const keepForever = retention.keepForever;
+  const days = retention.keepForever ? null : retention.days;
+  const now = new Date();
+  return db
+    .insert(retentionOverrides)
+    .values({ category, keepForever, days, updatedAt: now })
+    .onConflictDoUpdate({
+      target: retentionOverrides.category,
+      set: { keepForever, days, updatedAt: now },
+    })
+    .returning()
+    .get();
+}
+
+/**
+ * Clear the override for one category, reverting it to the global default.
+ * Returns whether a row was actually removed (false when none was set).
+ */
+export function deleteRetentionOverride(db: PolicyDb, category: RetentionCategory): boolean {
+  return (
+    db
+      .delete(retentionOverrides)
+      .where(eq(retentionOverrides.category, category))
+      .returning({ category: retentionOverrides.category })
+      .get() !== undefined
   );
 }
 

@@ -18,10 +18,30 @@ describe("loadSettings", () => {
     expect(settings.ansibleDir).toBe("/data/ansible");
     expect(settings.adguard).toEqual({ mode: "disabled" });
     expect(settings.telemetry).toEqual({ pullCron: "*/5 * * * *", pullConcurrency: 4 });
+    expect(settings.retention).toEqual({ defaultDays: 365 });
   });
 
   it("honours an explicit PCT_ANSIBLE_DIR", () => {
     expect(loadSettings({ PCT_ANSIBLE_DIR: "/srv/ansible" }).ansibleDir).toBe("/srv/ansible");
+  });
+
+  describe("PCT_RETENTION_DEFAULT_DAYS", () => {
+    it("coerces an explicit day count", () => {
+      expect(loadSettings({ PCT_RETENTION_DEFAULT_DAYS: "30" }).retention.defaultDays).toBe(30);
+    });
+
+    it("rejects zero / negative windows", () => {
+      expect(() => loadSettings({ PCT_RETENTION_DEFAULT_DAYS: "0" })).toThrow(SettingsError);
+      expect(() => loadSettings({ PCT_RETENTION_DEFAULT_DAYS: "-5" })).toThrow(SettingsError);
+    });
+
+    it("rejects a non-integer window", () => {
+      expect(() => loadSettings({ PCT_RETENTION_DEFAULT_DAYS: "12.5" })).toThrow(SettingsError);
+    });
+
+    it("rejects an absurdly large window (use keep-forever instead)", () => {
+      expect(() => loadSettings({ PCT_RETENTION_DEFAULT_DAYS: "99999999" })).toThrow(SettingsError);
+    });
   });
 
   it("round-trips explicit base values", () => {
