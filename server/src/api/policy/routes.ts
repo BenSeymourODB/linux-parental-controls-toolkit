@@ -14,6 +14,7 @@
  */
 import type { FastifyInstance } from "fastify";
 
+import { isValidMatcher } from "../../policy/activity-matcher.js";
 import type { PolicyDb } from "../../policy/db.js";
 import type { Scope } from "../../policy/enums.js";
 import * as repo from "../../policy/repository.js";
@@ -374,6 +375,19 @@ export function registerPolicyRoutes(scope: FastifyInstance): void {
     "/activities/:id",
     { ...guard, schema: { params: idParamsSchema, body: updateActivitySchema } },
     async (request): Promise<ActivityResponse> => {
+      const existing = repo.getActivity(scope.db, request.params.id);
+      if (existing === undefined) {
+        throw new ApiError(404, "not_found", `Activity ${request.params.id} not found`);
+      }
+      // The grammar is a pair (ADR 0006): validate the *effective* match-type +
+      // matcher after the patch merges over the stored row, since either field
+      // may be the one omitted. createActivitySchema validates this at the DTO
+      // layer where both are always present; PATCH needs the merge.
+      const matchType = request.body.matchType ?? existing.matchType;
+      const matcher = request.body.matcher ?? existing.matcher;
+      if (!isValidMatcher(matchType, matcher)) {
+        throw new ApiError(400, "validation_error", "matcher is not a valid regular expression");
+      }
       const row = repo.updateActivity(scope.db, request.params.id, request.body);
       if (row === undefined) {
         throw new ApiError(404, "not_found", `Activity ${request.params.id} not found`);

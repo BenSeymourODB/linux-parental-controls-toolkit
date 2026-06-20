@@ -17,12 +17,15 @@
  */
 import { z } from "zod";
 
+import { isValidMatcher } from "../../policy/activity-matcher.js";
 import { isValidTimeZone } from "../../policy/budget-window.js";
 import {
   activityKindSchema,
   budgetWindowSchema,
+  matchTypeSchema,
   scheduleActionSchema,
   scopeSchema,
+  type MatchType,
 } from "../../policy/enums.js";
 import {
   scheduleRecurrenceSchema,
@@ -175,15 +178,39 @@ const targetIdSchema = z.number().int().positive().nullable();
 
 // --- Activities ------------------------------------------------------------
 
-export const createActivitySchema = z.object({
-  kind: activityKindSchema,
-  matcher: z.string().trim().min(1).max(512),
-});
+/**
+ * Reject a `regex` matcher that does not compile (ADR 0006 §4). Attached only to
+ * `create`, where both fields are always present; the partial-update case is
+ * validated in the route layer against the merged row (it needs the stored
+ * `match_type`/`matcher` to know the effective pair).
+ */
+const matcherCompiles = (
+  value: { matchType: MatchType; matcher: string },
+  ctx: z.RefinementCtx,
+): void => {
+  if (!isValidMatcher(value.matchType, value.matcher)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "matcher is not a valid regular expression",
+      path: ["matcher"],
+    });
+  }
+};
+
+export const createActivitySchema = z
+  .object({
+    kind: activityKindSchema,
+    matcher: z.string().trim().min(1).max(512),
+    // How `matcher` is interpreted (ADR 0006); defaults to the v1 `exact`.
+    matchType: matchTypeSchema.default("exact"),
+  })
+  .superRefine(matcherCompiles);
 
 export const updateActivitySchema = z
   .object({
     kind: activityKindSchema.optional(),
     matcher: z.string().trim().min(1).max(512).optional(),
+    matchType: matchTypeSchema.optional(),
   })
   .refine(nonEmpty, { message: "At least one field must be provided" });
 
@@ -191,6 +218,7 @@ export const activityResponseSchema = z.object({
   id: z.number().int(),
   kind: activityKindSchema,
   matcher: z.string(),
+  matchType: matchTypeSchema,
 });
 
 export type CreateActivityRequest = z.infer<typeof createActivitySchema>;
@@ -199,7 +227,7 @@ export type ActivityResponse = z.infer<typeof activityResponseSchema>;
 
 /** Map a stored activity row to its wire DTO. */
 export function toActivityResponse(row: ActivityRow): ActivityResponse {
-  return { id: row.id, kind: row.kind, matcher: row.matcher };
+  return { id: row.id, kind: row.kind, matcher: row.matcher, matchType: row.matchType };
 }
 
 // --- Activity groups -------------------------------------------------------

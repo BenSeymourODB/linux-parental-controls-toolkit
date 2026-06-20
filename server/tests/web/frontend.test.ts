@@ -65,22 +65,38 @@ describe("frontend static mount (build present)", () => {
     expect(res.body).toContain("app-marker");
   });
 
-  it("redirects the trailing-slash form to the canonical surface URL", async () => {
-    // The pages reference assets relatively (`./_app/…`); a redirect keeps the
-    // browser at the slash-free URL so those resolve to `/_app/…`, not 404.
-    const admin = await app.inject({ method: "GET", url: "/admin/" });
-    expect(admin.statusCode).toBe(308);
-    expect(admin.headers["location"]).toBe("/admin");
+  it("serves the surface entry page for a deep client-side route (#59 SPA fallback)", async () => {
+    // A hard refresh of a route that exists only inside the hydrated app must
+    // get the entry page (so the client router can take over), not a 404.
+    const admin = await app.inject({ method: "GET", url: "/admin/settings" });
+    expect(admin.statusCode).toBe(200);
+    expect(admin.headers["content-type"]).toContain("text/html");
+    expect(admin.body).toContain("admin-marker");
 
-    const appSurface = await app.inject({ method: "GET", url: "/app/" });
-    expect(appSurface.statusCode).toBe(308);
-    expect(appSurface.headers["location"]).toBe("/app");
+    const appSurface = await app.inject({ method: "GET", url: "/app/time/today" });
+    expect(appSurface.statusCode).toBe(200);
+    expect(appSurface.headers["content-type"]).toContain("text/html");
+    expect(appSurface.body).toContain("app-marker");
   });
 
-  it("redirects the trailing-slash form preserving the query string", async () => {
-    const res = await app.inject({ method: "GET", url: "/admin/?tab=users" });
-    expect(res.statusCode).toBe(308);
-    expect(res.headers["location"]).toBe("/admin?tab=users");
+  it("serves the surface entry page for the trailing-slash form (no redirect)", async () => {
+    // With root-absolute asset paths there is no asset-resolution reason to
+    // canonicalise; `/<surface>/` just falls through the `…/*` fallback.
+    const admin = await app.inject({ method: "GET", url: "/admin/" });
+    expect(admin.statusCode).toBe(200);
+    expect(admin.body).toContain("admin-marker");
+
+    const appSurface = await app.inject({ method: "GET", url: "/app/" });
+    expect(appSurface.statusCode).toBe(200);
+    expect(appSurface.body).toContain("app-marker");
+  });
+
+  it("does not let the /admin fallback shadow shared root-level assets", async () => {
+    // The fallback only owns the `/admin/*` and `/app/*` prefixes; the shared
+    // hashed chunk lives at the root and must still be served as itself.
+    const res = await app.inject({ method: "GET", url: "/_app/immutable/chunk.js" });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toBe(CHUNK_JS);
   });
 
   it("serves shared _app assets with a JS content-type", async () => {
@@ -98,6 +114,13 @@ describe("frontend static mount (build present)", () => {
 
   it("404s a non-GET method on a surface URL", async () => {
     const res = await app.inject({ method: "POST", url: "/admin" });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("404s a non-GET method on a deep surface route (fallback is GET-only)", async () => {
+    // The `…/*` fallback only registers `scope.get`, so a write verb to a deep
+    // client-side path is not silently absorbed into the entry page.
+    const res = await app.inject({ method: "POST", url: "/admin/settings" });
     expect(res.statusCode).toBe(404);
   });
 
