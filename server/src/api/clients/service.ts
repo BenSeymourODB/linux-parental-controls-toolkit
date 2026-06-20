@@ -11,6 +11,7 @@ import type { FastifyBaseLogger } from "fastify";
 
 import { generateToken, hashToken } from "../../auth/secret-token.js";
 import type { PolicyDb } from "../../policy/db.js";
+import type { Platform } from "../../policy/enums.js";
 import * as enrolmentRepo from "../../policy/enrolment.js";
 import * as repo from "../../policy/repository.js";
 import type { ComponentVersions } from "../../policy/schema.js";
@@ -37,6 +38,8 @@ export interface EnrolServiceResult {
   agentVersion: string | null;
   /** The component versions recorded at enrolment, or `null` if none (#164). */
   componentVersions: ComponentVersions | null;
+  /** The client's OS family (#229) — `linux` today; the enrol request never sets it. */
+  platform: Platform;
 }
 
 /**
@@ -225,6 +228,7 @@ export function enrolClient(
     })),
     agentVersion: result.client.agentVersion,
     componentVersions: result.client.componentVersions,
+    platform: result.client.platform,
   };
 }
 

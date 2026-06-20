@@ -117,6 +117,35 @@ describe("enum CHECK constraints", () => {
   });
 });
 
+describe("clients.platform reservation (#229)", () => {
+  it("defaults platform to 'linux' when unspecified", () => {
+    const row = db
+      .insert(clients)
+      .values({ hostname: "box-a", sshUser: "pct-agent" })
+      .returning()
+      .get();
+
+    expect(row?.platform).toBe("linux");
+  });
+
+  it("accepts the reserved 'windows' value", () => {
+    expect(() =>
+      db
+        .insert(clients)
+        .values({ hostname: "box-b", sshUser: "pct-agent", platform: "windows" })
+        .run(),
+    ).not.toThrow();
+  });
+
+  it("rejects a platform outside the tuple", () => {
+    expect(() =>
+      db.$client
+        .prepare("INSERT INTO clients (hostname, ssh_user, platform) VALUES (?,?,?)")
+        .run("box-c", "pct-agent", "macos"),
+    ).toThrow(/CHECK constraint/i);
+  });
+});
+
 describe("value & coherence constraints", () => {
   it("rejects a negative budget allowance but accepts zero", () => {
     const userId = insertUser();

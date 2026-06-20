@@ -9,6 +9,8 @@
  */
 import { z } from "zod";
 
+import { platformSchema } from "../../policy/enums.js";
+
 /** Largest enrolment-token lifetime an admin may request: 24h. */
 export const MAX_ENROLMENT_TTL_SECONDS = 24 * 60 * 60;
 /** Default enrolment-token lifetime when the admin doesn't specify one: 1h. */
@@ -127,6 +129,12 @@ export const enrolResponseSchema = z.object({
   agentVersion: z.string().nullable(),
   /** The component versions the server recorded, or `null` if none (#164). */
   componentVersions: componentVersionsSchema.nullable(),
+  /**
+   * The client's OS family (#229) — always `linux` for now (a Windows
+   * enforcement client is the post-Phase-14 epic #233); the enrol request does
+   * not set it. Surfaced so the install script and admin UI agree on the value.
+   */
+  platform: platformSchema,
 });
 
 export type EnrolClientRequest = z.infer<typeof enrolClientSchema>;

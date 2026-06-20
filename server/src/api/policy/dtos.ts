@@ -23,6 +23,7 @@ import {
   activityKindSchema,
   budgetWindowSchema,
   matchTypeSchema,
+  platformSchema,
   scheduleActionSchema,
   scopeSchema,
   type MatchType,
@@ -110,6 +111,12 @@ export const clientResponseSchema = z.object({
   sshUser: z.string(),
   enrolledAt: z.string(),
   lastSeen: z.string().nullable(),
+  /**
+   * The client's OS family (#229) — `linux` today, `windows` reserved. Read-only
+   * and always `linux` until a Windows enforcement client exists (epic #233);
+   * surfaced so the admin UI can render a per-client OS badge.
+   */
+  platform: platformSchema,
 });
 
 export type CreateClientRequest = z.infer<typeof createClientSchema>;
@@ -124,6 +131,7 @@ export function toClientResponse(row: ClientRow): ClientResponse {
     sshUser: row.sshUser,
     enrolledAt: row.enrolledAt.toISOString(),
     lastSeen: row.lastSeen === null ? null : row.lastSeen.toISOString(),
+    platform: row.platform,
   };
 }
 
