@@ -285,6 +285,23 @@ describe("SshTransport.exec", () => {
     expect(state.connectCalls).toBe(2);
   });
 
+  it("absorbs a repeated error event without an unhandled-error crash", async () => {
+    // ssh2 can emit `error` more than once when a peer drops the connection
+    // (e.g. before the SSH handshake). The facade listens with `on`, not a
+    // one-shot listener, so the second emit is handled rather than surfacing as
+    // an unhandled 'error' event (which EventEmitter throws on). A regression to
+    // `once` would make the second `emit` below throw.
+    const transport = new SshTransport();
+    await transport.exec(target, ["true"]);
+    const client = state.instances[0];
+
+    expect(() => {
+      client?.emit("error", new Error("Connection lost before handshake"));
+      client?.emit("error", new Error("Connection lost before handshake"));
+    }).not.toThrow();
+    expect(transport.connectionCount).toBe(0);
+  });
+
   it("opens a single connection for calls issued before the first is ready", async () => {
     const transport = new SshTransport();
 
