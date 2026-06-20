@@ -250,7 +250,12 @@ volumes:
 For LAN-only access, exposing port 8000 directly is fine. For external
 access, terminate TLS at a reverse proxy (TrueNAS's built-in or a
 separate Nginx Proxy Manager / Caddy instance) and put the dashboard
-behind authentication.
+behind authentication. See
+[`reverse-proxy-tls.md`](reverse-proxy-tls.md) for a full guide —
+copy-pasteable Caddy / nginx / Traefik configs, how to proxy the
+`/api/events/stream` WebSocket, the connectivity model (the proxy fronts
+the HTTP surface only; SSH to clients stays LAN-side), and the
+application-layer caveats behind a proxy.
 
 The reverse proxy is also where volumetric/DoS protection belongs — the
 dashboard does not rate-limit by request volume. It does apply a small
