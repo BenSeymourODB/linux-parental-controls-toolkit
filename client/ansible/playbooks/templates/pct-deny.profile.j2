@@ -7,6 +7,6 @@
 # cannot read/map its own libraries and fails to start — a per-app hard block.
 # We deliberately do NOT `#include <abstractions/base>`: that would grant the
 # very file/lib access we are withholding.
-profile {{ profile_name }} {{ executable }} flags=(enforce) {
+profile {{ profile_name }} "{{ executable }}" flags=(enforce) {
 
 }

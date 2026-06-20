@@ -56,6 +56,14 @@
         update_cache: true
         cache_valid_time: 3600
 
+    # The systemd service re-parses /etc/apparmor.d on boot (descending into
+    # pct.d), so enabling it is what makes the dropped profiles survive a reboot.
+    - name: Ensure the AppArmor service is enabled and running
+      ansible.builtin.systemd_service:
+        name: apparmor
+        enabled: true
+        state: started
+
     - name: Ensure the managed profile directory exists
       ansible.builtin.file:
         path: "{{ pct_apparmor_dir }}"
@@ -91,15 +99,28 @@
       ansible.builtin.set_fact:
         pct_wanted_profiles: "{{ apparmor_plan.denials | map(attribute='profileName') | list }}"
 
-    - name: Unload and remove profiles no longer in the plan
-      when: item.path | basename not in pct_wanted_profiles
-      ansible.builtin.shell:
-        cmd: "apparmor_parser -R {{ item.path | quote }} ; rm -f {{ item.path | quote }}"
+    # Unload from the kernel first (tolerate an already-unloaded profile: -R on a
+    # profile that isn't loaded exits non-zero), then remove the file. `find`
+    # supplies real on-disk paths, so `command` (no shell) is injection-safe.
+    - name: Unload profiles no longer in the plan from the kernel
+      ansible.builtin.command:
+        cmd: "apparmor_parser -R {{ item.path }}"
       loop: "{{ pct_existing_profiles.files }}"
+      when: item.path | basename not in pct_wanted_profiles
       loop_control:
         label: "{{ item.path | basename }}"
       register: pct_unload
-      changed_when: true
+      changed_when: pct_unload.rc == 0
+      failed_when: false
+
+    - name: Remove profile files no longer in the plan
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ pct_existing_profiles.files }}"
+      when: item.path | basename not in pct_wanted_profiles
+      loop_control:
+        label: "{{ item.path | basename }}"
 
   handlers:
     - name: Reload managed AppArmor profiles

@@ -47,6 +47,8 @@
  * where users on one client differ, the **union** is blocked. True per-UID exec
  * gating is a separate, harder problem tracked as a follow-up.
  */
+import { createHash } from "node:crypto";
+
 import { z } from "zod";
 
 import type { PolicyDb } from "../../policy/db.js";
@@ -79,6 +81,17 @@ const DEFAULT_SSH_PORT = 22;
 /** Cap on a recorded error summary so a verbose PLAY RECAP cannot bloat a row. */
 const MAX_ERROR_MESSAGE = 500;
 
+/**
+ * A conservative absolute-path charset for a mappable executable. The matcher
+ * is rendered verbatim into the AppArmor profile header (the attachment path),
+ * so anything outside this set — whitespace, AppArmor policy-language
+ * metacharacters (`{ } " '`), globs (`* ?`), `,`, `\`, control characters —
+ * could break or inject into the rendered profile. Matchers that don't match
+ * are treated as non-mappable and skipped (like a non-`app` activity), never
+ * emitted as a profile. The template additionally double-quotes the path.
+ */
+const SAFE_EXECUTABLE_PATH = /^\/[A-Za-z0-9._/@:+-]+$/;
+
 /** Raised when a plan cannot be built (e.g. an unknown client). */
 export class AppArmorPlanError extends Error {
   constructor(message: string) {
@@ -97,10 +110,10 @@ export type AppArmorBlockedFor = z.infer<typeof appArmorBlockedForSchema>;
 
 /** One executable to hard-deny, with its attributed users. */
 export const appArmorDenialSchema = z.object({
-  /** AppArmor profile name + filename stem, `pct.<sanitised-exe>`. */
-  profileName: z.string().min(1),
-  /** Absolute executable path the profile attaches to. */
-  executable: z.string().startsWith("/"),
+  /** AppArmor profile name + filename stem, `pct.<stem>.<hash>` (unique per exe). */
+  profileName: z.string().regex(/^pct\.[A-Za-z0-9._-]+$/),
+  /** Absolute executable path the profile attaches to (safe charset). */
+  executable: z.string().regex(SAFE_EXECUTABLE_PATH),
   /** Users whose always-on app-deny contributed this block (audit/context). */
   blockedFor: z.array(appArmorBlockedForSchema).min(1),
 });
@@ -116,16 +129,21 @@ export type AppArmorPlan = z.infer<typeof appArmorPlanSchema>;
 
 /**
  * Derive the AppArmor profile name / filename stem for an executable:
- * `pct.` + the path with its leading `/` removed, `/` → `.`, and any other
- * character outside `[A-Za-z0-9._-]` replaced with `_`. Deterministic and
- * collision-resistant within the `pct.` namespace.
+ * `pct.<readable-stem>.<hash>`, where the stem is the path with its leading `/`
+ * removed, `/` → `.`, and any other character collapsed to `_`, and the hash is
+ * the first 8 hex chars of the SHA-256 of the full path. The readable stem keeps
+ * the on-disk file recognisable; the hash makes the name **unique per
+ * executable** — the lossy stem alone collides (e.g. `/usr/bin/foo-bar` vs
+ * `/usr/bin/foo bar`), which would make two denials write the same file and the
+ * same in-kernel profile name. Deterministic for a given path.
  */
 export function profileNameFor(executable: string): string {
   const stem = executable
     .replace(/^\/+/, "")
     .replace(/\//g, ".")
     .replace(/[^A-Za-z0-9._-]/g, "_");
-  return `pct.${stem}`;
+  const hash = createHash("sha256").update(executable).digest("hex").slice(0, 8);
+  return `pct.${stem}.${hash}`;
 }
 
 /** A schedule is "always-on" when no recurrence or date-scoping gate is set. */
@@ -139,9 +157,14 @@ function isAlwaysOn(rule: ScheduleRow): boolean {
   );
 }
 
-/** True for an `app`-kind activity whose matcher is a mappable absolute path. */
+/**
+ * True for an `app`-kind activity whose matcher is a mappable absolute path: an
+ * `exact` match that passes {@link SAFE_EXECUTABLE_PATH}. A matcher with unsafe
+ * characters is treated as non-mappable and skipped — never rendered into a
+ * profile.
+ */
 function isMappableApp(kind: string, matchType: string, matcher: string): boolean {
-  return kind === "app" && matchType === "exact" && matcher.startsWith("/");
+  return kind === "app" && matchType === "exact" && SAFE_EXECUTABLE_PATH.test(matcher);
 }
 
 /**
@@ -323,7 +346,15 @@ export async function pushAppArmorProfiles(
   }
 }
 
-/** Map an Ansible transport error onto an {@link AuditOutcome} + exit code. */
+/**
+ * Map an Ansible transport error onto an {@link AuditOutcome} + exit code. Only
+ * an unreachable host gets the distinct (retryable) `unreachable` bucket;
+ * everything else — a failed task, an unsafe playbook name, and a missing
+ * first-run venv ({@link AnsibleUnavailableError}) — is `failed`. There is no
+ * `unavailable` AuditOutcome; the un-bootstrapped-venv case is rare and its
+ * full reason is preserved in the entry's `errorMessage`, so it is not worth a
+ * dedicated bucket here.
+ */
 function classifyAnsibleError(err: unknown): { outcome: AuditOutcome; exitCode: number | null } {
   if (err instanceof AnsibleUnreachableError) {
     return { outcome: "unreachable", exitCode: err.exitCode };

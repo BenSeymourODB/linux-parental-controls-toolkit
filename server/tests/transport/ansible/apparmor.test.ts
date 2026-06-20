@@ -85,16 +85,31 @@ function denyActivity(db: TestDb, userId: number, activityId: number): void {
 // --- profileNameFor --------------------------------------------------------
 
 describe("profileNameFor", () => {
-  it("prefixes pct. and turns an absolute path into a dotted stem", () => {
-    expect(profileNameFor("/usr/bin/firefox")).toBe("pct.usr.bin.firefox");
+  it("prefixes pct., dots the path, and appends a hash suffix", () => {
+    expect(profileNameFor("/usr/bin/firefox")).toMatch(/^pct\.usr\.bin\.firefox\.[0-9a-f]{8}$/);
   });
 
   it("strips redundant leading slashes and keeps dots, hyphens, underscores", () => {
-    expect(profileNameFor("//opt/Game-Launcher/run_me")).toBe("pct.opt.Game-Launcher.run_me");
+    expect(profileNameFor("//opt/Game-Launcher/run_me")).toMatch(
+      /^pct\.opt\.Game-Launcher\.run_me\.[0-9a-f]{8}$/,
+    );
   });
 
-  it("replaces any other character with an underscore", () => {
-    expect(profileNameFor("/usr/bin/foo bar+baz")).toBe("pct.usr.bin.foo_bar_baz");
+  it("collapses other characters to underscore in the readable stem", () => {
+    expect(profileNameFor("/usr/bin/foo bar+baz")).toMatch(
+      /^pct\.usr\.bin\.foo_bar_baz\.[0-9a-f]{8}$/,
+    );
+  });
+
+  it("is deterministic for a given path", () => {
+    expect(profileNameFor("/usr/bin/steam")).toBe(profileNameFor("/usr/bin/steam"));
+  });
+
+  it("disambiguates distinct paths that share a readable stem (no collision)", () => {
+    // Both collapse to the stem `usr.bin.foo_bar`, but the hash keeps them apart.
+    const a = profileNameFor("/usr/bin/foo+bar");
+    const b = profileNameFor("/usr/bin/foo_bar");
+    expect(a).not.toBe(b);
   });
 });
 
@@ -125,13 +140,25 @@ describe("buildAppArmorPlan", () => {
 
     const plan = buildAppArmorPlan(db, client.id);
 
-    expect(plan.denials).toEqual([
-      {
-        profileName: "pct.usr.bin.steam",
-        executable: "/usr/bin/steam",
-        blockedFor: [{ userId, linuxUid: 1001, linuxUsername: "alice" }],
-      },
+    expect(plan.denials).toHaveLength(1);
+    expect(plan.denials[0]?.executable).toBe("/usr/bin/steam");
+    expect(plan.denials[0]?.profileName).toMatch(/^pct\.usr\.bin\.steam\.[0-9a-f]{8}$/);
+    expect(plan.denials[0]?.blockedFor).toEqual([
+      { userId, linuxUid: 1001, linuxUsername: "alice" },
     ]);
+  });
+
+  it("gives two distinct profile names to stem-colliding executables", () => {
+    const db = testDb();
+    const client = seedClient(db);
+    const userId = linkUser(db, client.id, "Alice", 1001);
+    const plus = createActivity(db, { kind: "app", matcher: "/usr/bin/foo+bar" });
+    const under = createActivity(db, { kind: "app", matcher: "/usr/bin/foo_bar" });
+    denyActivity(db, userId, plus.id);
+    denyActivity(db, userId, under.id);
+
+    const names = new Set(buildAppArmorPlan(db, client.id).denials.map((d) => d.profileName));
+    expect(names.size).toBe(2);
   });
 
   it("expands a group deny to its app members and ignores non-app members", () => {
@@ -256,6 +283,24 @@ describe("buildAppArmorPlan", () => {
     denyActivity(db, userId, bundle.id);
     denyActivity(db, userId, glob.id);
     denyActivity(db, userId, relative.id);
+
+    expect(buildAppArmorPlan(db, client.id).denials).toEqual([]);
+  });
+
+  it("skips matchers with unsafe characters (AppArmor/profile injection guard)", () => {
+    const db = testDb();
+    const client = seedClient(db);
+    const userId = linkUser(db, client.id, "Alice", 1001);
+    // A would-be injection: a valid-looking absolute path carrying profile syntax.
+    const inject = createActivity(db, {
+      kind: "app",
+      matcher: '/usr/bin/x" { /** rwklx, } profile evil "/bin/sh',
+    });
+    const spaced = createActivity(db, { kind: "app", matcher: "/opt/My Games/run" });
+    const braced = createActivity(db, { kind: "app", matcher: "/usr/bin/{a,b}" });
+    denyActivity(db, userId, inject.id);
+    denyActivity(db, userId, spaced.id);
+    denyActivity(db, userId, braced.id);
 
     expect(buildAppArmorPlan(db, client.id).denials).toEqual([]);
   });
