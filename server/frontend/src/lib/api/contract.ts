@@ -40,5 +40,15 @@ export type {
   LinkResponse,
   UpsertLinkRequest,
 } from "../../../../src/api/policy/dtos.js";
+export type {
+  MintEnrolmentTokenRequest,
+  EnrolmentTokenResponse,
+} from "../../../../src/api/clients/dtos.js";
+export type {
+  ClientHealthResponse,
+  ComponentHealthDto,
+  ClientQueueDto,
+  QueuedActionSummary,
+} from "../../../../src/api/clients/health-dtos.js";
 export type { ActivityKind, MatchType, Scope, BudgetWindow } from "../../../../src/policy/enums.js";
 export type { ErrorEnvelope, ErrorDetail } from "../../../../src/api/errors.js";
