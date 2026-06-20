@@ -37,7 +37,10 @@
  *     `--force`, the original artifacts are restored and the run aborts.
  *  4. Removes the branch-only `.sql` + their `meta/<prefix>_snapshot.json` and
  *     trims the matching `_journal.json` entries.
- *  5. Runs `db:generate`, then `db:check`.
+ *  5. Runs `db:generate`, then `db:check`. If either fails (or the hand-edit
+ *     guard fires), it restores the original artifacts from an in-memory
+ *     capture taken before step 4 and returns a refusal — the working tree is
+ *     left exactly as it was found.
  *  6. Leaves the result **staged, not committed** — a human/agent reviews the
  *     regenerated schema diff and commits it. (Keeps a review gate on schema
  *     changes; this tool never mutates history.)
@@ -59,6 +62,8 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+
+import { z } from "zod";
 
 // --- Paths (relative to the `server/` package root, i.e. `deps.cwd`) ---------
 
@@ -100,32 +105,44 @@ export function hasConflictMarkers(text: string): boolean {
 // --- Journal handling (pure) -------------------------------------------------
 
 /** One entry in drizzle-kit's `_journal.json`. */
-export interface JournalEntry {
-  idx: number;
-  version: string;
-  when: number;
-  tag: string;
-  breakpoints: boolean;
-}
+const journalEntrySchema = z.object({
+  idx: z.number(),
+  version: z.string(),
+  when: z.number(),
+  tag: z.string(),
+  breakpoints: z.boolean(),
+});
 
 /** The shape of drizzle-kit's `_journal.json` (v7). */
-export interface Journal {
-  version: string;
-  dialect: string;
-  entries: JournalEntry[];
-}
+const journalSchema = z.object({
+  version: z.string(),
+  dialect: z.string(),
+  entries: z.array(journalEntrySchema),
+});
 
-/** Parse and lightly validate a `_journal.json` document. */
+/** One entry in drizzle-kit's `_journal.json`. */
+export type JournalEntry = z.infer<typeof journalEntrySchema>;
+/** The shape of drizzle-kit's `_journal.json` (v7). */
+export type Journal = z.infer<typeof journalSchema>;
+
+/**
+ * Parse and validate a `_journal.json` document with zod (per the repo
+ * convention of validating external input before it crosses into typed code) —
+ * `trimJournalEntries` reads `entry.tag`, so a malformed entry must be rejected
+ * up front rather than silently mis-trimmed.
+ */
 export function parseJournal(text: string): Journal {
-  const parsed: unknown = JSON.parse(text);
-  if (
-    typeof parsed !== "object" ||
-    parsed === null ||
-    !Array.isArray((parsed as { entries?: unknown }).entries)
-  ) {
-    throw new Error("malformed _journal.json: expected an object with an `entries` array");
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch (error) {
+    throw new Error(`malformed _journal.json: not valid JSON (${String(error)})`);
   }
-  return parsed as Journal;
+  const result = journalSchema.safeParse(raw);
+  if (!result.success) {
+    throw new Error(`malformed _journal.json: ${result.error.message}`);
+  }
+  return result.data;
 }
 
 /**
@@ -164,11 +181,15 @@ export function branchOnlyTagsFromDiff(diffOutput: string): string[] {
 // --- SQL equivalence (pure) --------------------------------------------------
 
 /**
- * Normalise a migration's SQL for an equivalence comparison: drop drizzle-kit's
- * `--> statement-breakpoint` separators and SQL comments, collapse runs of
- * whitespace, and trim. Two migrations that differ only in formatting or
- * breakpoint placement compare equal; one carrying hand-written / data SQL the
- * regenerator would not emit compares unequal.
+ * Normalise one SQL fragment for an equivalence comparison: drop full-line SQL
+ * comments, collapse runs of whitespace, and trim. Inline trailing comments are
+ * intentionally *not* stripped — keeping them makes hand-annotated SQL compare
+ * unequal, which biases the safety guard towards refusing (the safe direction).
+ *
+ * Caveat: whitespace inside string literals is collapsed too, so two DDL
+ * statements differing only by spaces inside a quoted string compare equal.
+ * That is irrelevant for drizzle-generated DDL (no string-literal data) and the
+ * guard only ever errs towards *refusing*, never towards a silent clobber.
  */
 export function normaliseSql(sql: string): string {
   return sql
@@ -180,13 +201,30 @@ export function normaliseSql(sql: string): string {
 }
 
 /**
- * True if the concatenation of `before` is equivalent (ignoring formatting and
- * breakpoints) to the concatenation of `after`. Used to detect a branch-only
- * migration that regen would *not* reproduce — i.e. it was hand-edited or
- * carries custom SQL, so blind regeneration would silently lose it.
+ * Split SQL into its individual statements, normalised and sorted. drizzle-kit
+ * separates statements with `--> statement-breakpoint`; splitting on that and
+ * sorting makes the comparison **order-insensitive**, so a regen that emits the
+ * same statements in a different order is not mistaken for a hand edit.
+ */
+function statementSet(sql: string): string[] {
+  return sql
+    .split(/-->\s*statement-breakpoint/)
+    .map((fragment) => normaliseSql(fragment))
+    .filter((fragment) => fragment !== "")
+    .sort();
+}
+
+/**
+ * True if `before` and `after` contain the same set of SQL statements (ignoring
+ * formatting, full-line comments, breakpoints, and statement order). Used to
+ * detect a branch-only migration that regen would *not* reproduce — i.e. it was
+ * hand-edited or carries custom SQL, so blind regeneration would silently lose
+ * it.
  */
 export function migrationsEquivalent(before: readonly string[], after: readonly string[]): boolean {
-  return normaliseSql(before.join("\n")) === normaliseSql(after.join("\n"));
+  const a = statementSet(before.join("\n--> statement-breakpoint\n"));
+  const b = statementSet(after.join("\n--> statement-breakpoint\n"));
+  return a.length === b.length && a.every((statement, i) => statement === b[i]);
 }
 
 // --- Orchestration -----------------------------------------------------------
@@ -296,39 +334,33 @@ export function rebaseMigrations(deps: RebaseDeps, options: RebaseOptions): Reba
     };
   }
 
-  // Capture the original SQL so we can (a) detect a hand-edited migration after
-  // regen and (b) restore on abort.
-  const originalSql = branchOnlyTags.map((tag) => deps.readText(sqlFileForTag(tag)));
-
-  // 4. Drop branch-only artifacts and trim the journal.
-  for (const tag of branchOnlyTags) {
-    deps.remove(sqlFileForTag(tag));
-    const snapshot = snapshotFileForTag(tag);
-    if (deps.exists(snapshot)) {
-      deps.remove(snapshot);
+  // Capture every original artifact in memory *before* mutating anything, so an
+  // abort (hand-edit detected, regen/check failure) restores the exact bytes we
+  // started from — independent of git state. `git checkout` only restores the
+  // *index* version, which would silently drop a staged-but-uncommitted or
+  // freshly-generated hand edit; an in-memory snapshot does not.
+  const originalArtifacts = branchOnlyTags.map((tag) => {
+    const snapshotPath = snapshotFileForTag(tag);
+    const snapshotContent = deps.exists(snapshotPath) ? deps.readText(snapshotPath) : undefined;
+    if (snapshotContent === undefined) {
+      deps.log(
+        `warning: no snapshot found for ${tag} (${snapshotPath}); the migration ` +
+          "set was already inconsistent before this rebase.",
+      );
     }
-  }
-  const journal = parseJournal(deps.readText(JOURNAL_PATH));
-  const trimmed = trimJournalEntries(journal, new Set(branchOnlyTags));
-  deps.writeText(JOURNAL_PATH, `${JSON.stringify(trimmed, null, 2)}\n`);
-  deps.log(`Dropped ${branchOnlyTags.length} branch-only migration(s); regenerating…`);
+    return {
+      tag,
+      sqlPath: sqlFileForTag(tag),
+      sqlContent: deps.readText(sqlFileForTag(tag)),
+      snapshotPath,
+      snapshotContent,
+    };
+  });
+  const originalSql = originalArtifacts.map((artifact) => artifact.sqlContent);
+  const originalJournal = deps.readText(JOURNAL_PATH);
 
-  // Record the .sql set before regen so we can find what regen adds.
-  const sqlBefore = new Set(deps.listDir(MIGRATIONS_DIR).filter((n) => n.endsWith(".sql")));
-
-  // 5. Regenerate off the merged base.
-  deps.runScript("db:generate");
-
-  // 3b. Safety guard: did regen reproduce the dropped migration? If the new SQL
-  // is not equivalent, the original carried hand-written / custom SQL. Restore
-  // and abort unless --force.
-  const newTags = deps
-    .listDir(MIGRATIONS_DIR)
-    .filter((n) => n.endsWith(".sql") && !sqlBefore.has(n))
-    .map((n) => n.slice(0, -".sql".length));
-  const newSql = newTags.map((tag) => deps.readText(sqlFileForTag(tag)));
-  if (!options.force && !migrationsEquivalent(originalSql, newSql)) {
-    deps.git(["checkout", "--", MIGRATIONS_DIR]);
+  /** Remove regen output for `newTags` and rewrite the captured originals. */
+  const restoreOriginals = (newTags: readonly string[]): void => {
     for (const tag of newTags) {
       const sqlFile = sqlFileForTag(tag);
       if (deps.exists(sqlFile)) {
@@ -339,6 +371,54 @@ export function rebaseMigrations(deps: RebaseDeps, options: RebaseOptions): Reba
         deps.remove(snapshot);
       }
     }
+    for (const artifact of originalArtifacts) {
+      deps.writeText(artifact.sqlPath, artifact.sqlContent);
+      if (artifact.snapshotContent !== undefined) {
+        deps.writeText(artifact.snapshotPath, artifact.snapshotContent);
+      }
+    }
+    deps.writeText(JOURNAL_PATH, originalJournal);
+  };
+
+  // 4. Drop branch-only artifacts and trim the journal.
+  for (const artifact of originalArtifacts) {
+    deps.remove(artifact.sqlPath);
+    if (artifact.snapshotContent !== undefined && deps.exists(artifact.snapshotPath)) {
+      deps.remove(artifact.snapshotPath);
+    }
+  }
+  const trimmed = trimJournalEntries(parseJournal(originalJournal), new Set(branchOnlyTags));
+  deps.writeText(JOURNAL_PATH, `${JSON.stringify(trimmed, null, 2)}\n`);
+  deps.log(`Dropped ${branchOnlyTags.length} branch-only migration(s); regenerating…`);
+
+  // Record the .sql set before regen so we can find what regen adds.
+  const sqlBefore = new Set(deps.listDir(MIGRATIONS_DIR).filter((n) => n.endsWith(".sql")));
+
+  // 5. Regenerate off the merged base. A regen failure leaves the tree with the
+  // originals dropped; restore them before surfacing the error so the working
+  // tree is exactly as we found it (the "never throws on an expected refusal"
+  // contract).
+  try {
+    deps.runScript("db:generate");
+  } catch (error) {
+    restoreOriginals([]);
+    return {
+      status: "refused",
+      reason: `db:generate failed (${String(error)}); original artifacts restored. Resolve the schema/source first, then re-run db:rebase.`,
+      droppedTags: [],
+    };
+  }
+
+  // 3b. Safety guard: did regen reproduce the dropped migration? If the new SQL
+  // is not equivalent, the original carried hand-written / custom SQL. Restore
+  // and abort unless --force.
+  const newTags = deps
+    .listDir(MIGRATIONS_DIR)
+    .filter((n) => n.endsWith(".sql") && !sqlBefore.has(n))
+    .map((n) => n.slice(0, -".sql".length));
+  const newSql = newTags.map((tag) => deps.readText(sqlFileForTag(tag)));
+  if (!options.force && !migrationsEquivalent(originalSql, newSql)) {
+    restoreOriginals(newTags);
     return {
       status: "refused",
       reason:
@@ -350,8 +430,19 @@ export function rebaseMigrations(deps: RebaseDeps, options: RebaseOptions): Reba
     };
   }
 
-  // 6. Verify drift and stage (never commit).
-  deps.runScript("db:check");
+  // 6. Verify drift, then stage (never commit). A drift failure means the regen
+  // still does not match the schema; restore and report rather than leave a
+  // broken half-applied tree behind.
+  try {
+    deps.runScript("db:check");
+  } catch (error) {
+    restoreOriginals(newTags);
+    return {
+      status: "refused",
+      reason: `db:check reported drift after regen (${String(error)}); original artifacts restored. Inspect the schema and rebase by hand.`,
+      droppedTags: [],
+    };
+  }
   deps.git(["add", "--", MIGRATIONS_DIR]);
   deps.log(
     `Rebased onto ${options.baseRef}. Regenerated migration staged (not ` +
@@ -379,6 +470,11 @@ export function parseArgs(argv: readonly string[]): RebaseOptions {
       i++;
     } else if (arg?.startsWith("--base=")) {
       baseRef = arg.slice("--base=".length);
+    } else {
+      // Fail loudly on a typo (e.g. `--forced`) rather than silently ignoring
+      // it — this tool deletes and regenerates files, so a dropped `--force`
+      // would surprise.
+      throw new Error(`unknown argument: ${String(arg)} (supported: --force, --base <ref>)`);
     }
   }
   return { force, baseRef };

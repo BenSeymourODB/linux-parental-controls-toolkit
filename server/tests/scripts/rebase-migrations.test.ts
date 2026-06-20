@@ -100,6 +100,11 @@ describe("branchOnlyTagsFromDiff", () => {
     expect(branchOnlyTagsFromDiff("")).toEqual([]);
     expect(branchOnlyTagsFromDiff("src/policy/schema.ts")).toEqual([]);
   });
+
+  it("parses both the repo-root and bare drizzle path forms identically", () => {
+    expect(branchOnlyTagsFromDiff("server/drizzle/20260619_x.sql")).toEqual(["20260619_x"]);
+    expect(branchOnlyTagsFromDiff("drizzle/20260619_x.sql")).toEqual(["20260619_x"]);
+  });
 });
 
 describe("path helpers", () => {
@@ -133,13 +138,24 @@ describe("normaliseSql / migrationsEquivalent", () => {
     ).toBe(false);
   });
 
-  it("compares the concatenation across multiple migrations", () => {
+  it("compares the set of statements across migrations, ignoring order", () => {
+    // Same statements, regenerated in a different order with a breakpoint
+    // between them — still equivalent.
     expect(
       migrationsEquivalent(
         ["CREATE TABLE a (x int);", "CREATE TABLE b (y int);"],
-        ["CREATE TABLE a (x int);\nCREATE TABLE b (y int);"],
+        ["CREATE TABLE b (y int);\n--> statement-breakpoint\nCREATE TABLE a (x int);"],
       ),
     ).toBe(true);
+  });
+
+  it("treats a different number of statements as not equivalent", () => {
+    expect(
+      migrationsEquivalent(
+        ["CREATE TABLE a (x int);\n--> statement-breakpoint\nUPDATE a SET x = 1;"],
+        ["CREATE TABLE a (x int);"],
+      ),
+    ).toBe(false);
   });
 });
 
@@ -156,6 +172,10 @@ describe("parseArgs", () => {
 
   it("rejects --base without a value", () => {
     expect(() => parseArgs(["--base"])).toThrow(/--base requires/);
+  });
+
+  it("rejects an unknown flag rather than silently ignoring it", () => {
+    expect(() => parseArgs(["--forced"])).toThrow(/unknown argument/);
   });
 });
 
@@ -368,15 +388,131 @@ describe("rebaseMigrations", () => {
       }
     };
 
+    const original = env.files.get(sqlFileForTag("20260619_x"));
+    const originalJournal = env.files.get(JOURNAL_PATH);
+
     const result = rebaseMigrations(env.deps(), { force: false, baseRef: "origin/main" });
 
     expect(result.status).toBe("refused");
     expect(result.reason).toMatch(/hand-edited or carries custom\/data SQL/);
-    // Restore was attempted via git checkout and the regenerated files removed.
-    expect(env.gitCalls).toContainEqual(["checkout", "--", MIGRATIONS_DIR]);
+    // The regenerated files were removed and the originals restored byte-for-byte
+    // from the in-memory capture (not via `git checkout`).
     expect(env.files.has(sqlFileForTag("20260620_x"))).toBe(false);
+    expect(env.files.get(sqlFileForTag("20260619_x"))).toBe(original);
+    expect(env.files.has(snapshotFileForTag("20260619_x"))).toBe(true);
+    expect(env.files.get(JOURNAL_PATH)).toBe(originalJournal);
+    expect(env.gitCalls).not.toContainEqual(["checkout", "--", MIGRATIONS_DIR]);
     // db:check must not have run after the refusal.
     expect(env.scriptCalls).toEqual(["db:generate"]);
+  });
+
+  it("restores the originals and refuses when db:generate fails", () => {
+    const env = new FakeEnv();
+    seedBase(env);
+    env.files.set("drizzle/meta/_journal.json", journalWith("20260619_x"));
+    env.files.set(sqlFileForTag("20260619_x"), "CREATE TABLE x (id integer);");
+    env.files.set(snapshotFileForTag("20260619_x"), "{}");
+    env.gitResponder = (args) =>
+      args.includes("origin/main...HEAD") ? "server/drizzle/20260619_x.sql" : "";
+    const originalJournal = env.files.get(JOURNAL_PATH);
+    env.onScript = (script) => {
+      if (script === "db:generate") {
+        throw new Error("drizzle-kit exploded");
+      }
+    };
+
+    const result = rebaseMigrations(env.deps(), { force: false, baseRef: "origin/main" });
+
+    expect(result.status).toBe("refused");
+    expect(result.reason).toMatch(/db:generate failed/);
+    // Tree restored: the dropped migration and its journal entry are back.
+    expect(env.files.has(sqlFileForTag("20260619_x"))).toBe(true);
+    expect(env.files.get(JOURNAL_PATH)).toBe(originalJournal);
+    // db:check never ran; nothing was staged.
+    expect(env.scriptCalls).toEqual(["db:generate"]);
+    expect(env.gitCalls).not.toContainEqual(["add", "--", MIGRATIONS_DIR]);
+  });
+
+  it("restores the originals and refuses when db:check reports drift", () => {
+    const env = new FakeEnv();
+    seedBase(env);
+    env.files.set("drizzle/meta/_journal.json", journalWith("20260619_x"));
+    env.files.set(sqlFileForTag("20260619_x"), "CREATE TABLE x (id integer);");
+    env.files.set(snapshotFileForTag("20260619_x"), "{}");
+    env.gitResponder = (args) =>
+      args.includes("origin/main...HEAD") ? "server/drizzle/20260619_x.sql" : "";
+    const originalJournal = env.files.get(JOURNAL_PATH);
+    env.onScript = (script, e) => {
+      if (script === "db:generate") {
+        e.files.set(sqlFileForTag("20260620_x"), "CREATE TABLE x (id integer);");
+        e.files.set(snapshotFileForTag("20260620_x"), "{}");
+      } else if (script === "db:check") {
+        throw new Error("schema drift detected");
+      }
+    };
+
+    const result = rebaseMigrations(env.deps(), { force: false, baseRef: "origin/main" });
+
+    expect(result.status).toBe("refused");
+    expect(result.reason).toMatch(/db:check reported drift/);
+    // Regen output removed, originals restored, nothing staged.
+    expect(env.files.has(sqlFileForTag("20260620_x"))).toBe(false);
+    expect(env.files.has(sqlFileForTag("20260619_x"))).toBe(true);
+    expect(env.files.get(JOURNAL_PATH)).toBe(originalJournal);
+    expect(env.scriptCalls).toEqual(["db:generate", "db:check"]);
+    expect(env.gitCalls).not.toContainEqual(["add", "--", MIGRATIONS_DIR]);
+  });
+
+  it("refuses when conflict markers remain in the journal", () => {
+    const env = new FakeEnv();
+    seedBase(env);
+    env.files.set("drizzle/meta/_journal.json", "{\n<<<<<<< HEAD\n=======\n>>>>>>> b\n}");
+    env.gitResponder = NO_UNMERGED;
+
+    const result = rebaseMigrations(env.deps(), { force: false, baseRef: "origin/main" });
+
+    expect(result.status).toBe("refused");
+    expect(result.reason).toMatch(/conflict markers remain/);
+    expect(result.reason).toMatch(/_journal\.json/);
+    expect(env.scriptCalls).toEqual([]);
+  });
+
+  it("scans every policy .ts file for conflict markers, not just schema.ts", () => {
+    const env = new FakeEnv();
+    seedBase(env);
+    // A clean schema.ts but a conflicted sibling under src/policy.
+    env.files.set(
+      "src/policy/enums.ts",
+      "export const e = 1;\n<<<<<<< HEAD\nx\n=======\ny\n>>>>>>> b",
+    );
+    env.gitResponder = NO_UNMERGED;
+
+    const result = rebaseMigrations(env.deps(), { force: false, baseRef: "origin/main" });
+
+    expect(result.status).toBe("refused");
+    expect(result.reason).toMatch(/enums\.ts/);
+    expect(env.scriptCalls).toEqual([]);
+  });
+
+  it("warns when a branch-only migration has no snapshot, then proceeds", () => {
+    const env = new FakeEnv();
+    seedBase(env);
+    env.files.set("drizzle/meta/_journal.json", journalWith("20260619_x"));
+    env.files.set(sqlFileForTag("20260619_x"), "CREATE TABLE x (id integer);");
+    // Deliberately no snapshot file for 20260619_x.
+    env.gitResponder = (args) =>
+      args.includes("origin/main...HEAD") ? "server/drizzle/20260619_x.sql" : "";
+    env.onScript = (script, e) => {
+      if (script === "db:generate") {
+        e.files.set(sqlFileForTag("20260620_x"), "CREATE TABLE x (id integer);");
+        e.files.set(snapshotFileForTag("20260620_x"), "{}");
+      }
+    };
+
+    const result = rebaseMigrations(env.deps(), { force: false, baseRef: "origin/main" });
+
+    expect(result.status).toBe("done");
+    expect(env.logs.some((line) => /no snapshot found for 20260619_x/.test(line))).toBe(true);
   });
 
   it("accepts a non-reproducible migration under --force", () => {
