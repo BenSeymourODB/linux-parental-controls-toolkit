@@ -272,9 +272,18 @@ describe("loadSettings", () => {
       }
     });
 
-    it("parses a bare integer as a hop count (not a boolean)", () => {
+    it("parses a bare integer as a hop count (not a boolean), trimming whitespace", () => {
       expect(loadSettings({ PCT_TRUST_PROXY: "2" }).trustProxy).toBe(2);
       expect(loadSettings({ PCT_TRUST_PROXY: "0" }).trustProxy).toBe(0);
+      expect(loadSettings({ PCT_TRUST_PROXY: "  2  " }).trustProxy).toBe(2);
+    });
+
+    // Only bare non-negative integers are hop counts; anything else (e.g. a
+    // negative or mixed token) falls through to the allowlist branch, where
+    // Fastify/proxy-addr is the authority on whether it is a valid subnet. This
+    // pins the contract so the precedence can't silently change.
+    it("treats a non-bare-integer token as a single-entry allowlist", () => {
+      expect(loadSettings({ PCT_TRUST_PROXY: "-1" }).trustProxy).toEqual(["-1"]);
     });
 
     it("parses a comma-separated IP/CIDR/keyword allowlist, trimming entries", () => {

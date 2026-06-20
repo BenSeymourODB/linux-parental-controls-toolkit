@@ -98,6 +98,24 @@ describe("trustProxy and the per-IP failed-attempt limiter (#235)", () => {
     }
   });
 
+  it("accepts an IP/CIDR allowlist form and trusts only a listed proxy peer", async () => {
+    // Allowlist the loopback proxy: the inject peer is 127.0.0.1, so the
+    // forwarded header is honoured and `request.ip` is the parsed array shape
+    // reaching Fastify 5 at runtime (not just the boolean form). Per-forwarded
+    // -IP isolation must hold exactly as in the `true` case.
+    const harness = buildTestApp({ appOptions: { settings: seededSettings("127.0.0.1") } });
+    await harness.app.ready();
+    try {
+      for (let i = 0; i < MAX_ATTEMPTS; i += 1) {
+        expect((await failedLogin(harness, "203.0.113.5")).statusCode).toBe(401);
+      }
+      expect((await failedLogin(harness, "203.0.113.5")).statusCode).toBe(429);
+      expect((await failedLogin(harness, "198.51.100.9")).statusCode).toBe(401);
+    } finally {
+      await harness.close();
+    }
+  });
+
   it("ignores a spoofed X-Forwarded-For when disabled (default)", async () => {
     const harness = buildTestApp({ appOptions: { settings: seededSettings() } });
     await harness.app.ready();
