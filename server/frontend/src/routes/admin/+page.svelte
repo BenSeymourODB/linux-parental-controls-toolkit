@@ -27,6 +27,7 @@
   import ActivityGroupsView from "$lib/views/ActivityGroupsView.svelte";
   import BudgetsView from "$lib/views/BudgetsView.svelte";
   import LinksView from "$lib/views/LinksView.svelte";
+  import AuditLogView from "$lib/views/AuditLogView.svelte";
 
   // `null` while the initial session probe is in flight.
   let session = $state<SessionResponse | null>(null);
@@ -43,6 +44,7 @@
     { id: "activities", label: "Activities" },
     { id: "activity-groups", label: "Activity Groups" },
     { id: "budgets", label: "Budgets" },
+    { id: "audit", label: "Audit log" },
   ];
   let activeView = $state<string>("dashboard");
 
@@ -123,6 +125,8 @@
       <ActivityGroupsView />
     {:else if activeView === "budgets"}
       <BudgetsView />
+    {:else if activeView === "audit"}
+      <AuditLogView />
     {:else}
       <DashboardView {username} onnavigate={(id) => (activeView = id)} />
     {/if}
