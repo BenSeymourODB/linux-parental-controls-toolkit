@@ -29,6 +29,8 @@ import {
   clients,
   exceptions,
   schedules,
+  userGroupMemberships,
+  userGroups,
   users,
   usersOnClients,
 } from "./schema.js";
@@ -147,6 +149,17 @@ export function deleteClient(db: PolicyDb, id: number): boolean {
   );
 }
 
+/**
+ * Record that the client was confirmed reachable at `at`, returning the updated
+ * row (or `undefined` if it no longer exists). Kept separate from
+ * {@link updateClient}: `last_seen` is a system observation written by the
+ * transport/health paths (#81), not an admin-editable field, so it stays out of
+ * {@link ClientUpdate}.
+ */
+export function recordClientLastSeen(db: PolicyDb, id: number, at: Date): ClientRow | undefined {
+  return db.update(clients).set({ lastSeen: at }).where(eq(clients.id, id)).returning().get();
+}
+
 // --- User-on-client links --------------------------------------------------
 
 /** All links for a user, ascending by client id. */
@@ -205,6 +218,138 @@ export function deleteLink(db: PolicyDb, userId: number, clientId: number): bool
       .delete(usersOnClients)
       .where(and(eq(usersOnClients.userId, userId), eq(usersOnClients.clientId, clientId)))
       .returning({ userId: usersOnClients.userId })
+      .get() !== undefined
+  );
+}
+
+// --- User groups -----------------------------------------------------------
+
+/** A persisted {@link userGroups} row. */
+export type UserGroupRow = typeof userGroups.$inferSelect;
+/** A persisted {@link userGroupMemberships} row. */
+export type UserGroupMembershipRow = typeof userGroupMemberships.$inferSelect;
+
+/** Fields accepted when creating a {@link userGroups} row. */
+export interface UserGroupCreate {
+  name: string;
+}
+
+/** Mutable fields on a {@link userGroups} row; omitted keys are left unchanged. */
+export interface UserGroupUpdate {
+  name?: string | undefined;
+}
+
+/** All user groups, ascending by id. */
+export function listUserGroups(db: PolicyDb): UserGroupRow[] {
+  return db.select().from(userGroups).orderBy(userGroups.id).all();
+}
+
+/** One user group by id, or `undefined` if absent. */
+export function getUserGroup(db: PolicyDb, id: number): UserGroupRow | undefined {
+  return db.select().from(userGroups).where(eq(userGroups.id, id)).get();
+}
+
+/**
+ * Insert a user group and return the stored row. Throws the underlying
+ * unique-constraint error on a duplicate `name` — see {@link isUniqueViolation}.
+ */
+export function createUserGroup(db: PolicyDb, input: UserGroupCreate): UserGroupRow {
+  return db.insert(userGroups).values({ name: input.name }).returning().get();
+}
+
+/**
+ * Apply a partial update and return the stored row, or `undefined` if no group
+ * with `id` exists. Throws on a `name` collision (see {@link isUniqueViolation}).
+ */
+export function updateUserGroup(
+  db: PolicyDb,
+  id: number,
+  patch: UserGroupUpdate,
+): UserGroupRow | undefined {
+  return db.update(userGroups).set(patch).where(eq(userGroups.id, id)).returning().get();
+}
+
+/**
+ * Delete a user group. Returns whether a row was removed. Its memberships
+ * cascade away (`user_group_memberships.group_id` ON DELETE CASCADE); any
+ * group-targeted schedules/exceptions cascade with it once those land
+ * (Phase 3, #124).
+ */
+export function deleteUserGroup(db: PolicyDb, id: number): boolean {
+  return (
+    db.delete(userGroups).where(eq(userGroups.id, id)).returning({ id: userGroups.id }).get() !==
+    undefined
+  );
+}
+
+// --- User-group membership (users ↔ user_groups M2M) -----------------------
+
+/** The users in a group, ascending by user id. */
+export function listGroupMembers(db: PolicyDb, groupId: number): UserRow[] {
+  return db
+    .select({
+      id: users.id,
+      displayName: users.displayName,
+      tz: users.tz,
+      createdAt: users.createdAt,
+    })
+    .from(userGroupMemberships)
+    .innerJoin(users, eq(userGroupMemberships.userId, users.id))
+    .where(eq(userGroupMemberships.groupId, groupId))
+    .orderBy(users.id)
+    .all();
+}
+
+/** The groups a user belongs to, ascending by group id. */
+export function listUserGroupsForUser(db: PolicyDb, userId: number): UserGroupRow[] {
+  return db
+    .select({
+      id: userGroups.id,
+      name: userGroups.name,
+      createdAt: userGroups.createdAt,
+    })
+    .from(userGroupMemberships)
+    .innerJoin(userGroups, eq(userGroupMemberships.groupId, userGroups.id))
+    .where(eq(userGroupMemberships.userId, userId))
+    .orderBy(userGroups.id)
+    .all();
+}
+
+/**
+ * Whether a user is a member of a group. Lets the route layer return a precise
+ * `404` on an attempt to remove a non-membership.
+ */
+export function isUserGroupMember(db: PolicyDb, groupId: number, userId: number): boolean {
+  return (
+    db
+      .select({ userId: userGroupMemberships.userId })
+      .from(userGroupMemberships)
+      .where(
+        and(eq(userGroupMemberships.groupId, groupId), eq(userGroupMemberships.userId, userId)),
+      )
+      .get() !== undefined
+  );
+}
+
+/**
+ * Add a user to a group, idempotently (a repeated add is a no-op, not a
+ * conflict — mirrors {@link addActivityToGroup}). The caller is responsible for
+ * confirming both ends exist first; FK violations otherwise surface as opaque
+ * errors.
+ */
+export function addUserToGroup(db: PolicyDb, groupId: number, userId: number): void {
+  db.insert(userGroupMemberships).values({ groupId, userId }).onConflictDoNothing().run();
+}
+
+/** Remove a user from a group. Returns whether a membership was removed. */
+export function removeUserFromGroup(db: PolicyDb, groupId: number, userId: number): boolean {
+  return (
+    db
+      .delete(userGroupMemberships)
+      .where(
+        and(eq(userGroupMemberships.groupId, groupId), eq(userGroupMemberships.userId, userId)),
+      )
+      .returning({ userId: userGroupMemberships.userId })
       .get() !== undefined
   );
 }

@@ -440,6 +440,15 @@ unchanged (these are *operations* features, not hardening —
   mobile/PWA experience in Phase 9 is a *control surface*, not an
   enforcement target — it lets phones view and adjust policy; the
   enforced devices are still Linux desktops.
+  - **Windows is the most-requested of these** (parents who keep a
+    Windows gaming PC for Easy Anti-Cheat / BattlEye titles but want the
+    same time-budget/schedule controls without Microsoft's cloud Family
+    Safety). A forward-looking design for a Windows enforcement client —
+    sequenced *after* Phase 14, with the cheap "keep these seams clean
+    now" tweaks called out — lives in
+    [`windows-client-support.md`](windows-client-support.md). It is still
+    out of scope for the numbered phases above; the doc exists so we don't
+    bake in Linux-only assumptions that are expensive to unwind later.
 - Native mobile apps (Android, iOS). The Phase 9 PWA is the mobile
   story.
 - Cloud-hosted SaaS multi-tenant model. The deployment target is the
