@@ -15,6 +15,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import { registerApi } from "../api/index.js";
 import { loadSettings, type Settings } from "../config.js";
 import { createDb, type PolicyDb } from "../policy/db.js";
+import { createAdGuardService, type AdGuardService } from "../transport/adguard/index.js";
 import { registerFrontend } from "./frontend.js";
 import { REQUEST_ID_HEADER, buildLoggerOptions, genRequestId, type LogStream } from "./logger.js";
 
@@ -26,6 +27,12 @@ declare module "fastify" {
      * (migrated on boot) unless one is injected via {@link BuildAppOptions.db}.
      */
     db: PolicyDb;
+    /**
+     * The DNS mode router + external-mode preflight state (#95). Routes read its
+     * `status` snapshot; later DNS producers (#97) read its client. Built from
+     * `settings.adguard` unless injected via {@link BuildAppOptions.adguard}.
+     */
+    adguard: AdGuardService;
   }
 }
 
@@ -45,6 +52,14 @@ export interface BuildAppOptions {
    * injected handle is left open; its owner closes it.
    */
   db?: PolicyDb;
+  /**
+   * Inject an {@link AdGuardService} (tests pass one wired to a fake `fetch`).
+   * When omitted, {@link buildApp} builds one from `settings.adguard` using the
+   * real `fetch`/filesystem. The external-mode preflight runs in an `onReady`
+   * hook; for the default `disabled` mode it is an inert no-op (no network), so
+   * existing tests make no AdGuard calls.
+   */
+  adguard?: AdGuardService;
 }
 
 /**
@@ -73,6 +88,15 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   app.decorate("db", db);
   app.addHook("onClose", async () => {
     if (ownsDb) db.$client.close();
+  });
+
+  // Route the configured AdGuard mode (#95) and decorate it so the /api/dns
+  // route reads one snapshot. The external-mode preflight runs once the app is
+  // ready (after listen/inject triggers onReady); disabled/managed are no-ops.
+  const adguard = options.adguard ?? createAdGuardService(settings.adguard);
+  app.decorate("adguard", adguard);
+  app.addHook("onReady", async () => {
+    await adguard.runPreflight(app.log);
   });
 
   app.get("/", async (_request, reply) => {

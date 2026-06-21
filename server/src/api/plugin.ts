@@ -12,6 +12,7 @@ import { registerAuth } from "../auth/index.js";
 import type { Settings } from "../config.js";
 import { registerAuditRoutes } from "./audit/index.js";
 import { registerClientEnrolmentRoutes, registerClientHealthRoutes } from "./clients/index.js";
+import { registerDnsRoutes } from "./dns/index.js";
 import { registerMetaRoute } from "./meta.js";
 import { registerEffectiveRoutes, registerPolicyRoutes } from "./policy/index.js";
 import { installApiConventions } from "./validation.js";
@@ -47,6 +48,8 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (scope, opt
   registerClientHealthRoutes(scope);
   // Transport audit log (#85): admin-only read of every command issued to a client.
   registerAuditRoutes(scope);
+  // DNS status (#95): admin-only read of the active AdGuard mode + health.
+  registerDnsRoutes(scope);
 };
 
 /** Mount the JSON API under `/api` on the given app. */
