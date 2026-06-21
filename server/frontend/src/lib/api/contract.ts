@@ -47,6 +47,16 @@ export type {
   UpdateExceptionRequest,
 } from "../../../../src/api/policy/dtos.js";
 export type {
+  MintEnrolmentTokenRequest,
+  EnrolmentTokenResponse,
+} from "../../../../src/api/clients/dtos.js";
+export type {
+  ClientHealthResponse,
+  ComponentHealthDto,
+  ClientQueueDto,
+  QueuedActionSummary,
+} from "../../../../src/api/clients/health-dtos.js";
+export type {
   ActivityKind,
   MatchType,
   Scope,

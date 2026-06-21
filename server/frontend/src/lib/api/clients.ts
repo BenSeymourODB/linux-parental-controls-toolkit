@@ -9,7 +9,13 @@
  * License boundary: none — JSON API only.
  */
 import { apiFetch } from "./client.js";
-import type { ClientResponse, CreateClientRequest, UpdateClientRequest } from "./contract.js";
+import type {
+  ClientResponse,
+  CreateClientRequest,
+  EnrolmentTokenResponse,
+  MintEnrolmentTokenRequest,
+  UpdateClientRequest,
+} from "./contract.js";
 
 /** List all enrolled clients, in the order `/api` returns them. */
 export function listClients(): Promise<ClientResponse[]> {
@@ -29,4 +35,19 @@ export function updateClient(id: number, input: UpdateClientRequest): Promise<Cl
 /** Delete a client. Resolves on the server's `204`. */
 export function deleteClient(id: number): Promise<void> {
   return apiFetch<void>(`/clients/${id}`, { method: "DELETE" });
+}
+
+/**
+ * Mint a single-use, short-lived enrolment token scoped to the supervised
+ * user(s) the new client will carry (#77, surfaced by the enrol-a-client flow
+ * in #194). The plaintext `token` is returned **once** — only its hash is
+ * stored — so the caller must show it immediately.
+ */
+export function mintEnrolmentToken(
+  input: MintEnrolmentTokenRequest,
+): Promise<EnrolmentTokenResponse> {
+  return apiFetch<EnrolmentTokenResponse>("/clients/enrolment-tokens", {
+    method: "POST",
+    body: input,
+  });
 }
