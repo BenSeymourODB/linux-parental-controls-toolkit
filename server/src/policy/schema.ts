@@ -33,7 +33,9 @@ import {
 
 import {
   activityKindValues,
+  auditOutcomeValues,
   budgetWindowValues,
+  matchTypeValues,
   scheduleActionValues,
   scopeValues,
   transportQueueStatusValues,
@@ -96,7 +98,21 @@ export const users = sqliteTable("users", {
  * nullable because a client created through the admin CRUD (`POST /api/clients`,
  * #51) has not been through the enrolment exchange and so holds no bearer
  * token; only `POST /api/clients/enrol` sets it.
+ *
+ * The `*_version` columns (#164) record what each client is running so Phase 14
+ * (#163) has an inventory to diff against. They are nullable because a client
+ * that doesn't report versions (an older install script, an admin-CRUD client)
+ * still enrols; `versions_reported_at` is set only when at least one version is
+ * reported. `component_versions` is a JSON blob keyed by managed component.
  */
+export interface ComponentVersions {
+  // `| undefined` on each optional field so this lines up with the zod-inferred
+  // `componentVersionsSchema` shape under `exactOptionalPropertyTypes`.
+  timekpr?: string | undefined;
+  e2guardian?: string | undefined;
+  activitywatch?: string | undefined;
+}
+
 export const clients = sqliteTable(
   "clients",
   {
@@ -106,6 +122,9 @@ export const clients = sqliteTable(
     bearerTokenHash: text("bearer_token_hash"),
     enrolledAt: timestampNow("enrolled_at"),
     lastSeen: integer("last_seen", { mode: "timestamp" }),
+    agentVersion: text("agent_version"),
+    componentVersions: text("component_versions", { mode: "json" }).$type<ComponentVersions>(),
+    versionsReportedAt: integer("versions_reported_at", { mode: "timestamp" }),
   },
   (table) => [
     uniqueIndex("clients_hostname_unique").on(table.hostname),
@@ -177,6 +196,48 @@ export const usersOnClients = sqliteTable(
   ],
 );
 
+/**
+ * A named set of supervised {@link users} that policy can target as a unit
+ * (#124) — "set bedtime for all the kids once". A user may belong to ≥0 groups
+ * (membership is many-to-many via {@link userGroupMemberships}); group-targeted
+ * {@link schedules}/{@link exceptions} are inherited by every member, with the
+ * member's own rules taking precedence (see `policy/group-resolution.ts`).
+ *
+ * This is a distinct axis from {@link activityGroups}, which bundles
+ * *activities*; `UserGroup` bundles *users*.
+ */
+export const userGroups = sqliteTable(
+  "user_groups",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    name: text("name").notNull(),
+    createdAt: timestampNow("created_at"),
+  },
+  (table) => [uniqueIndex("user_groups_name_unique").on(table.name)],
+);
+
+/**
+ * Join table for the {@link users} ↔ {@link userGroups} M2M (multi-group
+ * membership). Composite-keyed so a user appears at most once per group; the
+ * `group_id` index serves the "who is in this group?" read (the user-id read
+ * is the composite PK's left prefix).
+ */
+export const userGroupMemberships = sqliteTable(
+  "user_group_memberships",
+  {
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    groupId: integer("group_id")
+      .notNull()
+      .references(() => userGroups.id, { onDelete: "cascade" }),
+  },
+  (table) => [
+    primaryKey({ columns: [table.userId, table.groupId] }),
+    index("user_group_memberships_group_idx").on(table.groupId),
+  ],
+);
+
 /** A matchable app or domain (or a named group of them). */
 export const activities = sqliteTable(
   "activities",
@@ -184,8 +245,14 @@ export const activities = sqliteTable(
     id: integer("id").primaryKey({ autoIncrement: true }),
     kind: text("kind", { enum: activityKindValues }).notNull(),
     matcher: text("matcher").notNull(),
+    // How `matcher` is interpreted (ADR 0006). Defaults to `exact` so every
+    // row predating this column keeps the #88 v1 behaviour with no backfill.
+    matchType: text("match_type", { enum: matchTypeValues }).notNull().default("exact"),
   },
-  (table) => [check("activities_kind_check", oneOf(table.kind, activityKindValues))],
+  (table) => [
+    check("activities_kind_check", oneOf(table.kind, activityKindValues)),
+    check("activities_match_type_check", oneOf(table.matchType, matchTypeValues)),
+  ],
 );
 
 /** A named bundle of {@link activities}, linked many-to-many. */
@@ -497,6 +564,62 @@ export const notificationPolicies = sqliteTable(
     >(),
   },
   (table) => [check("notification_policies_grace_check", sql`${table.graceSeconds} >= 0`)],
+);
+
+/**
+ * Append-only audit of every command the dashboard issues to a client over the
+ * SSH transport (timekpra now; Ansible runs and enforcement force-closes land
+ * here as their phases arrive) — the one place to answer "what did the system
+ * do to this client, and when" (#85, `docs/roadmap.md` → Phase 4).
+ *
+ * Immutability is a posture, not a trigger: the application layer only ever
+ * INSERTs (via the `transport/audit` recorder) and SELECTs; a row is never
+ * UPDATEd in place. Like the {@link grants} ledger, this is distinct data —
+ * that records *grants*, this records *commands issued to clients*.
+ *
+ * - `at` is UTC (ADR 0001 / `docs/architecture.md` → "audit entries"): epoch
+ *   seconds, offset-free.
+ * - `target_host` / `target_port` / `target_user` are recorded **verbatim** so
+ *   an entry stands alone — the `client_id`/`user_id` FKs are nullable and
+ *   `ON DELETE SET NULL`, so removing a client or user never erases the history
+ *   of what was done to it.
+ * - `actor` is who/what triggered the command — `system` (scheduled/internal),
+ *   `admin`, or `integration:<name>`; free text rather than an enum because the
+ *   integration names are open-ended. Defaults to `system`.
+ * - `command` is the **redacted** argv vector (JSON string array). No
+ *   credential is ever in argv — the SSH key lives in the target, not the
+ *   command — but the recorder redacts secret-bearing flags defensively
+ *   (`CLAUDE.md`-aligned "command summary (no secrets)").
+ * - `outcome` is derived from the SSH error taxonomy (see {@link auditOutcomeValues}).
+ *
+ * The `(at)` index serves the newest-first browse and the Phase-11 retention
+ * purge scan (#137/#138); `(client_id, at)` serves the per-client view (#81).
+ */
+export const auditLog = sqliteTable(
+  "audit_log",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    at: timestampNow("at"),
+    targetHost: text("target_host").notNull(),
+    targetPort: integer("target_port").notNull(),
+    targetUser: text("target_user").notNull(),
+    clientId: integer("client_id").references(() => clients.id, { onDelete: "set null" }),
+    userId: integer("user_id").references(() => users.id, { onDelete: "set null" }),
+    actor: text("actor").notNull().default("system"),
+    reason: text("reason"),
+    command: text("command", { mode: "json" }).$type<string[]>().notNull(),
+    outcome: text("outcome", { enum: auditOutcomeValues }).notNull(),
+    exitCode: integer("exit_code"),
+    signal: text("signal"),
+    durationMs: integer("duration_ms").notNull(),
+    errorMessage: text("error_message"),
+  },
+  (table) => [
+    index("audit_log_at_idx").on(table.at),
+    index("audit_log_client_at_idx").on(table.clientId, table.at),
+    check("audit_log_outcome_check", oneOf(table.outcome, auditOutcomeValues)),
+    check("audit_log_duration_check", sql`${table.durationMs} >= 0`),
+  ],
 );
 
 /**

@@ -19,6 +19,7 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:check": "drizzle-kit check",
+    "db:rebase": "node --experimental-strip-types scripts/rebase-migrations.ts",
     "test": "vitest run --coverage",
     "test:integration": "vitest run --config vitest.integration.config.ts"
   },

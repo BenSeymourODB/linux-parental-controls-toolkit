@@ -287,6 +287,38 @@ well-formedness and same-second collisions. The `drizzle-kit check` drift gate
 above remains the backstop for *semantic* conflicts between two independent
 schema edits.
 
+### `npm run db:rebase` (snapshot-collision recovery, #199)
+
+The timestamp prefix stops migration *filenames* from colliding, but each
+migration's snapshot (`drizzle/meta/<prefix>_snapshot.json`) carries a `prevId`
+parent pointer. Two branches that branch off the same snapshot generate
+migrations whose snapshots claim the **same parent**, so merging `main` in
+surfaces as a drizzle-kit `pointing to a parent snapshot … which is a collision`
+error (the `migrations` CI job catches it). The manual fix is mechanical but
+fiddly; `npm run db:rebase` automates it:
+
+```bash
+# after resolving the source merge (schema.ts, _journal.json, …):
+cd server && npm run db:rebase
+```
+
+It drops the branch-only migration(s) + their snapshots, trims the matching
+`_journal.json` entries, re-runs `db:generate`/`db:check`, and leaves the result
+**staged, not committed** so you review the regenerated diff before committing.
+It **refuses** (printing why) when the merge is unresolved (unmerged paths or
+leftover conflict markers), or — unless given `--force` — when regen would be
+lossy: more than one branch-only migration (they collapse into one cumulative
+diff), or a branch-only migration whose SQL regen does not reproduce
+(hand-edited / custom data SQL, like the #146 recurrence recreate). Use
+`--base <ref>` to diff against a base other than `origin/main`.
+
+The tool is dev-only: it lives in `server/scripts/` (outside `src/`, so it never
+ships in the Docker image) and runs via `node --experimental-strip-types`. Its
+logic is pure functions plus an orchestrator behind injected git/fs/script
+seams, unit-tested in `tests/scripts/rebase-migrations.test.ts` with in-memory
+fakes — no live git or drizzle-kit. Slice 2 (an opt-in CI auto-fix workflow) is
+tracked separately; see issue #199.
+
 ---
 
 ## API module — what to test
@@ -382,6 +414,14 @@ exactly as the CI job does.
 Save the snippet below as `docker-compose.integration.yml` in the repo root
 (do not commit it; it is a local dev aid only):
 
+The SSH transport authenticates with a key only (never a password), so generate
+a throwaway key pair first and hand the public half to the container:
+
+```bash
+mkdir -p .int-ssh-key
+ssh-keygen -t ed25519 -N '' -f .int-ssh-key/id_ed25519   # once; .int-ssh-key/ is a local aid
+```
+
 ```yaml
 # docker-compose.integration.yml — local integration test environment
 services:
@@ -391,9 +431,16 @@ services:
 
   ssh-target:
     image: lscr.io/linuxserver/openssh-server:latest
-    ports: ["2222:22"]
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - USER_NAME=pctagent
+      - PUBLIC_KEY_FILE=/pubkey/id_ed25519.pub
+    # linuxserver/openssh-server's sshd listens on 2222 inside the container.
+    ports: ["2222:2222"]
     volumes:
       - ./server/tests/stubs:/usr/local/bin:ro
+      - ./.int-ssh-key:/pubkey:ro
 ```
 
 Start the services:
@@ -413,8 +460,13 @@ cd server
 AW_SERVER_URL=http://localhost:5600 \
 ADGUARD_URL=http://localhost:3000 \
 SSH_TARGET_HOST=localhost SSH_TARGET_PORT=2222 \
+SSH_TARGET_USER=pctagent SSH_TARGET_KEY_FILE="$PWD/../.int-ssh-key/id_ed25519" \
   npm run test:integration
 ```
+
+The SSH suites are env-gated: with `SSH_TARGET_HOST` / `SSH_TARGET_KEY_FILE`
+unset they `describe.skipIf` themselves out, so the unit run (`npm test`, which
+never collects `*.int.test.ts`) is unaffected.
 
 ---
 

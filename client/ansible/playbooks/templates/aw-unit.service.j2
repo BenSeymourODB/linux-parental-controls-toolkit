@@ -1,0 +1,13 @@
+# Managed by pct Ansible (issue #91) — ActivityWatch {{ aw_version }}.
+# This unit is server-managed: local edits are reverted on the next playbook
+# re-apply (#93). It supersedes the Phase-3 baseline unit of the same name.
+[Unit]
+Description={{ unit.description }}
+After=network.target
+
+[Service]
+ExecStart={{ unit.exec }}
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

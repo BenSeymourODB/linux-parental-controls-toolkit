@@ -31,6 +31,23 @@ const config = {
     prerender: {
       entries: ["/admin", "/app"],
     },
+    paths: {
+      // Root-absolute asset references (`/_app/…`) rather than the default
+      // page-relative ones (`./_app/…`). The Fastify mount serves each surface
+      // entry page as an SPA fallback for *deep* client-side routes too (e.g. a
+      // hard refresh of `/admin/settings`; #59) — a relative `./_app/…` URL
+      // would resolve against that deep document base and 404, so assets must be
+      // addressed from the root. This also removes the need for the old
+      // trailing-slash → canonical redirect (see `server/src/web/frontend.ts`).
+      relative: false,
+    },
+    // The service worker (`src/service-worker.ts`) is still bundled, but we
+    // register it manually from the `/app` layout (prod-only) so the `/admin`
+    // surface — which is not a PWA — never installs a worker unless the user
+    // actually opens `/app`. See `src/routes/app/+layout.svelte`.
+    serviceWorker: {
+      register: false,
+    },
   },
 };
 

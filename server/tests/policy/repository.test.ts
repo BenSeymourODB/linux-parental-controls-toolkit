@@ -228,6 +228,8 @@ describe("policy repository — activities & groups", () => {
     const created = repo.createActivity(db, { kind: "app", matcher: "firefox" });
     expect(created.id).toBeGreaterThan(0);
     expect(created.kind).toBe("app");
+    // match_type defaults to the v1 'exact' when not supplied (ADR 0006).
+    expect(created.matchType).toBe("exact");
 
     expect(repo.getActivity(db, created.id)).toEqual(created);
     expect(repo.listActivities(db)).toEqual([created]);
@@ -239,6 +241,21 @@ describe("policy repository — activities & groups", () => {
     expect(repo.deleteActivity(db, created.id)).toBe(true);
     expect(repo.getActivity(db, created.id)).toBeUndefined();
     expect(repo.deleteActivity(db, created.id)).toBe(false);
+  });
+
+  it("persists an explicit match_type and patches it (#178)", () => {
+    const created = repo.createActivity(db, {
+      kind: "app_group",
+      matcher: "(chrome|firefox)",
+      matchType: "regex",
+    });
+    expect(created.matchType).toBe("regex");
+    expect(repo.getActivity(db, created.id)?.matchType).toBe("regex");
+
+    const updated = repo.updateActivity(db, created.id, { matchType: "substring" });
+    expect(updated?.matchType).toBe("substring");
+    // The matcher is untouched by a match-type-only patch.
+    expect(updated?.matcher).toBe("(chrome|firefox)");
   });
 
   it("returns undefined for a missing activity update", () => {
@@ -295,6 +312,94 @@ describe("policy repository — activities & groups", () => {
     repo.addActivityToGroup(db, group.id, steam.id);
     repo.deleteActivity(db, steam.id);
     expect(repo.listGroupActivities(db, group.id)).toEqual([]);
+  });
+});
+
+describe("policy repository — user groups & membership", () => {
+  let db: TestDb;
+  beforeEach(() => {
+    db = testDb();
+  });
+  afterEach(() => {
+    db.$client.close();
+  });
+
+  it("creates, reads, lists, renames, and deletes a user group", () => {
+    const created = repo.createUserGroup(db, { name: "Kids" });
+    expect(created.id).toBeGreaterThan(0);
+    expect(created.name).toBe("Kids");
+    expect(created.createdAt).toBeInstanceOf(Date);
+
+    expect(repo.getUserGroup(db, created.id)).toEqual(created);
+    expect(repo.listUserGroups(db)).toEqual([created]);
+
+    const renamed = repo.updateUserGroup(db, created.id, { name: "Children" });
+    expect(renamed?.name).toBe("Children");
+
+    expect(repo.deleteUserGroup(db, created.id)).toBe(true);
+    expect(repo.getUserGroup(db, created.id)).toBeUndefined();
+    expect(repo.deleteUserGroup(db, created.id)).toBe(false);
+  });
+
+  it("surfaces a duplicate group name as a unique violation", () => {
+    repo.createUserGroup(db, { name: "Kids" });
+    let caught: unknown;
+    try {
+      repo.createUserGroup(db, { name: "Kids" });
+    } catch (err) {
+      caught = err;
+    }
+    expect(repo.isUniqueViolation(caught)).toBe(true);
+  });
+
+  it("returns undefined for a missing group update", () => {
+    expect(repo.updateUserGroup(db, 999, { name: "x" })).toBeUndefined();
+  });
+
+  it("manages multi-group membership idempotently from both directions", () => {
+    const kids = repo.createUserGroup(db, { name: "Kids" });
+    const teens = repo.createUserGroup(db, { name: "Teens" });
+    const alice = repo.createUser(db, { displayName: "Alice" });
+    const bob = repo.createUser(db, { displayName: "Bob" });
+
+    repo.addUserToGroup(db, kids.id, alice.id);
+    repo.addUserToGroup(db, kids.id, alice.id); // idempotent — no throw, no dup
+    repo.addUserToGroup(db, kids.id, bob.id);
+    // A user belongs to ≥0 groups: Alice is in both Kids and Teens.
+    repo.addUserToGroup(db, teens.id, alice.id);
+
+    expect(repo.isUserGroupMember(db, kids.id, alice.id)).toBe(true);
+    expect(repo.listGroupMembers(db, kids.id)).toEqual([alice, bob]);
+    expect(repo.listUserGroupsForUser(db, alice.id)).toEqual([kids, teens]);
+    expect(repo.listUserGroupsForUser(db, bob.id)).toEqual([kids]);
+
+    expect(repo.removeUserFromGroup(db, kids.id, alice.id)).toBe(true);
+    expect(repo.removeUserFromGroup(db, kids.id, alice.id)).toBe(false);
+    expect(repo.isUserGroupMember(db, kids.id, alice.id)).toBe(false);
+    expect(repo.listUserGroupsForUser(db, alice.id)).toEqual([teens]);
+  });
+
+  it("cascades membership away when the group is deleted", () => {
+    const kids = repo.createUserGroup(db, { name: "Kids" });
+    const alice = repo.createUser(db, { displayName: "Alice" });
+    repo.addUserToGroup(db, kids.id, alice.id);
+
+    repo.deleteUserGroup(db, kids.id);
+    expect(repo.listGroupMembers(db, kids.id)).toEqual([]);
+    // The user itself survives the group deletion.
+    expect(repo.getUser(db, alice.id)).toBeDefined();
+    expect(repo.listUserGroupsForUser(db, alice.id)).toEqual([]);
+  });
+
+  it("cascades membership away when the user is deleted", () => {
+    const kids = repo.createUserGroup(db, { name: "Kids" });
+    const alice = repo.createUser(db, { displayName: "Alice" });
+    repo.addUserToGroup(db, kids.id, alice.id);
+
+    repo.deleteUser(db, alice.id);
+    expect(repo.listGroupMembers(db, kids.id)).toEqual([]);
+    // The group itself survives the member deletion.
+    expect(repo.getUserGroup(db, kids.id)).toBeDefined();
   });
 });
 

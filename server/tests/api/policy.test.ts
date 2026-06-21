@@ -420,7 +420,8 @@ describe("policy CRUD routes — policy model (#148)", () => {
     });
     expect(created.statusCode).toBe(201);
     const body = created.json();
-    expect(body).toMatchObject({ kind: "domain", matcher: "youtube.com" });
+    // match_type defaults to the v1 'exact' when the client omits it (ADR 0006).
+    expect(body).toMatchObject({ kind: "domain", matcher: "youtube.com", matchType: "exact" });
 
     const patched = await auth({
       method: "PATCH",
@@ -448,6 +449,60 @@ describe("policy CRUD routes — policy model (#148)", () => {
     const id = await makeActivity();
     const empty = await auth({ method: "PATCH", url: `/api/activities/${id}`, payload: {} });
     expect(empty.statusCode).toBe(400);
+  });
+
+  it("round-trips an explicit match_type and validates regex patterns (#178, ADR 0006)", async () => {
+    // Create with an explicit non-default match_type.
+    const created = await auth({
+      method: "POST",
+      url: "/api/activities",
+      payload: { kind: "app", matcher: "(chrome|chromium)", matchType: "regex" },
+    });
+    expect(created.statusCode).toBe(201);
+    const body = created.json();
+    expect(body).toMatchObject({ matcher: "(chrome|chromium)", matchType: "regex" });
+
+    // GET echoes the stored match_type.
+    expect(
+      (await auth({ method: "GET", url: `/api/activities/${body.id}` })).json().matchType,
+    ).toBe("regex");
+
+    // PATCH the match_type alone.
+    const patched = await auth({
+      method: "PATCH",
+      url: `/api/activities/${body.id}`,
+      payload: { matchType: "substring" },
+    });
+    expect(patched.json().matchType).toBe("substring");
+
+    // An invalid match_type enum value is a 400.
+    const badType = await auth({
+      method: "POST",
+      url: "/api/activities",
+      payload: { kind: "app", matcher: "x", matchType: "fuzzy" },
+    });
+    expect(badType.statusCode).toBe(400);
+
+    // An uncompilable regex is rejected at create time (DTO-level).
+    const badCreate = await auth({
+      method: "POST",
+      url: "/api/activities",
+      payload: { kind: "app", matcher: "([unterminated", matchType: "regex" },
+    });
+    expect(badCreate.statusCode).toBe(400);
+    expect(badCreate.json().error.code).toBe("validation_error");
+
+    // And on PATCH, the effective (merged) pair is validated: flipping an
+    // existing literal matcher to match_type=regex when it isn't a valid
+    // pattern is a 400 even though the matcher field is unchanged.
+    const literal = await makeActivity("([not-a-regex");
+    const badPatch = await auth({
+      method: "PATCH",
+      url: `/api/activities/${literal}`,
+      payload: { matchType: "regex" },
+    });
+    expect(badPatch.statusCode).toBe(400);
+    expect(badPatch.json().error.code).toBe("validation_error");
   });
 
   // --- activity groups + membership ----------------------------------------
@@ -836,5 +891,146 @@ describe("policy CRUD routes — policy model (#148)", () => {
     expect((await auth({ method: "GET", url: `/api/exceptions/${exception.id}` })).statusCode).toBe(
       404,
     );
+  });
+});
+
+describe("policy CRUD routes — user groups (#124)", () => {
+  let harness: TestApp;
+  let cookie: string;
+
+  beforeEach(async () => {
+    harness = buildTestApp({ appOptions: { settings: configuredSettings() } });
+    await harness.app.ready();
+    const login = await harness.app.inject({
+      method: "POST",
+      url: "/api/auth/login",
+      payload: { username: "ben", password: "hunter2" },
+    });
+    cookie = sessionCookie(login);
+  });
+
+  afterEach(async () => {
+    await harness.close();
+  });
+
+  function auth(opts: InjectOptions) {
+    return harness.app.inject({ ...opts, headers: { ...opts.headers, cookie } });
+  }
+
+  async function makeUser(displayName = "Alice"): Promise<number> {
+    return (await auth({ method: "POST", url: "/api/users", payload: { displayName } })).json().id;
+  }
+
+  async function makeGroup(name = "Kids"): Promise<number> {
+    return (await auth({ method: "POST", url: "/api/user-groups", payload: { name } })).json().id;
+  }
+
+  it("rejects anonymous access with a 401", async () => {
+    for (const url of ["/api/user-groups", "/api/user-groups/1/members"]) {
+      const res = await harness.app.inject({ method: "GET", url });
+      expect(res.statusCode).toBe(401);
+      expect(res.json().error.code).toBe("unauthorized");
+    }
+  });
+
+  it("CRUDs a user group and rejects a duplicate name with 409", async () => {
+    const created = await auth({
+      method: "POST",
+      url: "/api/user-groups",
+      payload: { name: "Kids" },
+    });
+    expect(created.statusCode).toBe(201);
+    const body = created.json();
+    expect(body).toMatchObject({ name: "Kids" });
+    expect(typeof body.createdAt).toBe("string");
+
+    const dup = await auth({ method: "POST", url: "/api/user-groups", payload: { name: "Kids" } });
+    expect(dup.statusCode).toBe(409);
+
+    const patched = await auth({
+      method: "PATCH",
+      url: `/api/user-groups/${body.id}`,
+      payload: { name: "Children" },
+    });
+    expect(patched.json().name).toBe("Children");
+
+    expect((await auth({ method: "GET", url: "/api/user-groups" })).json()).toHaveLength(1);
+    expect((await auth({ method: "GET", url: `/api/user-groups/${body.id}` })).json().name).toBe(
+      "Children",
+    );
+
+    const del = await auth({ method: "DELETE", url: `/api/user-groups/${body.id}` });
+    expect(del.statusCode).toBe(204);
+    expect((await auth({ method: "GET", url: `/api/user-groups/${body.id}` })).statusCode).toBe(
+      404,
+    );
+  });
+
+  it("rejects an empty name (400) and an empty PATCH (400)", async () => {
+    const bad = await auth({ method: "POST", url: "/api/user-groups", payload: { name: "  " } });
+    expect(bad.statusCode).toBe(400);
+    expect(bad.json().error.code).toBe("validation_error");
+
+    const id = await makeGroup();
+    const empty = await auth({ method: "PATCH", url: `/api/user-groups/${id}`, payload: {} });
+    expect(empty.statusCode).toBe(400);
+  });
+
+  it("404s a PATCH/DELETE against a missing group", async () => {
+    expect(
+      (await auth({ method: "PATCH", url: "/api/user-groups/999", payload: { name: "x" } }))
+        .statusCode,
+    ).toBe(404);
+    expect((await auth({ method: "DELETE", url: "/api/user-groups/999" })).statusCode).toBe(404);
+  });
+
+  it("manages multi-group membership from both directions, idempotently", async () => {
+    const kids = await makeGroup("Kids");
+    const teens = await makeGroup("Teens");
+    const alice = await makeUser("Alice");
+    const bob = await makeUser("Bob");
+
+    expect(
+      (await auth({ method: "PUT", url: `/api/user-groups/${kids}/members/${alice}` })).statusCode,
+    ).toBe(204);
+    // Idempotent re-add.
+    expect(
+      (await auth({ method: "PUT", url: `/api/user-groups/${kids}/members/${alice}` })).statusCode,
+    ).toBe(204);
+    await auth({ method: "PUT", url: `/api/user-groups/${kids}/members/${bob}` });
+    // A user belongs to ≥0 groups: Alice joins Teens too.
+    await auth({ method: "PUT", url: `/api/user-groups/${teens}/members/${alice}` });
+
+    const members = await auth({ method: "GET", url: `/api/user-groups/${kids}/members` });
+    expect(members.json().map((u: { id: number }) => u.id)).toEqual([alice, bob]);
+
+    const aliceGroups = await auth({ method: "GET", url: `/api/users/${alice}/groups` });
+    expect(aliceGroups.json().map((g: { id: number }) => g.id)).toEqual([kids, teens]);
+
+    const del = await auth({ method: "DELETE", url: `/api/user-groups/${kids}/members/${alice}` });
+    expect(del.statusCode).toBe(204);
+    // Removing a non-membership 404s.
+    expect(
+      (await auth({ method: "DELETE", url: `/api/user-groups/${kids}/members/${alice}` }))
+        .statusCode,
+    ).toBe(404);
+    expect((await auth({ method: "GET", url: `/api/users/${alice}/groups` })).json()).toHaveLength(
+      1,
+    );
+  });
+
+  it("404s membership ops against a missing group or user", async () => {
+    const group = await makeGroup();
+    const user = await makeUser();
+    expect((await auth({ method: "GET", url: "/api/user-groups/999/members" })).statusCode).toBe(
+      404,
+    );
+    expect((await auth({ method: "GET", url: "/api/users/999/groups" })).statusCode).toBe(404);
+    expect(
+      (await auth({ method: "PUT", url: `/api/user-groups/999/members/${user}` })).statusCode,
+    ).toBe(404);
+    expect(
+      (await auth({ method: "PUT", url: `/api/user-groups/${group}/members/999` })).statusCode,
+    ).toBe(404);
   });
 });

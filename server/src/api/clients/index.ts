@@ -16,3 +16,19 @@ export {
   type MintEnrolmentTokenRequest,
   type EnrolmentTokenResponse,
 } from "./dtos.js";
+
+// Client health/status surface (#81): the read-only health routes + the DTOs
+// the admin "Clients" page consumes.
+export { registerClientHealthRoutes, type ClientHealthRoutesDeps } from "./health-routes.js";
+export {
+  clientHealthSchema,
+  clientHealthListSchema,
+  clientQueueSchema,
+  componentHealthSchema,
+  queuedActionSummarySchema,
+  toQueuedActionSummary,
+  type ClientHealthResponse,
+  type ClientQueueDto,
+  type ComponentHealthDto,
+  type QueuedActionSummary,
+} from "./health-dtos.js";
