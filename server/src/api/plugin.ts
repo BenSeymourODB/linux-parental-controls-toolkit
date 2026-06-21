@@ -10,8 +10,10 @@ import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 
 import { registerAuth } from "../auth/index.js";
 import type { Settings } from "../config.js";
+import { registerEventStream, type EventHub } from "../events/index.js";
 import { registerAuditRoutes } from "./audit/index.js";
 import { registerClientEnrolmentRoutes, registerClientHealthRoutes } from "./clients/index.js";
+import { registerDnsRoutes } from "./dns/index.js";
 import { registerMetaRoute } from "./meta.js";
 import { registerEffectiveRoutes, registerPolicyRoutes } from "./policy/index.js";
 import { installApiConventions } from "./validation.js";
@@ -20,6 +22,12 @@ import { installApiConventions } from "./validation.js";
 export interface ApiPluginOptions {
   /** Parsed settings (auth keys, etc.) threaded in from {@link registerApi}. */
   settings: Settings;
+  /**
+   * The process-wide event fan-out registry (#100), created in `buildApp` and
+   * decorated as `app.eventHub`. Threaded in so the `/api/events/stream` route
+   * registers against the same instance producers publish onto.
+   */
+  eventHub: EventHub;
 }
 
 /**
@@ -40,6 +48,10 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (scope, opt
   // Client enrolment (#77): admin-minted token + the install script's enrol
   // exchange. `settings` carries the SSH-public-key path the enrol response returns.
   registerClientEnrolmentRoutes(scope, opts.settings);
+  // Event stream (#100): GET /api/events/stream WebSocket, per-client bearer
+  // auth. Registered against the shared event hub so producers publish onto
+  // the same registry. Async because it registers @fastify/websocket.
+  await registerEventStream(scope, opts.eventHub);
   // Client health/status (#81): the read-only Clients-page reads. The live SSH
   // prober is injected once the SSH-key bootstrap (#39) plumbs credentials;
   // until then the routes degrade to `unknown` reachability/components while
@@ -51,9 +63,11 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (scope, opt
   });
   // Transport audit log (#85): admin-only read of every command issued to a client.
   registerAuditRoutes(scope);
+  // DNS status (#95): admin-only read of the active AdGuard mode + health.
+  registerDnsRoutes(scope);
 };
 
 /** Mount the JSON API under `/api` on the given app. */
-export function registerApi(app: FastifyInstance, settings: Settings): void {
-  app.register(apiPlugin, { prefix: "/api", settings });
+export function registerApi(app: FastifyInstance, settings: Settings, eventHub: EventHub): void {
+  app.register(apiPlugin, { prefix: "/api", settings, eventHub });
 }
