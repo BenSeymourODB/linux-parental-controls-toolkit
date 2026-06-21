@@ -129,6 +129,10 @@ describe("GET /api/users/:userId/effective", () => {
         scope: "overall",
         targetId: null,
         secondsGranted: 1800,
+        // Pin grantedAt on/before the queried day so the grant deterministically
+        // overlaps it — without this it defaults to "now", and the case fails
+        // once the wall-clock passes 2026-06-20 (see #255).
+        grantedAt: new Date("2026-06-20T00:00:00Z"),
         expiresAt: new Date("2026-12-31T00:00:00Z"),
         source: "admin",
       })
