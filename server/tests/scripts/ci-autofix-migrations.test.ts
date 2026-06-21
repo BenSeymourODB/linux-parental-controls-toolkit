@@ -15,8 +15,10 @@ import {
   MIGRATIONS_DIR,
   SKIP_MARKER,
   autofixMigrations,
+  combinedOutputFromExecError,
   headHasSkipMarker,
   isParentCollisionFailure,
+  pushFailedCommentBody,
   rebaseRefusalReason,
   refusalCommentBody,
   successCommentBody,
@@ -90,6 +92,26 @@ describe("comment bodies", () => {
     expect(body).toContain("> looks hand-edited");
     expect(body).toContain("npm run db:rebase");
   });
+
+  it("the push-failed body names the branch and says nothing was overwritten", () => {
+    const body = pushFailedCommentBody("claude/feature");
+    expect(body).toContain("claude/feature");
+    expect(body).toContain("could not push");
+    expect(body).toContain("Nothing was");
+  });
+});
+
+describe("combinedOutputFromExecError", () => {
+  it("coalesces Buffer stdout + stderr off a thrown execFileSync error", () => {
+    const error = { stdout: Buffer.from("out line"), stderr: Buffer.from("err line") };
+    expect(combinedOutputFromExecError(error)).toBe("out line\nerr line");
+  });
+
+  it("tolerates string streams and missing streams (spawn failure)", () => {
+    expect(combinedOutputFromExecError({ stdout: "a", stderr: "b" })).toBe("a\nb");
+    expect(combinedOutputFromExecError({})).toBe("\n");
+    expect(combinedOutputFromExecError(new Error("ENOENT"))).toBe("\n");
+  });
 });
 
 // --- Orchestrator (in-memory fakes) -----------------------------------------
@@ -115,6 +137,8 @@ class FakeEnv {
   rebaseResult: { ok: boolean; output: string } = { ok: true, output: "" };
   /** True once runRebase has been invoked (to assert it did/didn't run). */
   rebaseRan = false;
+  /** When set, `git push` throws (simulates a non-fast-forward rejection). */
+  pushShouldFail = false;
 
   deps(): CiAutofixDeps {
     return {
@@ -125,6 +149,9 @@ class FakeEnv {
         }
         if (sameArgs(args, STAGED_ARGS)) {
           return this.stagedMigrations;
+        }
+        if (args[0] === "push" && this.pushShouldFail) {
+          throw new Error("! [rejected] (non-fast-forward)");
         }
         // commit / push and anything else: no stdout.
         return "";
@@ -243,5 +270,23 @@ describe("autofixMigrations", () => {
     expect(env.gitCalls).toContainEqual(["push", "origin", "HEAD:refs/heads/claude/feature"]);
     expect(env.comments).toHaveLength(1);
     expect(env.comments[0]).toContain("re-run");
+  });
+
+  it("comments (without crashing) when the push is rejected non-fast-forward", () => {
+    const env = new FakeEnv();
+    env.checkResult = { ok: false, output: COLLISION_OUTPUT };
+    env.rebaseResult = { ok: true, output: "Rebased onto origin/main. … staged …" };
+    env.stagedMigrations = "drizzle/20260620_x.sql";
+    env.pushShouldFail = true;
+
+    const result = autofixMigrations(env.deps(), OPTIONS);
+
+    expect(result.action).toBe("push-failed");
+    // It attempted the push, then commented for a human — no success comment.
+    expect(env.ranGit("push")).toBe(true);
+    expect(env.comments).toHaveLength(1);
+    expect(env.comments[0]).toContain("could not push");
+    // Not the success comment.
+    expect(env.comments[0]).not.toContain("structurally equivalent");
   });
 });

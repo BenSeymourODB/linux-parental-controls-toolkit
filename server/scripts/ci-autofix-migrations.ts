@@ -114,6 +114,22 @@ export function successCommentBody(baseRef: string): string {
   );
 }
 
+/**
+ * PR comment posted when the regenerated migration could not be pushed — almost
+ * always because the branch moved under the running job (a concurrent human
+ * push), so the push is rejected as non-fast-forward. Nothing was clobbered;
+ * the fix just needs redoing on the latest tip.
+ */
+export function pushFailedCommentBody(branch: string): string {
+  return (
+    "⚠️ I regenerated the migration to clear a drizzle-kit snapshot " +
+    `parent-collision, but **could not push** it to \`${branch}\` — the branch ` +
+    "almost certainly moved while this job ran (a concurrent push). Nothing was " +
+    "overwritten.\n\nRe-run `cd server && npm run db:rebase` on the latest tip " +
+    "and push, or re-trigger this workflow."
+  );
+}
+
 /** PR comment posted when `db:rebase` refuses (needs a human). */
 export function refusalCommentBody(reason: string): string {
   return (
@@ -165,6 +181,7 @@ export type CiAutofixResult =
   | { action: "skipped"; reason: string }
   | { action: "noop"; reason: string }
   | { action: "commented"; reason: string }
+  | { action: "push-failed"; reason: string }
   | { action: "pushed"; reason: string };
 
 /**
@@ -214,7 +231,10 @@ export function autofixMigrations(deps: CiAutofixDeps, options: CiAutofixOptions
     return { action: "noop", reason: "db:rebase found nothing branch-only to rebase." };
   }
 
-  // 6. Commit (marked so it cannot retrigger us) and push it back.
+  // 6. Commit (marked so it cannot retrigger us) and push it back. A push can be
+  // rejected non-fast-forward if the branch moved under us (a concurrent human
+  // push) — git refuses rather than clobbers, so turn that into a clean comment
+  // rather than an unhandled crash.
   deps.git([
     "commit",
     "-m",
@@ -222,7 +242,13 @@ export function autofixMigrations(deps: CiAutofixDeps, options: CiAutofixOptions
       "Regenerated after a drizzle-kit snapshot parent-collision " +
       "(issue #210, Slice 2 of #199).",
   ]);
-  deps.git(["push", "origin", `HEAD:refs/heads/${options.branch}`]);
+  try {
+    deps.git(["push", "origin", `HEAD:refs/heads/${options.branch}`]);
+  } catch (error) {
+    deps.comment(pushFailedCommentBody(options.branch));
+    deps.log(`Push to ${options.branch} failed (branch likely moved): ${String(error)}`);
+    return { action: "push-failed", reason: `push to ${options.branch} rejected; commented.` };
+  }
   deps.comment(successCommentBody(options.baseRef));
   deps.log(`Pushed the regenerated migration to ${options.branch}.`);
   return { action: "pushed", reason: `regenerated migration pushed to ${options.branch}.` };
@@ -239,16 +265,25 @@ function requireEnv(name: string): string {
   return value;
 }
 
+/**
+ * Coalesce the captured stdout+stderr off a thrown `execFileSync` error into one
+ * string for the collision matcher. `execFileSync` throws on a non-zero exit
+ * with the captured streams hanging off the error object (as `Buffer | string`,
+ * or absent if the spawn itself failed). Exported so the (otherwise-untested)
+ * real-seam capture path has unit coverage of this bit of logic.
+ */
+export function combinedOutputFromExecError(error: unknown): string {
+  const e = error as { stdout?: Buffer | string; stderr?: Buffer | string };
+  return `${String(e.stdout ?? "")}\n${String(e.stderr ?? "")}`;
+}
+
 /** Run an npm script, capturing combined output and never throwing on failure. */
 function runNpmScriptCapturing(cwd: string, script: string): { ok: boolean; output: string } {
   try {
     const output = execFileSync("npm", ["run", script], { cwd, encoding: "utf8" });
     return { ok: true, output };
   } catch (error) {
-    // execFileSync throws on a non-zero exit; the captured streams hang off the
-    // error object. Coalesce stdout+stderr for the caller's matchers.
-    const e = error as { stdout?: Buffer | string; stderr?: Buffer | string };
-    return { ok: false, output: `${String(e.stdout ?? "")}\n${String(e.stderr ?? "")}` };
+    return { ok: false, output: combinedOutputFromExecError(error) };
   }
 }
 
@@ -283,6 +318,8 @@ export function main(): number {
     skipMarker: SKIP_MARKER,
   });
   process.stdout.write(`migration-autofix: ${result.action} — ${result.reason}\n`);
+  // Always exit 0: a refusal / push-failure / noop is reported via a PR comment
+  // and stdout, not by failing the workflow (that would mask the real CI signal).
   return 0;
 }
 
