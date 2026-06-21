@@ -98,7 +98,7 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   // it needs no teardown beyond the sockets the route closes on shutdown.
   const eventHub = new EventHub();
   app.decorate("eventHub", eventHub);
-  
+
   // Route the configured AdGuard mode (#95) and decorate it so the /api/dns
   // route reads one snapshot. The external-mode preflight runs once the app is
   // ready (after listen/inject triggers onReady); disabled/managed are no-ops.
