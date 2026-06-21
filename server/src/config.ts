@@ -217,6 +217,27 @@ const settingsSchema = z
           .default([]),
       ),
     }),
+    /**
+     * Phase-3 client health probe (#198): how the `GET /api/clients/health`
+     * list walk bounds its live SSH fan-out. Parsed-and-ready ahead of the
+     * prober wiring (#39) — like the `telemetry`/`reapply` blocks above — so the
+     * page can't take ~N×`readyTimeout` once a fleet of offline hosts is probed.
+     */
+    clientHealth: z.object({
+      /**
+       * Max clients probed concurrently per list pass
+       * (`PCT_CLIENT_HEALTH_PROBE_CONCURRENCY`). Mirrors
+       * `telemetry.pullConcurrency`; defaults to 4.
+       */
+      probeConcurrency: z.coerce.number().int().positive().default(4),
+      /**
+       * Per-list probe deadline in ms (`PCT_CLIENT_HEALTH_PROBE_DEADLINE_MS`): a
+       * client that hasn't answered by then is reported un-probed so one wedged
+       * host can't stall the page. `0` disables it. Defaults to 15000 (≈1.5× the
+       * SSH `readyTimeout`).
+       */
+      probeDeadlineMs: z.coerce.number().int().nonnegative().default(15_000),
+    }),
     adguard: adguardSchema,
   })
   .superRefine((settings, ctx) => {
@@ -283,6 +304,10 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
     reapply: {
       cron: env.PCT_REAPPLY_CRON,
       playbooks: env.PCT_REAPPLY_PLAYBOOKS,
+    },
+    clientHealth: {
+      probeConcurrency: env.PCT_CLIENT_HEALTH_PROBE_CONCURRENCY,
+      probeDeadlineMs: env.PCT_CLIENT_HEALTH_PROBE_DEADLINE_MS,
     },
     adguard: {
       mode: env.PCT_ADGUARD_MODE ?? "disabled",

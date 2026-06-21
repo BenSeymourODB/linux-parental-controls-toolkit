@@ -7,6 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import * as repo from "../../src/policy/repository.js";
+import { clients } from "../../src/policy/schema.js";
 import { testDb, type TestDb } from "../helpers/db.js";
 
 describe("policy repository — users", () => {
@@ -93,6 +94,31 @@ describe("policy repository — clients", () => {
     expect(repo.getClient(db, 999)).toBeUndefined();
     expect(repo.updateClient(db, 999, { sshUser: "x" })).toBeUndefined();
     expect(repo.deleteClient(db, 999)).toBe(false);
+  });
+
+  it("finds a client by its bearer-token hash, and not by an unknown one", () => {
+    // bearer_token_hash is set only by the enrol path, so insert it directly.
+    const id = db
+      .insert(clients)
+      .values({ hostname: "mint-bt", sshUser: "pct-agent", bearerTokenHash: "deadbeef" })
+      .returning()
+      .get().id;
+
+    expect(repo.findClientByBearerTokenHash(db, "deadbeef")?.id).toBe(id);
+    expect(repo.findClientByBearerTokenHash(db, "nope")).toBeUndefined();
+  });
+
+  it("touches last_seen (and is a no-op for a missing client)", () => {
+    const id = repo.createClient(db, { hostname: "mint-ls", sshUser: "pct-agent" }).id;
+    expect(repo.getClient(db, id)?.lastSeen).toBeNull();
+
+    const at = new Date("2026-06-19T12:00:00.000Z");
+    repo.touchClientLastSeen(db, id, at);
+    expect(repo.getClient(db, id)?.lastSeen).toEqual(at);
+
+    // No throw, no row touched.
+    repo.touchClientLastSeen(db, 999, at);
+    expect(repo.listClients(db)).toHaveLength(1);
   });
 });
 
