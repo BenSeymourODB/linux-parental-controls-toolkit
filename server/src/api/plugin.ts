@@ -11,6 +11,7 @@ import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import { registerAuth } from "../auth/index.js";
 import type { Settings } from "../config.js";
 import { registerEventStream, type EventHub } from "../events/index.js";
+import type { PolicyPushStub } from "../transport/stub.js";
 import { registerAuditRoutes } from "./audit/index.js";
 import { registerClientEnrolmentRoutes, registerClientHealthRoutes } from "./clients/index.js";
 import { registerDnsRoutes } from "./dns/index.js";
@@ -28,6 +29,12 @@ export interface ApiPluginOptions {
    * registers against the same instance producers publish onto.
    */
   eventHub: EventHub;
+  /**
+   * The outbound policy-push dispatcher (#201) the CRUD routes dispatch through.
+   * Omitted in tests / before the SSH-key bootstrap (#39), where the routes fall
+   * back to the logging stub (#54).
+   */
+  policyPush?: PolicyPushStub;
 }
 
 /**
@@ -41,7 +48,9 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (scope, opt
   await registerAuth(scope, opts.settings);
   registerMetaRoute(scope);
   // Policy CRUD (#51) — registered after auth so `scope.requireAdmin` exists.
-  registerPolicyRoutes(scope);
+  // The live SSH dispatcher (#201) is injected from buildApp; absent it, the
+  // routes log the intended push (the Phase-2 stub) instead of dispatching.
+  registerPolicyRoutes(scope, opts.policyPush);
   // Effective-policy preview (#143): GET /users/:userId/effective. Needs
   // `settings` for the server-default timezone of users with no `tz`.
   registerEffectiveRoutes(scope, opts.settings);
@@ -68,6 +77,18 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (scope, opt
 };
 
 /** Mount the JSON API under `/api` on the given app. */
-export function registerApi(app: FastifyInstance, settings: Settings, eventHub: EventHub): void {
-  app.register(apiPlugin, { prefix: "/api", settings, eventHub });
+export function registerApi(
+  app: FastifyInstance,
+  settings: Settings,
+  eventHub: EventHub,
+  policyPush?: PolicyPushStub,
+): void {
+  app.register(apiPlugin, {
+    prefix: "/api",
+    settings,
+    eventHub,
+    // Spread only when present: under exactOptionalPropertyTypes an explicit
+    // `undefined` is not assignable to the optional `policyPush?` field.
+    ...(policyPush !== undefined ? { policyPush } : {}),
+  });
 }
