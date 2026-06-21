@@ -61,7 +61,7 @@ function isErrorEnvelope(value: unknown): value is ErrorEnvelope {
 
 /** Options for {@link apiFetch}. `body` is JSON-encoded when present. */
 export interface ApiFetchOptions {
-  method?: "GET" | "POST" | "PATCH" | "DELETE";
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   /** Request body; serialized as JSON with the matching `Content-Type`. */
   body?: unknown;
   /** Optional override of the global `fetch` (used by tests). */

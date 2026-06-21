@@ -128,7 +128,12 @@ describe("GET /api/users/:userId/effective", () => {
         { userId, scope: "activity", targetId: 5, window: "daily", secondsAllowed: 3600 },
       ])
       .run();
-    // An active overall grant (+30 min) expiring well after the queried day.
+    // An active overall grant (+30 min): granted before, and expiring well
+    // after, the queried day so it overlaps it deterministically. `grantedAt`
+    // is set explicitly rather than defaulting to insertion time, which would
+    // make the test a time-bomb — once the wall clock passes the hardcoded
+    // 2026-06-20 query date, a now-defaulted grant falls *after* the queried
+    // day and `grantOverlapsDay` (correctly) drops it.
     harness.db
       .insert(grants)
       .values({
@@ -136,6 +141,7 @@ describe("GET /api/users/:userId/effective", () => {
         scope: "overall",
         targetId: null,
         secondsGranted: 1800,
+        grantedAt: new Date("2026-06-01T00:00:00Z"),
         expiresAt: new Date("2026-12-31T00:00:00Z"),
         source: "admin",
       })
