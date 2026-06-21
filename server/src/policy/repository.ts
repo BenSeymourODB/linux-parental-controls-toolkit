@@ -150,6 +150,31 @@ export function deleteClient(db: PolicyDb, id: number): boolean {
 }
 
 /**
+ * Find the client whose per-client bearer token hashes to `tokenHash`, or
+ * `undefined`. The credential the Phase-8b event stream (`/api/events/stream`,
+ * #100) authenticates against; the SHA-256 hash is the stored form (#77), and
+ * `clients_bearer_token_hash_unique` makes the match single-row. Clients with
+ * no bearer token (admin-CRUD, `bearer_token_hash IS NULL`) never match a real
+ * hash, so they cannot be impersonated by an empty credential.
+ */
+export function findClientByBearerTokenHash(
+  db: PolicyDb,
+  tokenHash: string,
+): ClientRow | undefined {
+  return db.select().from(clients).where(eq(clients.bearerTokenHash, tokenHash)).get();
+}
+
+/**
+ * Record that the dashboard just heard from a client — the event-stream
+ * connect/disconnect liveness signal (#100). `last_seen` is a system-managed
+ * column (not in {@link ClientUpdate}), so this writes it directly. A no-op if
+ * no client with `id` exists.
+ */
+export function touchClientLastSeen(db: PolicyDb, id: number, at: Date): void {
+  db.update(clients).set({ lastSeen: at }).where(eq(clients.id, id)).run();
+}
+
+/**
  * Record that the client was confirmed reachable at `at`, returning the updated
  * row (or `undefined` if it no longer exists). Kept separate from
  * {@link updateClient}: `last_seen` is a system observation written by the

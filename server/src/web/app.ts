@@ -14,6 +14,7 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import { registerApi } from "../api/index.js";
 import { loadSettings, type Settings } from "../config.js";
+import { EventHub } from "../events/index.js";
 import { createDb, type PolicyDb } from "../policy/db.js";
 import { createAdGuardService, type AdGuardService } from "../transport/adguard/index.js";
 import { registerFrontend } from "./frontend.js";
@@ -90,6 +91,14 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     if (ownsDb) db.$client.close();
   });
 
+  // The process-wide event fan-out registry (#100). Created here so it is a
+  // single instance shared by the `/api/events/stream` route and every future
+  // event producer (`app.eventHub`), regardless of which `/api` sub-scope they
+  // live in. Holds no resources of its own (just the live-connection map), so
+  // it needs no teardown beyond the sockets the route closes on shutdown.
+  const eventHub = new EventHub();
+  app.decorate("eventHub", eventHub);
+
   // Route the configured AdGuard mode (#95) and decorate it so the /api/dns
   // route reads one snapshot. The external-mode preflight runs once the app is
   // ready (after listen/inject triggers onReady); disabled/managed are no-ops.
@@ -112,7 +121,7 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   // within this prefix, leaving /, /healthz, /admin and /app untouched. Auth
   // (#52) is wired inside this scope and needs the settings (PCT_SECRET_KEY,
   // first-admin bootstrap) threaded through.
-  registerApi(app, settings);
+  registerApi(app, settings, eventHub);
 
   // Serve the prerendered SvelteKit build at /admin and /app (#40). Skipped
   // (with a warning) when the build directory is absent, so /, /healthz, and

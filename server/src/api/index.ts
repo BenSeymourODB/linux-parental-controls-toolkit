@@ -151,3 +151,20 @@ export {
   type LoginRequest,
   type SessionResponse,
 } from "../auth/dtos.js";
+
+// Event-stream taxonomy (#100): the `/api/events/stream` wire contract — the
+// five server-pushed events and the frame envelope. Re-exported here so the
+// client bridge (#101) and any consumer share one definition; the schemas live
+// in `../events/taxonomy.ts` next to the stream route.
+export {
+  serverEventSchema,
+  eventFrameSchema,
+  grantAppliedSchema,
+  policyChangedSchema,
+  enforceForceCloseSchema,
+  enforceSessionLockSchema,
+  lockoutClearedSchema,
+  type ServerEvent,
+  type ServerEventType,
+  type EventFrame,
+} from "../events/index.js";
