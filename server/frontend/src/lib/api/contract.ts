@@ -31,6 +31,26 @@ export type {
   ActivityResponse,
   CreateActivityRequest,
   UpdateActivityRequest,
+  ActivityGroupResponse,
+  CreateActivityGroupRequest,
+  UpdateActivityGroupRequest,
+  BudgetResponse,
+  CreateBudgetRequest,
+  UpdateBudgetRequest,
+  LinkResponse,
+  UpsertLinkRequest,
+  ScheduleResponse,
+  CreateScheduleRequest,
+  UpdateScheduleRequest,
+  ExceptionResponse,
+  CreateExceptionRequest,
+  UpdateExceptionRequest,
 } from "../../../../src/api/policy/dtos.js";
-export type { ActivityKind, MatchType } from "../../../../src/policy/enums.js";
+export type {
+  ActivityKind,
+  MatchType,
+  Scope,
+  BudgetWindow,
+  ScheduleAction,
+} from "../../../../src/policy/enums.js";
 export type { ErrorEnvelope, ErrorDetail } from "../../../../src/api/errors.js";

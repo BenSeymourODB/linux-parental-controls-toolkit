@@ -24,6 +24,11 @@
   import UsersView from "$lib/views/UsersView.svelte";
   import ClientsView from "$lib/views/ClientsView.svelte";
   import ActivitiesView from "$lib/views/ActivitiesView.svelte";
+  import ActivityGroupsView from "$lib/views/ActivityGroupsView.svelte";
+  import BudgetsView from "$lib/views/BudgetsView.svelte";
+  import SchedulesView from "$lib/views/SchedulesView.svelte";
+  import ExceptionsView from "$lib/views/ExceptionsView.svelte";
+  import LinksView from "$lib/views/LinksView.svelte";
 
   // `null` while the initial session probe is in flight.
   let session = $state<SessionResponse | null>(null);
@@ -36,7 +41,12 @@
     { id: "dashboard", label: "Dashboard" },
     { id: "users", label: "Users" },
     { id: "clients", label: "Clients" },
+    { id: "links", label: "User ↔ Client links" },
     { id: "activities", label: "Activities" },
+    { id: "activity-groups", label: "Activity Groups" },
+    { id: "budgets", label: "Budgets" },
+    { id: "schedules", label: "Schedules" },
+    { id: "exceptions", label: "Exceptions" },
   ];
   let activeView = $state<string>("dashboard");
 
@@ -109,8 +119,18 @@
       <UsersView />
     {:else if activeView === "clients"}
       <ClientsView />
+    {:else if activeView === "links"}
+      <LinksView />
     {:else if activeView === "activities"}
       <ActivitiesView />
+    {:else if activeView === "activity-groups"}
+      <ActivityGroupsView />
+    {:else if activeView === "budgets"}
+      <BudgetsView />
+    {:else if activeView === "schedules"}
+      <SchedulesView />
+    {:else if activeView === "exceptions"}
+      <ExceptionsView />
     {:else}
       <DashboardView {username} onnavigate={(id) => (activeView = id)} />
     {/if}
