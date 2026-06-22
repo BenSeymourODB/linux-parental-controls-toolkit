@@ -1,0 +1,67 @@
+---
+# Verify the resulting on-disk state: the bundle is recorded at the pinned
+# version, each user's aw-server config is loopback-only, and all three
+# `systemd --user` units are present. (Whether the watchers are *running* needs
+# a graphical session, which a container does not have, so we assert installed
+# + enabled state rather than liveness — consistent with the baseline's own
+# "starts on next login" behaviour.)
+- name: Verify
+  hosts: all
+  become: true
+  vars:
+    aw_prefix: /opt/activitywatch
+    aw_version: v0.13.2
+    aw_units:
+      - aw-server
+      - aw-watcher-afk
+      - aw-watcher-window
+  tasks:
+    - name: Read the version stamp
+      ansible.builtin.slurp:
+        src: "{{ aw_prefix }}/.pct-aw-version"
+      register: aw_stamp
+
+    - name: Assert the pinned version was recorded
+      ansible.builtin.assert:
+        that:
+          - (aw_stamp.content | b64decode | trim) == aw_version
+        fail_msg: "version stamp does not match the pinned {{ aw_version }}"
+
+    - name: Assert the aw-server binary was extracted
+      ansible.builtin.stat:
+        path: "{{ aw_prefix }}/activitywatch/aw-server-rust/aw-server-rust"
+      register: aw_binary
+      failed_when: not aw_binary.stat.exists
+
+    - name: Read each supervised user's aw-server config
+      ansible.builtin.slurp:
+        src: "/home/{{ item }}/.config/activitywatch/aw-server-rust/config.toml"
+      register: aw_config
+      loop: "{{ aw_supervised_users }}"
+
+    - name: Assert each aw-server config binds to loopback only
+      ansible.builtin.assert:
+        that:
+          - '''host = "127.0.0.1"'' in (item.content | b64decode)'
+          - "'port = 5600' in (item.content | b64decode)"
+        fail_msg: "aw-server config is not loopback-only"
+      loop: "{{ aw_config.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Stat each per-user systemd --user unit
+      ansible.builtin.stat:
+        path: "/home/{{ item.0 }}/.config/systemd/user/{{ item.1 }}.service"
+      register: aw_unit_files
+      loop: "{{ aw_supervised_users | product(aw_units) | list }}"
+      loop_control:
+        label: "{{ item.0 }}/{{ item.1 }}"
+
+    - name: Assert every unit file was rendered
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+        fail_msg: "missing unit file for {{ item.item.0 }}/{{ item.item.1 }}"
+      loop: "{{ aw_unit_files.results }}"
+      loop_control:
+        label: "{{ item.item.0 }}/{{ item.item.1 }}"

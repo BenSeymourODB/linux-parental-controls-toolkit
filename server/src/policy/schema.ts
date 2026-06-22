@@ -35,6 +35,7 @@ import {
   activityKindValues,
   auditOutcomeValues,
   budgetWindowValues,
+  matchTypeValues,
   scheduleActionValues,
   scopeValues,
   soundProfileValues,
@@ -153,9 +154,9 @@ export const clients = sqliteTable(
  * {@link integrationTokens}, only the SHA-256 `token_hash` is stored — never
  * the plaintext.
  *
- * `supervised_users` is a JSON array of `{ userId, linuxUsername }` the admin
- * bound at mint time (the policy user ↔ Linux account mapping); the client
- * supplies each user's `linuxUid` at enrol time. Single-use is enforced by
+ * `supervised_users` is a JSON array of `{ userId, osUsername }` the admin
+ * bound at mint time (the policy user ↔ OS account mapping); the client
+ * supplies each user's `osUserRef` at enrol time. Single-use is enforced by
  * `consumed_at` (set when redeemed, with `consumed_client_id` pointing at the
  * client it created); expiry by `expires_at`. The token is never edited
  * in-place beyond being marked consumed.
@@ -167,7 +168,7 @@ export const enrolmentTokens = sqliteTable(
     tokenHash: text("token_hash").notNull(),
     hostname: text("hostname"),
     supervisedUsers: text("supervised_users", { mode: "json" })
-      .$type<{ userId: number; linuxUsername: string }[]>()
+      .$type<{ userId: number; osUsername: string }[]>()
       .notNull(),
     expiresAt: integer("expires_at", { mode: "timestamp" }).notNull(),
     createdAt: timestampNow("created_at"),
@@ -180,9 +181,17 @@ export const enrolmentTokens = sqliteTable(
 );
 
 /**
- * Maps a {@link users} row to its local Linux account on a {@link clients}
- * box. Composite-keyed: a user appears at most once per client, and a Linux
- * UID maps to at most one user on a given client.
+ * Maps a {@link users} row to its local OS account on a {@link clients}
+ * box. Composite-keyed: a user appears at most once per client, and an OS
+ * account reference maps to at most one user on a given client.
+ *
+ * The columns are OS-neutral (#230, `docs/windows-client-support.md` →
+ * "Modularity tweaks to make cheaply now", item 2): `os_username` is the local
+ * login name, `os_user_ref` is the account reference — a **uid on Linux, a SID
+ * on Windows** — so it is `TEXT`, holding the Linux uid as a decimal string
+ * today. Neutralised now while every consumer is first-party; renaming the
+ * published `/api/*` field after the PWA and the calendar integrator bind to it
+ * would be a breaking-contract change.
  */
 export const usersOnClients = sqliteTable(
   "users_on_clients",
@@ -193,13 +202,13 @@ export const usersOnClients = sqliteTable(
     clientId: integer("client_id")
       .notNull()
       .references(() => clients.id, { onDelete: "cascade" }),
-    linuxUsername: text("linux_username").notNull(),
-    linuxUid: integer("linux_uid").notNull(),
+    osUsername: text("os_username").notNull(),
+    osUserRef: text("os_user_ref").notNull(),
   },
   (table) => [
     primaryKey({ columns: [table.userId, table.clientId] }),
     index("users_on_clients_client_idx").on(table.clientId),
-    uniqueIndex("users_on_clients_client_uid_unique").on(table.clientId, table.linuxUid),
+    uniqueIndex("users_on_clients_client_user_ref_unique").on(table.clientId, table.osUserRef),
   ],
 );
 
@@ -252,8 +261,14 @@ export const activities = sqliteTable(
     id: integer("id").primaryKey({ autoIncrement: true }),
     kind: text("kind", { enum: activityKindValues }).notNull(),
     matcher: text("matcher").notNull(),
+    // How `matcher` is interpreted (ADR 0006). Defaults to `exact` so every
+    // row predating this column keeps the #88 v1 behaviour with no backfill.
+    matchType: text("match_type", { enum: matchTypeValues }).notNull().default("exact"),
   },
-  (table) => [check("activities_kind_check", oneOf(table.kind, activityKindValues))],
+  (table) => [
+    check("activities_kind_check", oneOf(table.kind, activityKindValues)),
+    check("activities_match_type_check", oneOf(table.matchType, matchTypeValues)),
+  ],
 );
 
 /** A named bundle of {@link activities}, linked many-to-many. */
@@ -416,6 +431,99 @@ export const exceptions = sqliteTable(
     // A pre-scheduled override must begin strictly before it expires.
     check(
       "exceptions_effective_window_check",
+      sql`${table.effectiveFrom} is null or ${table.effectiveFrom} < ${table.expiresAt}`,
+    ),
+  ],
+);
+
+/**
+ * A recurring allow/deny/extend rule defined **once for a {@link userGroups
+ * group}** and inherited by every member (#182, `docs/adr/0007-group-targeted-policy-rules.md`).
+ * Column-for-column the same rule shape as {@link schedules} — including the
+ * reserved recurrence + date-scoping window (ADR 0005) and the polymorphic
+ * `target_id` (see the file header) — but keyed by `user_group_id` instead of
+ * `user_id`, and with its own per-group `ordinal` (first-match-wins within the
+ * group, ADR 0004).
+ *
+ * Kept in a separate table rather than relaxing `schedules.user_id` to nullable
+ * (ADR 0007 §"Why B over A"): the user-keyed table and its wire contract stay
+ * untouched. The two tables converge at resolution, not in storage — a member's
+ * own rules and these inherited rules are merged into one precedence-ordered
+ * list by `policy/group-resolution.ts`, both satisfying the owner-agnostic
+ * `ScheduleRule` interface, so there is no duplicated precedence logic.
+ */
+export const groupSchedules = sqliteTable(
+  "group_schedules",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    userGroupId: integer("user_group_id")
+      .notNull()
+      .references(() => userGroups.id, { onDelete: "cascade" }),
+    targetKind: text("target_kind", { enum: scopeValues }).notNull(),
+    targetId: integer("target_id"),
+    recurrenceDays: integer("recurrence_days"),
+    recurrenceStartMinute: integer("recurrence_start_minute"),
+    recurrenceEndMinute: integer("recurrence_end_minute"),
+    effectiveFrom: integer("effective_from", { mode: "timestamp" }),
+    effectiveTo: integer("effective_to", { mode: "timestamp" }),
+    action: text("action", { enum: scheduleActionValues }).notNull(),
+    ordinal: integer("ordinal").notNull().default(0),
+  },
+  (table) => [
+    index("group_schedules_group_ordinal_idx").on(table.userGroupId, table.ordinal),
+    check("group_schedules_target_kind_check", oneOf(table.targetKind, scopeValues)),
+    check("group_schedules_action_check", oneOf(table.action, scheduleActionValues)),
+    check(
+      "group_schedules_target_coherence_check",
+      targetCoherence(table.targetKind, table.targetId),
+    ),
+    check(
+      "group_schedules_recurrence_days_check",
+      sql`${table.recurrenceDays} is null or (${table.recurrenceDays} between ${sql.raw(String(WEEKDAY_MASK_MIN))} and ${sql.raw(String(WEEKDAY_MASK_MAX))})`,
+    ),
+    check(
+      "group_schedules_recurrence_minutes_check",
+      sql`(${table.recurrenceStartMinute} is null) = (${table.recurrenceEndMinute} is null) and (${table.recurrenceStartMinute} is null or (${table.recurrenceStartMinute} >= ${sql.raw(String(MINUTE_OF_DAY_MIN))} and ${table.recurrenceEndMinute} <= ${sql.raw(String(MINUTE_OF_DAY_MAX))} and ${table.recurrenceStartMinute} < ${table.recurrenceEndMinute}))`,
+    ),
+    check(
+      "group_schedules_effective_window_check",
+      sql`${table.effectiveFrom} is null or ${table.effectiveTo} is null or ${table.effectiveFrom} < ${table.effectiveTo}`,
+    ),
+  ],
+);
+
+/**
+ * A one-off, expiring override defined **once for a {@link userGroups group}**
+ * and inherited by every member (#182, ADR 0007). The {@link exceptions} shape
+ * keyed by `user_group_id` instead of `user_id`: active during
+ * `[effective_from ?? created_at, expires_at)` (ADR 0005 §2), the
+ * `(user_group_id, expires_at)` index serving the active-override lookup.
+ */
+export const groupExceptions = sqliteTable(
+  "group_exceptions",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    userGroupId: integer("user_group_id")
+      .notNull()
+      .references(() => userGroups.id, { onDelete: "cascade" }),
+    targetKind: text("target_kind", { enum: scopeValues }).notNull(),
+    targetId: integer("target_id"),
+    action: text("action", { enum: scheduleActionValues }).notNull(),
+    reason: text("reason"),
+    effectiveFrom: integer("effective_from", { mode: "timestamp" }),
+    expiresAt: integer("expires_at", { mode: "timestamp" }).notNull(),
+    createdAt: timestampNow("created_at"),
+  },
+  (table) => [
+    index("group_exceptions_group_expires_idx").on(table.userGroupId, table.expiresAt),
+    check("group_exceptions_target_kind_check", oneOf(table.targetKind, scopeValues)),
+    check("group_exceptions_action_check", oneOf(table.action, scheduleActionValues)),
+    check(
+      "group_exceptions_target_coherence_check",
+      targetCoherence(table.targetKind, table.targetId),
+    ),
+    check(
+      "group_exceptions_effective_window_check",
       sql`${table.effectiveFrom} is null or ${table.effectiveFrom} < ${table.expiresAt}`,
     ),
   ],

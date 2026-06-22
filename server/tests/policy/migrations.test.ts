@@ -73,6 +73,8 @@ const EXPECTED_TABLES = [
   "enrolment_tokens",
   "exceptions",
   "grants",
+  "group_exceptions",
+  "group_schedules",
   "integration_tokens",
   "notification_policies",
   "schedules",
@@ -135,6 +137,81 @@ describe("policy migrations", () => {
     expect(exceptionColumns).toContain("effective_from");
     // expires_at remains the effective end — no separate effective_to (ADR 0005 §2).
     expect(exceptionColumns).not.toContain("effective_to");
+
+    sqlite.close();
+  });
+
+  it("materialises the group-targeted schedule/exception tables (#182)", () => {
+    // ADR 0007: group rules live in their own tables (keyed by user_group_id),
+    // mirroring the user-keyed shape rather than relaxing schedules.user_id.
+    const sqlite = new Database(":memory:");
+    const db = drizzle(sqlite);
+
+    migrate(db, { migrationsFolder });
+
+    // group_schedules mirrors schedules but is keyed by user_group_id, not user_id.
+    const groupScheduleColumns = columnNames(sqlite, "group_schedules");
+    expect(groupScheduleColumns).toEqual(
+      expect.arrayContaining([
+        "user_group_id",
+        "target_kind",
+        "target_id",
+        "recurrence_days",
+        "recurrence_start_minute",
+        "recurrence_end_minute",
+        "effective_from",
+        "effective_to",
+        "action",
+        "ordinal",
+      ]),
+    );
+    expect(groupScheduleColumns).not.toContain("user_id");
+
+    // group_exceptions mirrors exceptions, keyed by user_group_id.
+    const groupExceptionColumns = columnNames(sqlite, "group_exceptions");
+    expect(groupExceptionColumns).toEqual(
+      expect.arrayContaining([
+        "user_group_id",
+        "target_kind",
+        "target_id",
+        "action",
+        "reason",
+        "effective_from",
+        "expires_at",
+        "created_at",
+      ]),
+    );
+    expect(groupExceptionColumns).not.toContain("user_id");
+    expect(groupExceptionColumns).not.toContain("effective_to");
+
+    sqlite.close();
+  });
+
+  it("adds activities.match_type defaulting to 'exact' (#178, ADR 0006)", () => {
+    // Locks the hand-fixed recreate migration: the new matcher-grammar
+    // discriminator must exist and carry the degenerate v1 default so any
+    // activity predating it keeps case-insensitive exact matching with no
+    // backfill.
+    const sqlite = new Database(":memory:");
+    const db = drizzle(sqlite);
+
+    migrate(db, { migrationsFolder });
+
+    const column = sqlite
+      .prepare(`SELECT name, "notnull", dflt_value FROM pragma_table_info('activities')`)
+      .all() as { name: string; notnull: number; dflt_value: string | null }[];
+    const matchType = column.find((c) => c.name === "match_type");
+    expect(matchType).toBeDefined();
+    expect(matchType?.notnull).toBe(1);
+    expect(matchType?.dflt_value).toBe("'exact'");
+
+    // An existing row inserted without match_type lands on the default, so the
+    // recreate's column-copy hand-fix preserved v1 rows.
+    sqlite.prepare(`INSERT INTO activities (kind, matcher) VALUES ('app', 'firefox')`).run();
+    const row = sqlite.prepare(`SELECT match_type FROM activities`).get() as {
+      match_type: string;
+    };
+    expect(row.match_type).toBe("exact");
 
     sqlite.close();
   });

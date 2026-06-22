@@ -11,6 +11,7 @@
  * install shutdown signal handlers, and listen.
  */
 import { loadSettings } from "./config.js";
+import { ensureServerSshKeyPair } from "./setup/ssh-keys.js";
 import { buildApp } from "./web/app.js";
 
 const HOST = "0.0.0.0";
@@ -37,12 +38,34 @@ async function main(): Promise<void> {
     });
   }
 
+  // Generate the server's SSH key pair on first run if absent (#39, Phase-4
+  // step). In-process at boot like the migrator (#49), so the image ships no
+  // ssh-keygen binary. A keygen failure (e.g. an unwritable data volume) is
+  // logged and the dashboard still starts — enrolment just hands back no key
+  // (docs/server-deployment.md → "First-run setup") — rather than crashing.
+  try {
+    ensureServerSshKeyPair({
+      privateKeyPath: settings.sshPrivateKeyPath,
+      publicKeyPath: settings.sshPublicKeyPath,
+      log: app.log,
+    });
+  } catch (err) {
+    app.log.error(err, "server SSH key bootstrap failed; continuing without a key");
+  }
+
   try {
     await app.listen({ host: HOST, port: PORT });
   } catch (err) {
     app.log.error(err);
     process.exit(1);
   }
+
+  // Bootstrap the first-run Ansible venv (#39, Phase-6 step) in the background,
+  // after listen so a slow `pip install ansible-core` never delays the dashboard
+  // becoming reachable. `bootstrap()` never throws — a network-less first run
+  // records `unavailable` and the reason is surfaced at GET /api/system/ansible
+  // (docs/server-deployment.md → "First-run setup") — so a bare `void` is safe.
+  void app.ansibleVenv.bootstrap(app.log);
 }
 
 void main();

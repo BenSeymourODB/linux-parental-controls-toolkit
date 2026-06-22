@@ -119,7 +119,7 @@ describe("stub transport push on policy change (#54)", () => {
     await auth({
       method: "PUT",
       url: `/api/users/${userId}/clients/${clientId}`,
-      payload: { linuxUsername: "alice", linuxUid: 1001 },
+      payload: { osUsername: "alice", osUserRef: "1001" },
     });
 
     const pushed = pushLines("link.upserted");
@@ -128,7 +128,7 @@ describe("stub transport push on policy change (#54)", () => {
       clientId,
       userId,
       reason: "link.upserted",
-      detail: { linuxUsername: "alice", linuxUid: 1001 },
+      detail: { osUsername: "alice", osUserRef: "1001" },
     });
   });
 
@@ -137,7 +137,7 @@ describe("stub transport push on policy change (#54)", () => {
     await auth({
       method: "PUT",
       url: `/api/users/${userId}/clients/${clientId}`,
-      payload: { linuxUsername: "alice", linuxUid: 1001 },
+      payload: { osUsername: "alice", osUserRef: "1001" },
     });
 
     await auth({
@@ -168,12 +168,12 @@ describe("stub transport push on policy change (#54)", () => {
     await auth({
       method: "PUT",
       url: `/api/users/${userId}/clients/${clientId}`,
-      payload: { linuxUsername: "alice", linuxUid: 1001 },
+      payload: { osUsername: "alice", osUserRef: "1001" },
     });
     await auth({
       method: "PUT",
       url: `/api/users/${userId}/clients/${secondClientId}`,
-      payload: { linuxUsername: "alice", linuxUid: 1002 },
+      payload: { osUsername: "alice", osUserRef: "1002" },
     });
 
     await auth({
@@ -199,7 +199,7 @@ describe("stub transport push on policy change (#54)", () => {
     await auth({
       method: "PUT",
       url: `/api/users/${userId}/clients/${clientId}`,
-      payload: { linuxUsername: "alice", linuxUid: 1001 },
+      payload: { osUsername: "alice", osUserRef: "1001" },
     });
 
     await auth({ method: "DELETE", url: `/api/users/${userId}` });
@@ -214,7 +214,7 @@ describe("stub transport push on policy change (#54)", () => {
     await auth({
       method: "PUT",
       url: `/api/users/${userId}/clients/${clientId}`,
-      payload: { linuxUsername: "alice", linuxUid: 1001 },
+      payload: { osUsername: "alice", osUserRef: "1001" },
     });
 
     await auth({ method: "DELETE", url: `/api/users/${userId}/clients/${clientId}` });
@@ -230,7 +230,7 @@ describe("stub transport push on policy change (#54)", () => {
     await auth({
       method: "PUT",
       url: `/api/users/${userId}/clients/${clientId}`,
-      payload: { linuxUsername: "alice", linuxUid: 1001 },
+      payload: { osUsername: "alice", osUserRef: "1001" },
     });
     return { userId, clientId };
   }

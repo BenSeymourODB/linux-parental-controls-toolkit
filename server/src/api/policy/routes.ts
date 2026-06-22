@@ -14,6 +14,7 @@
  */
 import type { FastifyInstance } from "fastify";
 
+import { isValidMatcher } from "../../policy/activity-matcher.js";
 import type { PolicyDb } from "../../policy/db.js";
 import type { Scope } from "../../policy/enums.js";
 import * as repo from "../../policy/repository.js";
@@ -22,6 +23,8 @@ import {
   createPolicyPushStub,
   linkPushCommands,
   userPushCommands,
+  type PolicyPushStub,
+  type UserPushReason,
 } from "../../transport/stub.js";
 import { ApiError } from "../errors.js";
 import type { ZodTypeProvider } from "../validation.js";
@@ -31,6 +34,8 @@ import {
   createBudgetSchema,
   createClientSchema,
   createExceptionSchema,
+  createGroupExceptionSchema,
+  createGroupScheduleSchema,
   createScheduleSchema,
   createUserGroupSchema,
   createUserSchema,
@@ -43,6 +48,8 @@ import {
   toBudgetResponse,
   toClientResponse,
   toExceptionResponse,
+  toGroupExceptionResponse,
+  toGroupScheduleResponse,
   toLinkResponse,
   toNotificationPolicyResponse,
   toScheduleResponse,
@@ -67,6 +74,8 @@ import {
   type BudgetResponse,
   type ClientResponse,
   type ExceptionResponse,
+  type GroupExceptionResponse,
+  type GroupScheduleResponse,
   type LinkResponse,
   type NotificationPolicyResponse,
   type ScheduleResponse,
@@ -135,18 +144,43 @@ function assertTarget(db: PolicyDb, kind: Scope, targetId: number | null): void 
 }
 
 /**
+ * Fan a group-rule mutation out to the push stub: one command per client of
+ * every member of the group (#182). A group-targeted schedule/exception affects
+ * every member, so it pushes the same way each member's own rule change does —
+ * reusing {@link userPushCommands} per member, attributing the push to that
+ * member. No new command shape (ADR 0007 §Consequences). A group with no members
+ * (or members with no clients) yields an empty list — a no-op push.
+ */
+function groupMemberPushCommands(
+  db: PolicyDb,
+  reason: UserPushReason,
+  groupId: number,
+  detail: Readonly<Record<string, unknown>>,
+): ReturnType<typeof userPushCommands> {
+  return repo
+    .listGroupMembers(db, groupId)
+    .flatMap((member) =>
+      userPushCommands(reason, member.id, repo.listUserClientIds(db, member.id), detail),
+    );
+}
+
+/**
  * Register the policy CRUD routes on an already-`/api`-prefixed scope. Call
  * after {@link registerAuth} so `scope.requireAdmin` is decorated.
+ *
+ * Every successful mutation hands the intended per-client effect to `push`. In
+ * production that is the live `timekpra`-over-SSH dispatcher (#201, wired in
+ * `buildApp`), which pushes to reachable clients and queues for offline ones
+ * (#84) — see `transport/policy-push/` and `docs/architecture.md` → "Outbound
+ * (server → client) — policy push". When no dispatcher is injected (no SSH key
+ * yet, #39; or a test), it defaults to the logging stub (#54), so CRUD still
+ * works and the change is logged rather than dispatched.
  */
-export function registerPolicyRoutes(scope: FastifyInstance): void {
+export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushStub): void {
   const typed = scope.withTypeProvider<ZodTypeProvider>();
   const guard = { preHandler: scope.requireAdmin };
 
-  // Phase-2 stub transport (#54): every successful mutation logs the intended
-  // per-client effect instead of dispatching it. This is the seam Phase 4
-  // (SSH + `timekpra`) and Phase 6 (Ansible) fill in — see `transport/stub.ts`
-  // and `docs/architecture.md` → "Outbound (server → client) — policy push".
-  const pushStub = createPolicyPushStub(scope.log);
+  const pushStub = push ?? createPolicyPushStub(scope.log);
 
   // --- Users ---------------------------------------------------------------
 
@@ -313,12 +347,12 @@ export function registerPolicyRoutes(scope: FastifyInstance): void {
       }
       const row = asConflict(
         () => repo.upsertLink(scope.db, userId, clientId, request.body),
-        `Linux UID ${request.body.linuxUid} is already mapped to another user on client ${clientId}`,
+        `OS account reference ${request.body.osUserRef} is already mapped to another user on client ${clientId}`,
       );
       pushStub.push(
         linkPushCommands("link.upserted", userId, clientId, {
-          linuxUsername: row.linuxUsername,
-          linuxUid: row.linuxUid,
+          osUsername: row.osUsername,
+          osUserRef: row.osUserRef,
         }),
       );
       return toLinkResponse(row);
@@ -378,6 +412,19 @@ export function registerPolicyRoutes(scope: FastifyInstance): void {
     "/activities/:id",
     { ...guard, schema: { params: idParamsSchema, body: updateActivitySchema } },
     async (request): Promise<ActivityResponse> => {
+      const existing = repo.getActivity(scope.db, request.params.id);
+      if (existing === undefined) {
+        throw new ApiError(404, "not_found", `Activity ${request.params.id} not found`);
+      }
+      // The grammar is a pair (ADR 0006): validate the *effective* match-type +
+      // matcher after the patch merges over the stored row, since either field
+      // may be the one omitted. createActivitySchema validates this at the DTO
+      // layer where both are always present; PATCH needs the merge.
+      const matchType = request.body.matchType ?? existing.matchType;
+      const matcher = request.body.matcher ?? existing.matcher;
+      if (!isValidMatcher(matchType, matcher)) {
+        throw new ApiError(400, "validation_error", "matcher is not a valid regular expression");
+      }
       const row = repo.updateActivity(scope.db, request.params.id, request.body);
       if (row === undefined) {
         throw new ApiError(404, "not_found", `Activity ${request.params.id} not found`);
@@ -617,6 +664,270 @@ export function registerPolicyRoutes(scope: FastifyInstance): void {
       if (!repo.removeUserFromGroup(scope.db, groupId, userId)) {
         throw new ApiError(404, "not_found", `User ${userId} is not a member of group ${groupId}`);
       }
+      return reply.code(204).send();
+    },
+  );
+
+  // --- Group schedules (#182) ----------------------------------------------
+  // Group-targeted recurring rules (ADR 0007). The collection is nested under
+  // the group (the group is the structural owner); a mutation fans the push out
+  // to every member's clients. Item routes are flat by id, like `/schedules/:id`.
+
+  typed.get(
+    "/user-groups/:groupId/schedules",
+    { ...guard, schema: { params: groupIdParamsSchema } },
+    async (request): Promise<GroupScheduleResponse[]> => {
+      const { groupId } = request.params;
+      if (repo.getUserGroup(scope.db, groupId) === undefined) {
+        throw new ApiError(404, "not_found", `User group ${groupId} not found`);
+      }
+      return repo.listGroupSchedules(scope.db, groupId).map(toGroupScheduleResponse);
+    },
+  );
+
+  typed.post(
+    "/user-groups/:groupId/schedules",
+    { ...guard, schema: { params: groupIdParamsSchema, body: createGroupScheduleSchema } },
+    async (request, reply): Promise<GroupScheduleResponse> => {
+      const { groupId } = request.params;
+      if (repo.getUserGroup(scope.db, groupId) === undefined) {
+        throw new ApiError(404, "not_found", `User group ${groupId} not found`);
+      }
+      const body = request.body;
+      assertTarget(scope.db, body.targetKind, body.targetId);
+      const row = asValidated(
+        () =>
+          repo.createGroupSchedule(scope.db, {
+            userGroupId: groupId,
+            targetKind: body.targetKind,
+            targetId: body.targetId,
+            action: body.action,
+            recurrenceDays: body.recurrenceDays,
+            recurrenceStartMinute: body.recurrenceStartMinute,
+            recurrenceEndMinute: body.recurrenceEndMinute,
+            effectiveFrom: body.effectiveFrom === null ? null : new Date(body.effectiveFrom),
+            effectiveTo: body.effectiveTo === null ? null : new Date(body.effectiveTo),
+            ordinal: body.ordinal,
+          }),
+        "The group schedule violates a recurrence or target constraint",
+      );
+      pushStub.push(
+        groupMemberPushCommands(scope.db, "schedule.created", groupId, {
+          groupScheduleId: row.id,
+          userGroupId: groupId,
+          targetKind: row.targetKind,
+          targetId: row.targetId,
+          action: row.action,
+          ordinal: row.ordinal,
+        }),
+      );
+      reply.code(201);
+      return toGroupScheduleResponse(row);
+    },
+  );
+
+  typed.get(
+    "/group-schedules/:id",
+    { ...guard, schema: { params: idParamsSchema } },
+    async (request): Promise<GroupScheduleResponse> => {
+      const row = repo.getGroupSchedule(scope.db, request.params.id);
+      if (row === undefined) {
+        throw new ApiError(404, "not_found", `Group schedule ${request.params.id} not found`);
+      }
+      return toGroupScheduleResponse(row);
+    },
+  );
+
+  typed.patch(
+    "/group-schedules/:id",
+    { ...guard, schema: { params: idParamsSchema, body: updateScheduleSchema } },
+    async (request): Promise<GroupScheduleResponse> => {
+      const existing = repo.getGroupSchedule(scope.db, request.params.id);
+      if (existing === undefined) {
+        throw new ApiError(404, "not_found", `Group schedule ${request.params.id} not found`);
+      }
+      const body = request.body;
+      const nextKind = body.targetKind ?? existing.targetKind;
+      const nextTargetId = body.targetId !== undefined ? body.targetId : existing.targetId;
+      assertTarget(scope.db, nextKind, nextTargetId);
+      const patch: repo.GroupScheduleUpdate = {
+        ...(body.targetKind !== undefined ? { targetKind: body.targetKind } : {}),
+        ...(body.targetId !== undefined ? { targetId: body.targetId } : {}),
+        ...(body.action !== undefined ? { action: body.action } : {}),
+        ...(body.recurrenceDays !== undefined ? { recurrenceDays: body.recurrenceDays } : {}),
+        ...(body.recurrenceStartMinute !== undefined
+          ? { recurrenceStartMinute: body.recurrenceStartMinute }
+          : {}),
+        ...(body.recurrenceEndMinute !== undefined
+          ? { recurrenceEndMinute: body.recurrenceEndMinute }
+          : {}),
+        ...(body.effectiveFrom !== undefined
+          ? { effectiveFrom: body.effectiveFrom === null ? null : new Date(body.effectiveFrom) }
+          : {}),
+        ...(body.effectiveTo !== undefined
+          ? { effectiveTo: body.effectiveTo === null ? null : new Date(body.effectiveTo) }
+          : {}),
+        ...(body.ordinal !== undefined ? { ordinal: body.ordinal } : {}),
+      };
+      const row = asValidated(
+        () => repo.updateGroupSchedule(scope.db, request.params.id, patch),
+        "The group schedule update violates a recurrence or target constraint",
+      );
+      if (row === undefined) {
+        throw new ApiError(404, "not_found", `Group schedule ${request.params.id} not found`);
+      }
+      pushStub.push(
+        groupMemberPushCommands(scope.db, "schedule.updated", row.userGroupId, {
+          groupScheduleId: row.id,
+          userGroupId: row.userGroupId,
+        }),
+      );
+      return toGroupScheduleResponse(row);
+    },
+  );
+
+  typed.delete(
+    "/group-schedules/:id",
+    { ...guard, schema: { params: idParamsSchema } },
+    async (request, reply) => {
+      const existing = repo.getGroupSchedule(scope.db, request.params.id);
+      if (existing === undefined) {
+        throw new ApiError(404, "not_found", `Group schedule ${request.params.id} not found`);
+      }
+      // Build the fan-out from the row's group before the delete (members are
+      // unaffected by a rule delete, so order is not strictly required here —
+      // kept ahead of the write to mirror the user-DELETE pattern).
+      const commands = groupMemberPushCommands(scope.db, "schedule.deleted", existing.userGroupId, {
+        groupScheduleId: existing.id,
+        userGroupId: existing.userGroupId,
+      });
+      repo.deleteGroupSchedule(scope.db, request.params.id);
+      pushStub.push(commands);
+      return reply.code(204).send();
+    },
+  );
+
+  // --- Group exceptions (#182) ---------------------------------------------
+  // Group-targeted one-off overrides (ADR 0007); same nesting + fan-out as
+  // group schedules.
+
+  typed.get(
+    "/user-groups/:groupId/exceptions",
+    { ...guard, schema: { params: groupIdParamsSchema } },
+    async (request): Promise<GroupExceptionResponse[]> => {
+      const { groupId } = request.params;
+      if (repo.getUserGroup(scope.db, groupId) === undefined) {
+        throw new ApiError(404, "not_found", `User group ${groupId} not found`);
+      }
+      return repo.listGroupExceptions(scope.db, groupId).map(toGroupExceptionResponse);
+    },
+  );
+
+  typed.post(
+    "/user-groups/:groupId/exceptions",
+    { ...guard, schema: { params: groupIdParamsSchema, body: createGroupExceptionSchema } },
+    async (request, reply): Promise<GroupExceptionResponse> => {
+      const { groupId } = request.params;
+      if (repo.getUserGroup(scope.db, groupId) === undefined) {
+        throw new ApiError(404, "not_found", `User group ${groupId} not found`);
+      }
+      const body = request.body;
+      assertTarget(scope.db, body.targetKind, body.targetId);
+      const row = asValidated(
+        () =>
+          repo.createGroupException(scope.db, {
+            userGroupId: groupId,
+            targetKind: body.targetKind,
+            targetId: body.targetId,
+            action: body.action,
+            reason: body.reason,
+            effectiveFrom: body.effectiveFrom === null ? null : new Date(body.effectiveFrom),
+            expiresAt: new Date(body.expiresAt),
+          }),
+        "The group exception violates a target or effective-window constraint",
+      );
+      pushStub.push(
+        groupMemberPushCommands(scope.db, "exception.created", groupId, {
+          groupExceptionId: row.id,
+          userGroupId: groupId,
+          targetKind: row.targetKind,
+          targetId: row.targetId,
+          action: row.action,
+          expiresAt: row.expiresAt.toISOString(),
+        }),
+      );
+      reply.code(201);
+      return toGroupExceptionResponse(row);
+    },
+  );
+
+  typed.get(
+    "/group-exceptions/:id",
+    { ...guard, schema: { params: idParamsSchema } },
+    async (request): Promise<GroupExceptionResponse> => {
+      const row = repo.getGroupException(scope.db, request.params.id);
+      if (row === undefined) {
+        throw new ApiError(404, "not_found", `Group exception ${request.params.id} not found`);
+      }
+      return toGroupExceptionResponse(row);
+    },
+  );
+
+  typed.patch(
+    "/group-exceptions/:id",
+    { ...guard, schema: { params: idParamsSchema, body: updateExceptionSchema } },
+    async (request): Promise<GroupExceptionResponse> => {
+      const existing = repo.getGroupException(scope.db, request.params.id);
+      if (existing === undefined) {
+        throw new ApiError(404, "not_found", `Group exception ${request.params.id} not found`);
+      }
+      const body = request.body;
+      const nextKind = body.targetKind ?? existing.targetKind;
+      const nextTargetId = body.targetId !== undefined ? body.targetId : existing.targetId;
+      assertTarget(scope.db, nextKind, nextTargetId);
+      const patch: repo.GroupExceptionUpdate = {
+        ...(body.targetKind !== undefined ? { targetKind: body.targetKind } : {}),
+        ...(body.targetId !== undefined ? { targetId: body.targetId } : {}),
+        ...(body.action !== undefined ? { action: body.action } : {}),
+        ...(body.reason !== undefined ? { reason: body.reason } : {}),
+        ...(body.effectiveFrom !== undefined
+          ? { effectiveFrom: body.effectiveFrom === null ? null : new Date(body.effectiveFrom) }
+          : {}),
+        ...(body.expiresAt !== undefined ? { expiresAt: new Date(body.expiresAt) } : {}),
+      };
+      const row = asValidated(
+        () => repo.updateGroupException(scope.db, request.params.id, patch),
+        "The group exception update violates a target or effective-window constraint",
+      );
+      if (row === undefined) {
+        throw new ApiError(404, "not_found", `Group exception ${request.params.id} not found`);
+      }
+      pushStub.push(
+        groupMemberPushCommands(scope.db, "exception.updated", row.userGroupId, {
+          groupExceptionId: row.id,
+          userGroupId: row.userGroupId,
+        }),
+      );
+      return toGroupExceptionResponse(row);
+    },
+  );
+
+  typed.delete(
+    "/group-exceptions/:id",
+    { ...guard, schema: { params: idParamsSchema } },
+    async (request, reply) => {
+      const existing = repo.getGroupException(scope.db, request.params.id);
+      if (existing === undefined) {
+        throw new ApiError(404, "not_found", `Group exception ${request.params.id} not found`);
+      }
+      const commands = groupMemberPushCommands(
+        scope.db,
+        "exception.deleted",
+        existing.userGroupId,
+        { groupExceptionId: existing.id, userGroupId: existing.userGroupId },
+      );
+      repo.deleteGroupException(scope.db, request.params.id);
+      pushStub.push(commands);
       return reply.code(204).send();
     },
   );

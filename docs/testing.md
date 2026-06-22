@@ -287,6 +287,62 @@ well-formedness and same-second collisions. The `drizzle-kit check` drift gate
 above remains the backstop for *semantic* conflicts between two independent
 schema edits.
 
+### `npm run db:rebase` (snapshot-collision recovery, #199)
+
+The timestamp prefix stops migration *filenames* from colliding, but each
+migration's snapshot (`drizzle/meta/<prefix>_snapshot.json`) carries a `prevId`
+parent pointer. Two branches that branch off the same snapshot generate
+migrations whose snapshots claim the **same parent**, so merging `main` in
+surfaces as a drizzle-kit `pointing to a parent snapshot … which is a collision`
+error (the `migrations` CI job catches it). The manual fix is mechanical but
+fiddly; `npm run db:rebase` automates it:
+
+```bash
+# after resolving the source merge (schema.ts, _journal.json, …):
+cd server && npm run db:rebase
+```
+
+It drops the branch-only migration(s) + their snapshots, trims the matching
+`_journal.json` entries, re-runs `db:generate`/`db:check`, and leaves the result
+**staged, not committed** so you review the regenerated diff before committing.
+It **refuses** (printing why) when the merge is unresolved (unmerged paths or
+leftover conflict markers), or — unless given `--force` — when regen would be
+lossy: more than one branch-only migration (they collapse into one cumulative
+diff), or a branch-only migration whose SQL regen does not reproduce
+(hand-edited / custom data SQL, like the #146 recurrence recreate). Use
+`--base <ref>` to diff against a base other than `origin/main`.
+
+The tool is dev-only: it lives in `server/scripts/` (outside `src/`, so it never
+ships in the Docker image) and runs via `node --experimental-strip-types`. Its
+logic is pure functions plus an orchestrator behind injected git/fs/script
+seams, unit-tested in `tests/scripts/rebase-migrations.test.ts` with in-memory
+fakes — no live git or drizzle-kit.
+
+### CI auto-fix (`migration-autofix.yml`, Slice 2 of #199 / #210)
+
+On a `claude/**` PR you usually do not have to run `db:rebase` by hand: the
+`Migration auto-fix` workflow (`.github/workflows/migration-autofix.yml`) does it
+for you. On every PR `synchronize`/`opened`/`reopened` it runs `drizzle-kit
+check` and — **only** when that fails *for the parent-collision reason
+specifically* — re-runs `npm run db:rebase` (never `--force`), commits the
+regenerated migration with a `[skip-regen]` marker, and pushes it back to the PR
+branch, leaving an audit comment. It deliberately does **nothing** on an
+unrelated check failure (that stays a normal red), on a green branch, or when its
+own regen commit is at `HEAD` (the loop guard). When `db:rebase` *refuses* (a
+hand-edited / multi-migration branch it will not touch without `--force`) the
+workflow comments for human attention instead of pushing.
+
+The decision logic lives in (and is unit-tested as)
+`server/scripts/ci-autofix-migrations.ts`
+(`tests/scripts/ci-autofix-migrations.test.ts`), driving the Slice-1 CLI as a
+subprocess; the YAML only wires the real seams.
+
+One caveat: the push uses the default `GITHUB_TOKEN`, whose pushes do **not**
+re-trigger workflows, so the `migrations` check does not auto re-run after a
+fix — the auto-fix comment asks you to re-run it (or it re-runs on your next
+push). Forcing that re-run via a write-scoped GitHub App / PAT is a tracked
+follow-up rather than a silently-added repo secret.
+
 ---
 
 ## API module — what to test
@@ -382,6 +438,14 @@ exactly as the CI job does.
 Save the snippet below as `docker-compose.integration.yml` in the repo root
 (do not commit it; it is a local dev aid only):
 
+The SSH transport authenticates with a key only (never a password), so generate
+a throwaway key pair first and hand the public half to the container:
+
+```bash
+mkdir -p .int-ssh-key
+ssh-keygen -t ed25519 -N '' -f .int-ssh-key/id_ed25519   # once; .int-ssh-key/ is a local aid
+```
+
 ```yaml
 # docker-compose.integration.yml — local integration test environment
 services:
@@ -391,9 +455,16 @@ services:
 
   ssh-target:
     image: lscr.io/linuxserver/openssh-server:latest
-    ports: ["2222:22"]
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - USER_NAME=pctagent
+      - PUBLIC_KEY_FILE=/pubkey/id_ed25519.pub
+    # linuxserver/openssh-server's sshd listens on 2222 inside the container.
+    ports: ["2222:2222"]
     volumes:
       - ./server/tests/stubs:/usr/local/bin:ro
+      - ./.int-ssh-key:/pubkey:ro
 ```
 
 Start the services:
@@ -413,8 +484,13 @@ cd server
 AW_SERVER_URL=http://localhost:5600 \
 ADGUARD_URL=http://localhost:3000 \
 SSH_TARGET_HOST=localhost SSH_TARGET_PORT=2222 \
+SSH_TARGET_USER=pctagent SSH_TARGET_KEY_FILE="$PWD/../.int-ssh-key/id_ed25519" \
   npm run test:integration
 ```
+
+The SSH suites are env-gated: with `SSH_TARGET_HOST` / `SSH_TARGET_KEY_FILE`
+unset they `describe.skipIf` themselves out, so the unit run (`npm test`, which
+never collects `*.int.test.ts`) is unaffected.
 
 ---
 

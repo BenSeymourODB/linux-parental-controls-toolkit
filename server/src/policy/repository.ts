@@ -20,7 +20,14 @@
 import { and, eq } from "drizzle-orm";
 
 import type { PolicyDb } from "./db.js";
-import type { ActivityKind, BudgetWindow, ScheduleAction, Scope, SoundProfile } from "./enums.js";
+import type {
+  ActivityKind,
+  BudgetWindow,
+  MatchType,
+  ScheduleAction,
+  Scope,
+  SoundProfile,
+} from "./enums.js";
 import {
   activities,
   activitiesToGroups,
@@ -28,6 +35,8 @@ import {
   budgets,
   clients,
   exceptions,
+  groupExceptions,
+  groupSchedules,
   notificationPolicies,
   schedules,
   userGroupMemberships,
@@ -70,8 +79,9 @@ export interface ClientUpdate {
 
 /** The link's own attributes (the user/client pair comes from the route). */
 export interface LinkUpsert {
-  linuxUsername: string;
-  linuxUid: number;
+  osUsername: string;
+  /** OS account reference: a uid on Linux, a SID on Windows (#230). */
+  osUserRef: string;
 }
 
 // --- Users -----------------------------------------------------------------
@@ -150,6 +160,42 @@ export function deleteClient(db: PolicyDb, id: number): boolean {
   );
 }
 
+/**
+ * Find the client whose per-client bearer token hashes to `tokenHash`, or
+ * `undefined`. The credential the Phase-8b event stream (`/api/events/stream`,
+ * #100) authenticates against; the SHA-256 hash is the stored form (#77), and
+ * `clients_bearer_token_hash_unique` makes the match single-row. Clients with
+ * no bearer token (admin-CRUD, `bearer_token_hash IS NULL`) never match a real
+ * hash, so they cannot be impersonated by an empty credential.
+ */
+export function findClientByBearerTokenHash(
+  db: PolicyDb,
+  tokenHash: string,
+): ClientRow | undefined {
+  return db.select().from(clients).where(eq(clients.bearerTokenHash, tokenHash)).get();
+}
+
+/**
+ * Record that the dashboard just heard from a client — the event-stream
+ * connect/disconnect liveness signal (#100). `last_seen` is a system-managed
+ * column (not in {@link ClientUpdate}), so this writes it directly. A no-op if
+ * no client with `id` exists.
+ */
+export function touchClientLastSeen(db: PolicyDb, id: number, at: Date): void {
+  db.update(clients).set({ lastSeen: at }).where(eq(clients.id, id)).run();
+}
+
+/**
+ * Record that the client was confirmed reachable at `at`, returning the updated
+ * row (or `undefined` if it no longer exists). Kept separate from
+ * {@link updateClient}: `last_seen` is a system observation written by the
+ * transport/health paths (#81), not an admin-editable field, so it stays out of
+ * {@link ClientUpdate}.
+ */
+export function recordClientLastSeen(db: PolicyDb, id: number, at: Date): ClientRow | undefined {
+  return db.update(clients).set({ lastSeen: at }).where(eq(clients.id, id)).returning().get();
+}
+
 // --- User-on-client links --------------------------------------------------
 
 /** All links for a user, ascending by client id. */
@@ -162,12 +208,23 @@ export function listUserLinks(db: PolicyDb, userId: number): UserOnClientRow[] {
     .all();
 }
 
+/** All links for a client, ascending by user id (inverse of {@link listUserLinks}). */
+export function listClientLinks(db: PolicyDb, clientId: number): UserOnClientRow[] {
+  return db
+    .select()
+    .from(usersOnClients)
+    .where(eq(usersOnClients.clientId, clientId))
+    .orderBy(usersOnClients.userId)
+    .all();
+}
+
 /**
  * Create or replace the link between `userId` and `clientId` (idempotent on the
- * composite key). Throws on the `(client, linux_uid)` uniqueness collision —
- * i.e. another user already mapped to that UID on the same client (see
- * {@link isUniqueViolation}). The caller is responsible for confirming the user
- * and client exist first (FK violations otherwise surface as opaque errors).
+ * composite key). Throws on the `(client, os_user_ref)` uniqueness collision —
+ * i.e. another user already mapped to that OS account reference on the same
+ * client (see {@link isUniqueViolation}). The caller is responsible for
+ * confirming the user and client exist first (FK violations otherwise surface
+ * as opaque errors).
  */
 export function upsertLink(
   db: PolicyDb,
@@ -177,10 +234,10 @@ export function upsertLink(
 ): UserOnClientRow {
   return db
     .insert(usersOnClients)
-    .values({ userId, clientId, linuxUsername: input.linuxUsername, linuxUid: input.linuxUid })
+    .values({ userId, clientId, osUsername: input.osUsername, osUserRef: input.osUserRef })
     .onConflictDoUpdate({
       target: [usersOnClients.userId, usersOnClients.clientId],
-      set: { linuxUsername: input.linuxUsername, linuxUid: input.linuxUid },
+      set: { osUsername: input.osUsername, osUserRef: input.osUserRef },
     })
     .returning()
     .get();
@@ -357,12 +414,15 @@ export type ActivityGroupMembershipRow = typeof activitiesToGroups.$inferSelect;
 export interface ActivityCreate {
   kind: ActivityKind;
   matcher: string;
+  /** How `matcher` is interpreted (ADR 0006). Omitted → DB default `exact`. */
+  matchType?: MatchType | undefined;
 }
 
 /** Mutable fields on an {@link activities} row; omitted keys are unchanged. */
 export interface ActivityUpdate {
   kind?: ActivityKind | undefined;
   matcher?: string | undefined;
+  matchType?: MatchType | undefined;
 }
 
 /** All activities, ascending by id. */
@@ -379,7 +439,12 @@ export function getActivity(db: PolicyDb, id: number): ActivityRow | undefined {
 export function createActivity(db: PolicyDb, input: ActivityCreate): ActivityRow {
   return db
     .insert(activities)
-    .values({ kind: input.kind, matcher: input.matcher })
+    .values({
+      kind: input.kind,
+      matcher: input.matcher,
+      // Omit when undefined so the column's DEFAULT 'exact' applies (ADR 0006).
+      ...(input.matchType !== undefined ? { matchType: input.matchType } : {}),
+    })
     .returning()
     .get();
 }
@@ -473,6 +538,7 @@ export function listGroupActivities(db: PolicyDb, groupId: number): ActivityRow[
       id: activities.id,
       kind: activities.kind,
       matcher: activities.matcher,
+      matchType: activities.matchType,
     })
     .from(activitiesToGroups)
     .innerJoin(activities, eq(activitiesToGroups.activityId, activities.id))
@@ -866,6 +932,201 @@ export function deleteNotificationPolicy(db: PolicyDb, userId: number): boolean 
       .delete(notificationPolicies)
       .where(eq(notificationPolicies.userId, userId))
       .returning({ userId: notificationPolicies.userId })
+      .get() !== undefined
+  );
+}
+
+// --- Group schedules (#182) ------------------------------------------------
+// Group-targeted recurring rules, keyed by `user_group_id` (ADR 0007). The same
+// rule shape as {@link schedules} minus the owner; `policy/group-resolution.ts`
+// merges a user's own schedules with the schedules of their groups.
+
+/** A persisted {@link groupSchedules} row. */
+export type GroupScheduleRow = typeof groupSchedules.$inferSelect;
+
+/**
+ * Fields accepted when creating a {@link groupSchedules} row — {@link
+ * ScheduleCreate} with `userGroupId` in place of `userId`. The recurrence +
+ * date-scoping fields default to `null` (always-on); `ordinal` defaults to the
+ * column default when omitted.
+ */
+export interface GroupScheduleCreate {
+  userGroupId: number;
+  targetKind: Scope;
+  targetId?: number | null | undefined;
+  action: ScheduleAction;
+  recurrenceDays?: number | null | undefined;
+  recurrenceStartMinute?: number | null | undefined;
+  recurrenceEndMinute?: number | null | undefined;
+  effectiveFrom?: Date | null | undefined;
+  effectiveTo?: Date | null | undefined;
+  ordinal?: number | undefined;
+}
+
+/** Mutable fields on a {@link groupSchedules} row; omitted keys are unchanged. */
+export interface GroupScheduleUpdate {
+  targetKind?: Scope | undefined;
+  targetId?: number | null | undefined;
+  action?: ScheduleAction | undefined;
+  recurrenceDays?: number | null | undefined;
+  recurrenceStartMinute?: number | null | undefined;
+  recurrenceEndMinute?: number | null | undefined;
+  effectiveFrom?: Date | null | undefined;
+  effectiveTo?: Date | null | undefined;
+  ordinal?: number | undefined;
+}
+
+/** All schedules for one group, in evaluation order (ascending `ordinal`, then id). */
+export function listGroupSchedules(db: PolicyDb, groupId: number): GroupScheduleRow[] {
+  return db
+    .select()
+    .from(groupSchedules)
+    .where(eq(groupSchedules.userGroupId, groupId))
+    .orderBy(groupSchedules.ordinal, groupSchedules.id)
+    .all();
+}
+
+/** One group schedule by id, or `undefined` if absent. */
+export function getGroupSchedule(db: PolicyDb, id: number): GroupScheduleRow | undefined {
+  return db.select().from(groupSchedules).where(eq(groupSchedules.id, id)).get();
+}
+
+/**
+ * Insert a group schedule and return the stored row. The caller confirms the
+ * group (and any activity/group referent) exists first; the recurrence +
+ * coherence invariants are validated by the DTO and the route before this.
+ */
+export function createGroupSchedule(db: PolicyDb, input: GroupScheduleCreate): GroupScheduleRow {
+  return db
+    .insert(groupSchedules)
+    .values({
+      userGroupId: input.userGroupId,
+      targetKind: input.targetKind,
+      targetId: input.targetId ?? null,
+      action: input.action,
+      recurrenceDays: input.recurrenceDays ?? null,
+      recurrenceStartMinute: input.recurrenceStartMinute ?? null,
+      recurrenceEndMinute: input.recurrenceEndMinute ?? null,
+      effectiveFrom: input.effectiveFrom ?? null,
+      effectiveTo: input.effectiveTo ?? null,
+      // Omit when undefined so the column default (0) applies.
+      ...(input.ordinal === undefined ? {} : { ordinal: input.ordinal }),
+    })
+    .returning()
+    .get();
+}
+
+/**
+ * Apply a partial update and return the stored row, or `undefined` if no group
+ * schedule with `id` exists. The route re-validates coherence + recurrence on
+ * the merged row before calling this.
+ */
+export function updateGroupSchedule(
+  db: PolicyDb,
+  id: number,
+  patch: GroupScheduleUpdate,
+): GroupScheduleRow | undefined {
+  return db.update(groupSchedules).set(patch).where(eq(groupSchedules.id, id)).returning().get();
+}
+
+/** Delete a group schedule. Returns whether a row was removed. */
+export function deleteGroupSchedule(db: PolicyDb, id: number): boolean {
+  return (
+    db
+      .delete(groupSchedules)
+      .where(eq(groupSchedules.id, id))
+      .returning({ id: groupSchedules.id })
+      .get() !== undefined
+  );
+}
+
+// --- Group exceptions (#182) -----------------------------------------------
+// Group-targeted one-off overrides, keyed by `user_group_id` (ADR 0007).
+
+/** A persisted {@link groupExceptions} row. */
+export type GroupExceptionRow = typeof groupExceptions.$inferSelect;
+
+/**
+ * Fields accepted when creating a {@link groupExceptions} row — {@link
+ * ExceptionCreate} with `userGroupId` in place of `userId`. Active during
+ * `[effectiveFrom ?? createdAt, expiresAt)` (ADR 0005 §2).
+ */
+export interface GroupExceptionCreate {
+  userGroupId: number;
+  targetKind: Scope;
+  targetId?: number | null | undefined;
+  action: ScheduleAction;
+  reason?: string | null | undefined;
+  effectiveFrom?: Date | null | undefined;
+  expiresAt: Date;
+}
+
+/** Mutable fields on a {@link groupExceptions} row; omitted keys are unchanged. */
+export interface GroupExceptionUpdate {
+  targetKind?: Scope | undefined;
+  targetId?: number | null | undefined;
+  action?: ScheduleAction | undefined;
+  reason?: string | null | undefined;
+  effectiveFrom?: Date | null | undefined;
+  expiresAt?: Date | undefined;
+}
+
+/** All exceptions for one group, ascending by `expiresAt` (the hot lookup order). */
+export function listGroupExceptions(db: PolicyDb, groupId: number): GroupExceptionRow[] {
+  return db
+    .select()
+    .from(groupExceptions)
+    .where(eq(groupExceptions.userGroupId, groupId))
+    .orderBy(groupExceptions.expiresAt, groupExceptions.id)
+    .all();
+}
+
+/** One group exception by id, or `undefined` if absent. */
+export function getGroupException(db: PolicyDb, id: number): GroupExceptionRow | undefined {
+  return db.select().from(groupExceptions).where(eq(groupExceptions.id, id)).get();
+}
+
+/**
+ * Insert a group exception and return the stored row. The caller confirms the
+ * group (and any activity/group referent) exists first; coherence and the
+ * `effectiveFrom < expiresAt` window are validated by the DTO/route.
+ */
+export function createGroupException(db: PolicyDb, input: GroupExceptionCreate): GroupExceptionRow {
+  return db
+    .insert(groupExceptions)
+    .values({
+      userGroupId: input.userGroupId,
+      targetKind: input.targetKind,
+      targetId: input.targetId ?? null,
+      action: input.action,
+      reason: input.reason ?? null,
+      effectiveFrom: input.effectiveFrom ?? null,
+      expiresAt: input.expiresAt,
+    })
+    .returning()
+    .get();
+}
+
+/**
+ * Apply a partial update and return the stored row, or `undefined` if no group
+ * exception with `id` exists. The route re-validates coherence and the
+ * effective window on the merged row before calling this.
+ */
+export function updateGroupException(
+  db: PolicyDb,
+  id: number,
+  patch: GroupExceptionUpdate,
+): GroupExceptionRow | undefined {
+  return db.update(groupExceptions).set(patch).where(eq(groupExceptions.id, id)).returning().get();
+}
+
+/** Delete a group exception. Returns whether a row was removed. */
+export function deleteGroupException(db: PolicyDb, id: number): boolean {
+  return (
+    db
+      .delete(groupExceptions)
+      .where(eq(groupExceptions.id, id))
+      .returning({ id: groupExceptions.id })
       .get() !== undefined
   );
 }

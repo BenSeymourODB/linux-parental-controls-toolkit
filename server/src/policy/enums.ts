@@ -40,6 +40,22 @@ export const activityKindValues = ["app", "app_group", "domain", "domain_group"]
 export const activityKindSchema = z.enum(activityKindValues);
 export type ActivityKind = z.infer<typeof activityKindSchema>;
 
+/**
+ * How an {@link Activity}'s `matcher` is interpreted against a telemetry
+ * identifier (the ActivityWatch foreground `app`, or — once web-proxy telemetry
+ * lands — a request host). All matching is case-insensitive (ADR 0006).
+ *
+ * - `exact` — equality. **Default; == the #88 v1 behaviour**, so every
+ *   pre-existing activity keeps its meaning with no data migration.
+ * - `substring` — the matcher occurs anywhere in the identifier.
+ * - `glob` — whole-string match with `*` (any run) and `?` (any one char) the
+ *   only metacharacters; compiled to a bounded regex.
+ * - `regex` — a JS regular expression, validated to compile at write time.
+ */
+export const matchTypeValues = ["exact", "substring", "glob", "regex"] as const;
+export const matchTypeSchema = z.enum(matchTypeValues);
+export type MatchType = z.infer<typeof matchTypeSchema>;
+
 /** What a {@link Schedule} (or {@link Exception}) does in its window. */
 export const scheduleActionValues = ["allow", "deny", "extend"] as const;
 export const scheduleActionSchema = z.enum(scheduleActionValues);

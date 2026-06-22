@@ -17,13 +17,16 @@
  */
 import { z } from "zod";
 
+import { isValidMatcher } from "../../policy/activity-matcher.js";
 import { isValidTimeZone } from "../../policy/budget-window.js";
 import {
   activityKindSchema,
   budgetWindowSchema,
+  matchTypeSchema,
   scheduleActionSchema,
   scopeSchema,
   soundProfileSchema,
+  type MatchType,
 } from "../../policy/enums.js";
 import {
   defaultNotificationPolicy,
@@ -40,6 +43,8 @@ import type {
   BudgetRow,
   ClientRow,
   ExceptionRow,
+  GroupExceptionRow,
+  GroupScheduleRow,
   NotificationPolicyRow,
   ScheduleRow,
   UserGroupRow,
@@ -142,17 +147,27 @@ export const userClientParamsSchema = z.object({
 });
 
 export const upsertLinkSchema = z.object({
-  linuxUsername: z.string().trim().min(1).max(32),
-  // Linux UIDs are non-negative; 0 (root) is permitted at the type level even
-  // if policy would never map a supervised user to it.
-  linuxUid: z.number().int().min(0),
+  osUsername: z.string().trim().min(1).max(32),
+  // OS account reference: a uid on Linux, a SID on Windows (#230). A string so
+  // the published contract is stable across platforms; the charset forbids
+  // `"`/`\`/control chars. On Linux this is the numeric uid as a decimal string
+  // ("0" for root is permitted at the type level even if policy never uses it).
+  osUserRef: z
+    .string()
+    .trim()
+    .min(1)
+    .max(64)
+    .regex(
+      /^[A-Za-z0-9._:-]+$/,
+      "must be an OS account reference (a uid on Linux, a SID on Windows)",
+    ),
 });
 
 export const linkResponseSchema = z.object({
   userId: z.number().int(),
   clientId: z.number().int(),
-  linuxUsername: z.string(),
-  linuxUid: z.number().int(),
+  osUsername: z.string(),
+  osUserRef: z.string(),
 });
 
 export type UpsertLinkRequest = z.infer<typeof upsertLinkSchema>;
@@ -163,8 +178,8 @@ export function toLinkResponse(row: UserOnClientRow): LinkResponse {
   return {
     userId: row.userId,
     clientId: row.clientId,
-    linuxUsername: row.linuxUsername,
-    linuxUid: row.linuxUid,
+    osUsername: row.osUsername,
+    osUserRef: row.osUserRef,
   };
 }
 
@@ -181,15 +196,39 @@ const targetIdSchema = z.number().int().positive().nullable();
 
 // --- Activities ------------------------------------------------------------
 
-export const createActivitySchema = z.object({
-  kind: activityKindSchema,
-  matcher: z.string().trim().min(1).max(512),
-});
+/**
+ * Reject a `regex` matcher that does not compile (ADR 0006 §4). Attached only to
+ * `create`, where both fields are always present; the partial-update case is
+ * validated in the route layer against the merged row (it needs the stored
+ * `match_type`/`matcher` to know the effective pair).
+ */
+const matcherCompiles = (
+  value: { matchType: MatchType; matcher: string },
+  ctx: z.RefinementCtx,
+): void => {
+  if (!isValidMatcher(value.matchType, value.matcher)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "matcher is not a valid regular expression",
+      path: ["matcher"],
+    });
+  }
+};
+
+export const createActivitySchema = z
+  .object({
+    kind: activityKindSchema,
+    matcher: z.string().trim().min(1).max(512),
+    // How `matcher` is interpreted (ADR 0006); defaults to the v1 `exact`.
+    matchType: matchTypeSchema.default("exact"),
+  })
+  .superRefine(matcherCompiles);
 
 export const updateActivitySchema = z
   .object({
     kind: activityKindSchema.optional(),
     matcher: z.string().trim().min(1).max(512).optional(),
+    matchType: matchTypeSchema.optional(),
   })
   .refine(nonEmpty, { message: "At least one field must be provided" });
 
@@ -197,6 +236,7 @@ export const activityResponseSchema = z.object({
   id: z.number().int(),
   kind: activityKindSchema,
   matcher: z.string(),
+  matchType: matchTypeSchema,
 });
 
 export type CreateActivityRequest = z.infer<typeof createActivitySchema>;
@@ -205,7 +245,7 @@ export type ActivityResponse = z.infer<typeof activityResponseSchema>;
 
 /** Map a stored activity row to its wire DTO. */
 export function toActivityResponse(row: ActivityRow): ActivityResponse {
-  return { id: row.id, kind: row.kind, matcher: row.matcher };
+  return { id: row.id, kind: row.kind, matcher: row.matcher, matchType: row.matchType };
 }
 
 // --- Activity groups -------------------------------------------------------
@@ -550,4 +590,120 @@ export function toNotificationPolicyResponse(
 export function defaultNotificationPolicyResponse(userId: number): NotificationPolicyResponse {
   const defaults = defaultNotificationPolicy();
   return { userId, ...defaults };
+}
+
+// --- Group schedules (#182) ------------------------------------------------
+// Group-targeted recurring rules (ADR 0007). Identical to the user-keyed
+// schedule DTOs minus `userId` — the owning group comes from the
+// `/user-groups/:groupId/schedules` path. The PATCH body is identical to a
+// user schedule's ({@link updateScheduleSchema}) and is reused there.
+
+/**
+ * Group-schedule create body: the rule's target/action/order, intersected with
+ * the shared recurrence + date-scoping fields ({@link scheduleRecurrenceSchema}).
+ * No `userId` — the group is the path param.
+ */
+export const createGroupScheduleSchema = z.intersection(
+  z.object({
+    targetKind: scopeSchema,
+    targetId: targetIdSchema.default(null),
+    action: scheduleActionSchema,
+    ordinal: z.number().int().min(0).optional(),
+  }),
+  scheduleRecurrenceSchema,
+);
+
+export const groupScheduleResponseSchema = z.object({
+  id: z.number().int(),
+  userGroupId: z.number().int(),
+  targetKind: scopeSchema,
+  targetId: z.number().int().nullable(),
+  action: scheduleActionSchema,
+  recurrenceDays: z.number().int().nullable(),
+  recurrenceStartMinute: z.number().int().nullable(),
+  recurrenceEndMinute: z.number().int().nullable(),
+  effectiveFrom: z.string().nullable(),
+  effectiveTo: z.string().nullable(),
+  ordinal: z.number().int(),
+});
+
+export type CreateGroupScheduleRequest = z.infer<typeof createGroupScheduleSchema>;
+export type GroupScheduleResponse = z.infer<typeof groupScheduleResponseSchema>;
+
+/** Map a stored group-schedule row to its wire DTO (timestamps → ISO-8601 UTC). */
+export function toGroupScheduleResponse(row: GroupScheduleRow): GroupScheduleResponse {
+  return {
+    id: row.id,
+    userGroupId: row.userGroupId,
+    targetKind: row.targetKind,
+    targetId: row.targetId,
+    action: row.action,
+    recurrenceDays: row.recurrenceDays,
+    recurrenceStartMinute: row.recurrenceStartMinute,
+    recurrenceEndMinute: row.recurrenceEndMinute,
+    effectiveFrom: row.effectiveFrom === null ? null : row.effectiveFrom.toISOString(),
+    effectiveTo: row.effectiveTo === null ? null : row.effectiveTo.toISOString(),
+    ordinal: row.ordinal,
+  };
+}
+
+// --- Group exceptions (#182) -----------------------------------------------
+// Group-targeted one-off overrides (ADR 0007). Identical to the user-keyed
+// exception DTOs minus `userId`; the PATCH body reuses {@link updateExceptionSchema}.
+
+/**
+ * Group-exception create body. Active during `[effectiveFrom ?? createdAt,
+ * expiresAt)`; the superRefine enforces `effectiveFrom < expiresAt`. No
+ * `userId` — the group is the path param.
+ */
+export const createGroupExceptionSchema = z
+  .object({
+    targetKind: scopeSchema,
+    targetId: targetIdSchema.default(null),
+    action: scheduleActionSchema,
+    reason: z.string().trim().min(1).max(500).nullable().default(null),
+    effectiveFrom: z.string().datetime().nullable().default(null),
+    expiresAt: z.string().datetime(),
+  })
+  .superRefine((value, ctx) => {
+    if (
+      value.effectiveFrom !== null &&
+      Date.parse(value.effectiveFrom) >= Date.parse(value.expiresAt)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "expiresAt must be after effectiveFrom",
+        path: ["expiresAt"],
+      });
+    }
+  });
+
+export const groupExceptionResponseSchema = z.object({
+  id: z.number().int(),
+  userGroupId: z.number().int(),
+  targetKind: scopeSchema,
+  targetId: z.number().int().nullable(),
+  action: scheduleActionSchema,
+  reason: z.string().nullable(),
+  effectiveFrom: z.string().nullable(),
+  expiresAt: z.string(),
+  createdAt: z.string(),
+});
+
+export type CreateGroupExceptionRequest = z.infer<typeof createGroupExceptionSchema>;
+export type GroupExceptionResponse = z.infer<typeof groupExceptionResponseSchema>;
+
+/** Map a stored group-exception row to its wire DTO (timestamps → ISO-8601 UTC). */
+export function toGroupExceptionResponse(row: GroupExceptionRow): GroupExceptionResponse {
+  return {
+    id: row.id,
+    userGroupId: row.userGroupId,
+    targetKind: row.targetKind,
+    targetId: row.targetId,
+    action: row.action,
+    reason: row.reason,
+    effectiveFrom: row.effectiveFrom === null ? null : row.effectiveFrom.toISOString(),
+    expiresAt: row.expiresAt.toISOString(),
+    createdAt: row.createdAt.toISOString(),
+  };
 }

@@ -84,4 +84,14 @@ export {
   upsertNotificationPolicySchema,
   type NotificationPolicyResponse,
   type UpsertNotificationPolicyRequest,
+  // Group-targeted schedules + exceptions (#182). The PATCH bodies reuse the
+  // user-keyed `updateScheduleSchema` / `updateExceptionSchema` above.
+  createGroupScheduleSchema,
+  groupScheduleResponseSchema,
+  type CreateGroupScheduleRequest,
+  type GroupScheduleResponse,
+  createGroupExceptionSchema,
+  groupExceptionResponseSchema,
+  type CreateGroupExceptionRequest,
+  type GroupExceptionResponse,
 } from "./dtos.js";
