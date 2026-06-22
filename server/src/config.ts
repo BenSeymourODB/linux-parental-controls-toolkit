@@ -240,6 +240,32 @@ const settingsSchema = z
       ),
     }),
     /**
+     * Automatic pre-migration policy-store snapshot (#166). Before the
+     * in-process migrator runs on boot (`policy/db.ts`), an existing
+     * `policy.sqlite` with pending migrations is snapshotted via `VACUUM INTO`
+     * so a regretted upgrade is recoverable — the automatic counterpart to the
+     * manual `scripts/pct-data-backup.sh` (#120). A fresh DB (nothing yet to
+     * protect) is skipped regardless.
+     */
+    preMigrationBackup: z.object({
+      /**
+       * Master switch (`PCT_PRE_MIGRATION_BACKUP`). Defaults on; an operator who
+       * snapshots `/data` externally (e.g. dataset snapshots) can disable it.
+       */
+      enabled: z.stringbool().default(true),
+      /**
+       * Where snapshots are written (`PCT_PRE_MIGRATION_BACKUP_DIR`). Optional;
+       * when unset, `createDb` derives `<dirname(DATABASE_URL)>/backups` (i.e.
+       * the documented `/data/backups`).
+       */
+      dir: z.string().min(1).optional(),
+      /**
+       * How many snapshots to retain (`PCT_PRE_MIGRATION_BACKUP_RETAIN`); older
+       * ones are pruned after each new snapshot. Defaults to 5.
+       */
+      retain: z.coerce.number().int().positive().default(5),
+    }),
+    /**
      * Phase-3 client health probe (#198): how the `GET /api/clients/health`
      * list walk bounds its live SSH fan-out. Parsed-and-ready ahead of the
      * prober wiring (#39) — like the `telemetry`/`reapply` blocks above — so the
@@ -328,6 +354,11 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
     reapply: {
       cron: env.PCT_REAPPLY_CRON,
       playbooks: env.PCT_REAPPLY_PLAYBOOKS,
+    },
+    preMigrationBackup: {
+      enabled: env.PCT_PRE_MIGRATION_BACKUP,
+      dir: env.PCT_PRE_MIGRATION_BACKUP_DIR,
+      retain: env.PCT_PRE_MIGRATION_BACKUP_RETAIN,
     },
     clientHealth: {
       probeConcurrency: env.PCT_CLIENT_HEALTH_PROBE_CONCURRENCY,
