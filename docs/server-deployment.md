@@ -58,6 +58,7 @@ container.
 ├── adguard/                    # populated on first run if enabled
 │   ├── AdGuardHome             # binary fetched from upstream releases
 │   └── conf/
+├── backups/                    # automatic pre-migration snapshots (#166)
 └── logs/
 ```
 
@@ -86,15 +87,29 @@ idempotently:
    idempotent — it tracks applied migrations in its own journal — so the
    entrypoint itself runs no migration step, and the runtime and migrations
    always open the same `DATABASE_URL` file with no double-migration hazard
-   (issues #49, #39).
-2. **Ansible bootstrap** — if `/data/ansible/venv` is missing, create it
-   and `pip install ansible-core` (downloaded from PyPI at runtime, not
-   from the image). Sync `playbooks/` from the image. The directory root is
+   (issues #49, #39). **Before** applying any *pending* migration to an existing
+   store, the server first takes an automatic pre-migration snapshot of
+   `policy.sqlite` (issue #166) — see "Backup and restore" → "Automatic
+   pre-migration snapshot" below — so a regretted upgrade is recoverable; a
+   fresh or already-up-to-date database is skipped.
+2. **Ansible bootstrap** — the Node server ensures the venv **in-process on
+   boot** (issue #39), mirroring the in-process migrator and SSH keygen above:
+   if `<PCT_ANSIBLE_DIR>/venv/bin/ansible-playbook` is missing it creates the
+   venv and `pip install ansible-core==<PCT_ANSIBLE_CORE_VERSION>` (downloaded
+   from PyPI at runtime, not bundled in the image), then records the version in
+   a sentinel inside the venv so an image upgrade that bumps the pin reconciles
+   it (see "Upgrade path"). It also syncs `playbooks/` from the image's
+   read-only copy (`PCT_ANSIBLE_PLAYBOOK_SRC`) — a missing source is a logged
+   no-op. `python3`/`pip`/`ansible-playbook` are all driven **as subprocesses**,
+   never linked in-process (`docs/licensing-analysis.md`); the image ships only
+   a stock `python3-venv` for this, no Ansible binary. The directory root is
    `PCT_ANSIBLE_DIR` (default `/data/ansible`); the Phase-6 runner
-   (`transport/ansible`) execs `ansible-playbook` from
-   `<PCT_ANSIBLE_DIR>/venv/bin/` against playbooks in
-   `<PCT_ANSIBLE_DIR>/playbooks/` — always as a subprocess, never linked
-   in-process (`docs/licensing-analysis.md`).
+   (`transport/ansible`) execs `ansible-playbook` from `<PCT_ANSIBLE_DIR>/venv/
+   bin/` against playbooks in `<PCT_ANSIBLE_DIR>/playbooks/`. The bootstrap runs
+   in the background after the HTTP listener is up (a slow `pip install` does not
+   delay startup) and never crashes the process: a network-less first run leaves
+   Ansible disabled with the reason surfaced at `GET /api/system/ansible` for the
+   admin UI.
 3. **AdGuard Home bootstrap** — driven by `PCT_ADGUARD_MODE` (see
    "AdGuard Home deployment modes" below). In `managed` mode, the
    first-time fetch downloads the latest stable release from
@@ -365,9 +380,49 @@ snapshots of `pct_data`), those remain a valid coarse backup of the whole
 volume — but take them with the container stopped, since they copy
 `policy.sqlite` at the file level rather than through the SQLite backup API.
 
+### Automatic pre-migration snapshot
+
+`scripts/pct-data-backup.sh` is the *manual* path. The dashboard also takes an
+**automatic** snapshot at the one moment a backup matters most and is easiest to
+forget — a server upgrade that ships new schema migrations (issue #166).
+
+On boot, **before** the in-process migrator (see "First-run setup" step 1)
+applies any *pending* migration to an already-migrated `policy.sqlite`, the
+server snapshots it with SQLite's `VACUUM INTO` (a transactionally consistent,
+standalone copy — never a hot file copy) to
+`/data/backups/pre-migrate-<UTC>.sqlite`. A fresh database — or one already at
+the current schema — is skipped: there is nothing to lose. The last
+`PCT_PRE_MIGRATION_BACKUP_RETAIN` snapshots (default 5) are kept; older ones are
+pruned.
+
+If a migration then fails, the server **does not start serving on a
+half-migrated database** — it logs the failure and exits — and the snapshot is
+left in place. To recover, stop the container, restore the named snapshot over
+`policy.sqlite`, and start the **prior** image tag:
+
+```bash
+docker compose stop dashboard
+# Restore a specific pre-migration snapshot as the policy store:
+cp /data/backups/pre-migrate-20260620T091500123Z.sqlite /data/policy.sqlite
+rm -f /data/policy.sqlite-wal /data/policy.sqlite-shm   # drop stale sidecars
+# Pin docker-compose back to the previous image tag, then:
+docker compose start dashboard
+```
+
+The behaviour is controlled by `PCT_PRE_MIGRATION_BACKUP` (default `true`),
+`PCT_PRE_MIGRATION_BACKUP_DIR` (default `/data/backups`), and
+`PCT_PRE_MIGRATION_BACKUP_RETAIN` (default `5`). Snapshotting is best-effort: if
+it cannot write (e.g. an unwritable `/data/backups`) the server logs the error
+loudly and still migrates — the migrator's own failure remains the boot health
+gate — so disable it only if you snapshot `/data` externally.
+
 ## Upgrade path
 
 `docker pull` a newer image tag and restart. The server applies any new
-migrations in-process on boot (see "First-run setup" step 1). The Ansible venv inside
+migrations in-process on boot (see "First-run setup" step 1) — taking an
+automatic pre-migration snapshot first (see "Backup and restore" → "Automatic
+pre-migration snapshot"), so a regretted upgrade is recoverable. If a migration
+fails, the server exits rather than serving a half-migrated database; restore the
+snapshot and start the previous tag. The Ansible venv inside
 `/data/ansible/venv` is pinned per image release; upgrades reconcile it
 on first start under the new tag.

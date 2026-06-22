@@ -73,6 +73,20 @@ export interface AnsibleRunnerOptions {
   maxBuffer?: number;
 }
 
+/**
+ * A JSON-serialisable value accepted as an `--extra-vars` entry. Widened from
+ * the original scalar-only shape so a structured plan (e.g. the per-UID
+ * e2guardian / AppArmor plans, #90/#92) can be passed whole — the runner
+ * already `JSON.stringify`s the object, so only the type needed broadening.
+ */
+export type ExtraVarValue =
+  | string
+  | number
+  | boolean
+  | null
+  | readonly ExtraVarValue[]
+  | { readonly [key: string]: ExtraVarValue };
+
 /** Arguments for a single {@link AnsibleRunner.runPlaybook} invocation. */
 export interface RunPlaybookOptions {
   /** Playbook file name within `<ansibleDir>/playbooks/`. */
@@ -80,7 +94,7 @@ export interface RunPlaybookOptions {
   /** Target clients; rendered into a per-run dynamic inventory. */
   hosts: readonly AnsibleHost[];
   /** Optional `--extra-vars`, passed to Ansible as a single JSON object. */
-  extraVars?: Record<string, string | number | boolean>;
+  extraVars?: Record<string, ExtraVarValue>;
   /** Optional `--limit` host pattern to narrow the run within the inventory. */
   limit?: string;
 }

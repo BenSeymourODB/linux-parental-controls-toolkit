@@ -212,7 +212,7 @@ agent is ours to host; nothing GPL is in the installer.
 | Supervised user = non-sudo account | Supervised user = **Standard** (non-admin) account |
 | Admin (parent) = sudo | Admin (parent) = local **Administrator** |
 | `pct-agent` service user + scoped sudoers | System service as **LocalSystem** (or dedicated svc account) — a Standard user cannot stop/modify it; this is the tamper boundary |
-| `UserOnClient.linux_uid` | Windows **SID** (and account name) |
+| `UserOnClient.os_user_ref` (a uid on Linux, #230) | Windows **SID** (and account name) |
 
 A Standard user being unable to stop a LocalSystem service is the natural
 analogue of "no sudo for the supervised user" — same posture, native mechanism.
@@ -302,13 +302,14 @@ them require building anything Windows-specific now.
    later. Cheap as a reserved, defaulted column (cf. how #146 reserved
    recurrence columns); expensive as a backfill once a fleet exists. Lets the
    transport facade and the admin UI branch per client without schema churn.
-2. **Generalise the user-mapping field names.** `UserOnClient.linux_username`
-   / `linux_uid` are Linux-specific (`architecture.md`). When this table is
-   implemented (Phase 2), consider neutral names — `os_username` +
-   `os_user_ref` (a uid on Linux, a SID on Windows) — or at least *don't* lean
-   on "linux"/"uid" semantics in `/api/*` DTOs that external integrators and
-   the PWA consume. Renaming an internal column is cheap; renaming a published
-   API field after the calendar integrator depends on it is not.
+2. **Generalise the user-mapping field names.** ✅ **Done (#230).**
+   `UserOnClient` now uses the neutral `os_username` + `os_user_ref` (a uid on
+   Linux, a SID on Windows; `os_user_ref` is `TEXT`), and the `/api/*` DTOs and
+   the install-script enrol payload expose those names — so external
+   integrators and the PWA bind to a contract that survives a Windows client.
+   Done while every consumer was first-party; renaming a published API field
+   after the calendar integrator depends on it would have been a
+   breaking-contract change.
 3. **Keep event-stream frame names OS-neutral.** They already are
    (`enforce.force_close`, `enforce.session_lock`, `lockout.cleared`). When
    adding event types, avoid Linux-only nouns. A Windows agent should consume

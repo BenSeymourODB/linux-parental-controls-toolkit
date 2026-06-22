@@ -8,17 +8,19 @@
 # In scope today: ensure the documented /data volume layout exists, then
 # exec the compiled Node server.
 #
-# Two first-run steps are deliberately NOT entrypoint steps: the Node server
+# Several first-run steps are deliberately NOT entrypoint steps: the Node server
 # does them in-process on boot, so the runtime image ships no extra tooling:
 #   - Schema migration via drizzle-orm's better-sqlite3 migrator (#49), so the
 #     image never ships drizzle-kit and migrator/runtime can't double-migrate.
 #   - SSH key bootstrap (generate id_ed25519 if absent) via node:crypto (#39),
 #     so the image never ships an ssh-keygen binary.
-# See docs/server-deployment.md -> "First-run setup" steps 1 and 4.
+#   - Ansible venv bootstrap (#39): the server spawns `python3 -m venv` +
+#     `pip install ansible-core` as subprocesses in the background after listen,
+#     so the image ships no Ansible binary (only a stock python3-venv) and a slow
+#     pip install never blocks startup. Status is surfaced at GET /api/system/ansible.
+# See docs/server-deployment.md -> "First-run setup" steps 1, 2, and 4.
 #
-# The remaining heavier first-run steps each land with their roadmap phase and
-# are tracked in #39:
-#   - Ansible venv bootstrap (pip install ansible-core)           [Phase 6]
+# The remaining heavier first-run step lands with its roadmap phase, tracked in #39:
 #   - AdGuard Home fetch / supervise (managed mode)               [Phase 7]
 set -eu
 

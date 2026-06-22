@@ -41,3 +41,5 @@ export {
   reorder,
   findShadowedRules,
 } from "./schedule-precedence.js";
+
+export { type WeeklyWindowsInput, resolveWeeklyAllowedWindows } from "./weekly-windows.js";

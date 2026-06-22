@@ -22,7 +22,7 @@
  * permissively licensed and linked in-process freely; no GPL component is
  * involved here.
  */
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import Database from "better-sqlite3";
@@ -30,6 +30,10 @@ import { drizzle, type BetterSQLite3Database } from "drizzle-orm/better-sqlite3"
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 
 import type { Settings } from "../config.js";
+import {
+  backUpBeforeMigrate as defaultBackUpBeforeMigrate,
+  type MigrationBackupLogger,
+} from "../setup/pre-migration-backup.js";
 import * as schema from "./schema.js";
 
 /**
@@ -57,7 +61,28 @@ export interface CreateDbOptions {
    * resolved relative to this module; tests point it at a fixture when needed.
    */
   migrationsFolder?: string;
+  /**
+   * Optional logger for boot-time steps — currently the pre-migration backup
+   * (#166). `buildApp` passes `app.log`; tests may capture or omit it.
+   */
+  log?: MigrationBackupLogger;
+  /**
+   * Override the directory the pre-migration snapshot is written into. Defaults
+   * to `settings.preMigrationBackup.dir`, else `<dirname(databaseUrl)>/backups`.
+   */
+  backupDir?: string;
+  /**
+   * Test seam for the pre-migration backup runner. Defaults to the real
+   * `VACUUM INTO` snapshot in `setup/pre-migration-backup.ts`.
+   */
+  backUpBeforeMigrate?: typeof defaultBackUpBeforeMigrate;
 }
+
+/** Pre-migration backup settings, with a safe default when a caller omits them. */
+type DbSettings = Pick<Settings, "databaseUrl"> & Partial<Pick<Settings, "preMigrationBackup">>;
+
+/** Defaults applied when a caller passes no `preMigrationBackup` block. */
+const DEFAULT_BACKUP_SETTINGS: Settings["preMigrationBackup"] = { enabled: true, retain: 5 };
 
 /**
  * Open the policy store at `settings.databaseUrl`, apply migrations, and
@@ -69,10 +94,7 @@ export interface CreateDbOptions {
  * `foreign_keys` is turned on (SQLite leaves it off per-connection by default)
  * so the schema's referential integrity is actually enforced at runtime.
  */
-export function createDb(
-  settings: Pick<Settings, "databaseUrl">,
-  options: CreateDbOptions = {},
-): PolicyDb {
+export function createDb(settings: DbSettings, options: CreateDbOptions = {}): PolicyDb {
   const sqlite = new Database(settings.databaseUrl);
   // WAL: concurrent readers don't block the writer (the dashboard reads usage
   // while pushing policy). foreign_keys: SQLite defaults this OFF per
@@ -81,8 +103,37 @@ export function createDb(
   sqlite.pragma("foreign_keys = ON");
 
   const db: PolicyDb = drizzle(sqlite, { schema });
+  const migrationsFolder = options.migrationsFolder ?? DEFAULT_MIGRATIONS_FOLDER;
+  const backup = settings.preMigrationBackup ?? DEFAULT_BACKUP_SETTINGS;
+
   try {
-    migrate(db, { migrationsFolder: options.migrationsFolder ?? DEFAULT_MIGRATIONS_FOLDER });
+    // Snapshot the store before applying any pending migration (#166), so a
+    // regretted upgrade is recoverable. Best-effort: a snapshot failure (e.g. an
+    // unwritable backups dir) is logged loudly but does not block boot — the
+    // migrate() below remains the health gate that refuses to serve a
+    // half-migrated DB. A fresh / up-to-date DB is a no-op.
+    if (backup.enabled) {
+      const runBackup = options.backUpBeforeMigrate ?? defaultBackUpBeforeMigrate;
+      const backupDir =
+        options.backupDir ?? backup.dir ?? join(dirname(settings.databaseUrl), "backups");
+      try {
+        runBackup({
+          client: sqlite,
+          migrationsFolder,
+          backupDir,
+          retain: backup.retain,
+          // Only set `log` when present (exactOptionalPropertyTypes).
+          ...(options.log ? { log: options.log } : {}),
+        });
+      } catch (err) {
+        options.log?.error(
+          { err },
+          "pre-migration backup failed; proceeding with migration without a snapshot",
+        );
+      }
+    }
+
+    migrate(db, { migrationsFolder });
   } catch (err) {
     // Don't leak the open handle if migration fails (corrupt/locked file).
     sqlite.close();
