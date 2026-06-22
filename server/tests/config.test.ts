@@ -16,6 +16,8 @@ describe("loadSettings", () => {
     expect(settings.logLevel).toBe("info");
     expect(settings.secretKey).toBeUndefined();
     expect(settings.ansibleDir).toBe("/data/ansible");
+    expect(settings.ansibleCoreVersion).toBe("2.18.1");
+    expect(settings.ansiblePlaybookSourceDir).toBe("/app/ansible/playbooks");
     expect(settings.sshPublicKeyPath).toBe("/data/secrets/ssh/id_ed25519.pub");
     expect(settings.sshPrivateKeyPath).toBe("/data/secrets/ssh/id_ed25519");
     expect(settings.adguard).toEqual({ mode: "disabled" });
@@ -26,6 +28,21 @@ describe("loadSettings", () => {
 
   it("honours an explicit PCT_ANSIBLE_DIR", () => {
     expect(loadSettings({ PCT_ANSIBLE_DIR: "/srv/ansible" }).ansibleDir).toBe("/srv/ansible");
+  });
+
+  it("honours explicit Ansible venv bootstrap settings", () => {
+    const settings = loadSettings({
+      PCT_ANSIBLE_CORE_VERSION: "2.17.6",
+      PCT_ANSIBLE_PLAYBOOK_SRC: "/opt/playbooks",
+    });
+    expect(settings.ansibleCoreVersion).toBe("2.17.6");
+    expect(settings.ansiblePlaybookSourceDir).toBe("/opt/playbooks");
+  });
+
+  it("rejects a non-version PCT_ANSIBLE_CORE_VERSION", () => {
+    expect(() => loadSettings({ PCT_ANSIBLE_CORE_VERSION: "latest; rm -rf /" })).toThrow(
+      /bare version/,
+    );
   });
 
   it("honours explicit SSH key paths", () => {
