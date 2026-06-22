@@ -93,6 +93,15 @@ export {
   type ExceptionResponse,
   type CreateExceptionRequest,
   type UpdateExceptionRequest,
+  // Group-targeted schedules + exceptions (#182)
+  createGroupScheduleSchema,
+  groupScheduleResponseSchema,
+  type CreateGroupScheduleRequest,
+  type GroupScheduleResponse,
+  createGroupExceptionSchema,
+  groupExceptionResponseSchema,
+  type CreateGroupExceptionRequest,
+  type GroupExceptionResponse,
 } from "./policy/index.js";
 
 // Client-enrolment DTOs (#77): the admin token-mint + install-script enrol

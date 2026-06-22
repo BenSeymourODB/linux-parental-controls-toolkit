@@ -11,7 +11,14 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { SESSION_COOKIE } from "../../src/auth/session.js";
 import { loadSettings } from "../../src/config.js";
-import { budgets, grants, schedules } from "../../src/policy/schema.js";
+import {
+  budgets,
+  grants,
+  groupSchedules,
+  schedules,
+  userGroupMemberships,
+  userGroups,
+} from "../../src/policy/schema.js";
 import { buildTestApp, type TestApp } from "../helpers/app.js";
 
 function configuredSettings() {
@@ -165,6 +172,47 @@ describe("GET /api/users/:userId/effective", () => {
         },
       ],
     });
+  });
+
+  it("inherits a group schedule, with the user's own rule taking precedence (#182)", async () => {
+    const userId = await createUser("Alice"); // tz null → UTC
+    const group = harness.db
+      .insert(userGroups)
+      .values({ name: "Kids" })
+      .returning({ id: userGroups.id })
+      .get();
+    if (group === undefined) throw new Error("group insert returned no row");
+    harness.db.insert(userGroupMemberships).values({ userId, groupId: group.id }).run();
+
+    // Group denies all day; with only the inherited rule, the day is fully denied.
+    harness.db
+      .insert(groupSchedules)
+      .values({ userGroupId: group.id, targetKind: "overall", targetId: null, action: "deny" })
+      .run();
+
+    const inheritedOnly = await auth({
+      method: "GET",
+      url: `/api/users/${userId}/effective?date=2026-06-20`,
+    });
+    expect(inheritedOnly.json().allowedWindows).toEqual([]);
+    expect(inheritedOnly.json().activeRules).toHaveLength(1);
+
+    // The user's own always-on allow wins over the inherited group deny.
+    harness.db
+      .insert(schedules)
+      .values({ userId, targetKind: "overall", targetId: null, action: "allow", ordinal: 0 })
+      .run();
+
+    const overridden = await auth({
+      method: "GET",
+      url: `/api/users/${userId}/effective?date=2026-06-20`,
+    });
+    expect(overridden.json().allowedWindows).toEqual([{ start: 0, end: 1440 }]);
+    // Both rules surface in precedence order: the user's own allow first.
+    expect(overridden.json().activeRules.map((r: { action: string }) => r.action)).toEqual([
+      "allow",
+      "deny",
+    ]);
   });
 
   it("defaults to today in the user's effective timezone when no date is given", async () => {

@@ -599,3 +599,103 @@ describe("policy repository — schedules & exceptions", () => {
     expect(repo.listExceptions(db)).toEqual([]);
   });
 });
+
+describe("policy repository — group schedules & exceptions (#182)", () => {
+  let db: TestDb;
+  let groupId: number;
+  beforeEach(() => {
+    db = testDb();
+    groupId = repo.createUserGroup(db, { name: "Kids" }).id;
+  });
+  afterEach(() => {
+    db.$client.close();
+  });
+
+  it("creates a group schedule, ordering by (ordinal, id)", () => {
+    const second = repo.createGroupSchedule(db, {
+      userGroupId: groupId,
+      targetKind: "overall",
+      action: "allow",
+      recurrenceDays: 0b0011111,
+      recurrenceStartMinute: 9 * 60,
+      recurrenceEndMinute: 17 * 60,
+      ordinal: 5,
+    });
+    const first = repo.createGroupSchedule(db, {
+      userGroupId: groupId,
+      targetKind: "overall",
+      action: "deny",
+      ordinal: 1,
+    });
+    expect(first.ordinal).toBe(1);
+    expect(repo.listGroupSchedules(db, groupId).map((r) => r.id)).toEqual([first.id, second.id]);
+    expect(repo.getGroupSchedule(db, second.id)?.action).toBe("allow");
+
+    const updated = repo.updateGroupSchedule(db, second.id, { ordinal: 0 });
+    expect(updated?.ordinal).toBe(0);
+    expect(repo.deleteGroupSchedule(db, second.id)).toBe(true);
+    expect(repo.deleteGroupSchedule(db, second.id)).toBe(false);
+  });
+
+  it("defaults recurrence to the always-on degenerate and ordinal to 0", () => {
+    const row = repo.createGroupSchedule(db, {
+      userGroupId: groupId,
+      targetKind: "overall",
+      action: "deny",
+    });
+    expect(row.recurrenceDays).toBeNull();
+    expect(row.effectiveFrom).toBeNull();
+    expect(row.ordinal).toBe(0);
+  });
+
+  it("rejects a half-open minute pair at the storage CHECK", () => {
+    let caught: unknown;
+    try {
+      repo.createGroupSchedule(db, {
+        userGroupId: groupId,
+        targetKind: "overall",
+        action: "allow",
+        recurrenceStartMinute: 540,
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(repo.isCheckViolation(caught)).toBe(true);
+  });
+
+  it("creates a group exception ordered by expiry, with update + delete", () => {
+    const later = repo.createGroupException(db, {
+      userGroupId: groupId,
+      targetKind: "overall",
+      action: "allow",
+      expiresAt: new Date("2026-07-02T00:00:00.000Z"),
+    });
+    const sooner = repo.createGroupException(db, {
+      userGroupId: groupId,
+      targetKind: "overall",
+      action: "allow",
+      reason: "movie night",
+      expiresAt: new Date("2026-07-01T12:00:00.000Z"),
+    });
+    expect(repo.listGroupExceptions(db, groupId).map((r) => r.id)).toEqual([sooner.id, later.id]);
+    expect(repo.getGroupException(db, sooner.id)?.reason).toBe("movie night");
+
+    const updated = repo.updateGroupException(db, later.id, { reason: "trip" });
+    expect(updated?.reason).toBe("trip");
+    expect(repo.deleteGroupException(db, later.id)).toBe(true);
+    expect(repo.deleteGroupException(db, later.id)).toBe(false);
+  });
+
+  it("cascades group schedules and exceptions when the group is deleted", () => {
+    repo.createGroupSchedule(db, { userGroupId: groupId, targetKind: "overall", action: "deny" });
+    repo.createGroupException(db, {
+      userGroupId: groupId,
+      targetKind: "overall",
+      action: "allow",
+      expiresAt: new Date("2026-07-01T00:00:00.000Z"),
+    });
+    repo.deleteUserGroup(db, groupId);
+    expect(repo.listGroupSchedules(db, groupId)).toEqual([]);
+    expect(repo.listGroupExceptions(db, groupId)).toEqual([]);
+  });
+});
