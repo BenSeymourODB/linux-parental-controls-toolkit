@@ -76,7 +76,35 @@ npm run dev      # vite dev server with HMR (http://localhost:5173)
 npm run build    # svelte-check + vite build → ./build
 npm run preview  # serve the built ./build locally
 npm run check    # svelte-check only (svelte-kit sync + tsc at the boundary)
+npm test         # vitest: api wrappers + component/flow smoke tests
 ```
+
+## Testing
+
+`npm test` runs Vitest across two projects (`vitest.config.ts`), all against a
+**mocked `/api` — never a live backend**:
+
+- **`api`** (`tests/api/**`, `node` environment) — the pure `/api` layer: the
+  typed `fetch` client and the per-entity wrappers. Mocks `globalThis.fetch`
+  and asserts the right method/URL/body crosses the wire.
+- **`components`** (`tests/components/**`, `jsdom` environment) — Svelte
+  component / flow smoke tests rendered with
+  [`@testing-library/svelte`](https://testing-library.com/docs/svelte-testing-library/intro/).
+  The SvelteKit plugin compiles the components and resolves their `$lib` /
+  `$app` imports; the relevant `$lib/api/*` wrapper is `vi.mock`ed so the test
+  drives real component behaviour over canned responses. Current coverage:
+  - `admin-auth-flow.test.ts` — the `/admin` orchestrator
+    (`routes/admin/+page.svelte`): the unauthenticated-probe redirect to the
+    login form, a successful login swapping to the authenticated shell, a
+    failed login surfaced inline, and logout returning to the form.
+  - `users-view-crud.test.ts` — `UsersView` end to end (the canonical editor
+    the deferred editors repeat): list → create → inline edit → delete, plus
+    the shared inline error surface (`role="alert"`).
+
+Deeper in-browser E2E (Playwright) is intentionally **out of scope** — these
+headless component tests cover the highest-value flows without a heavyweight
+browser harness. CI runs `npm test` in the `SvelteKit build` job alongside
+`npm run check` and `npm run build`.
 
 The frontend has its own toolchain and is intentionally **excluded from the
 backend's ESLint / Prettier / tsc scope** (see `server/eslint.config.js`,
