@@ -38,6 +38,8 @@ import type {
   BudgetRow,
   ClientRow,
   ExceptionRow,
+  GroupExceptionRow,
+  GroupScheduleRow,
   ScheduleRow,
   UserGroupRow,
   UserOnClientRow,
@@ -501,6 +503,122 @@ export function toExceptionResponse(row: ExceptionRow): ExceptionResponse {
   return {
     id: row.id,
     userId: row.userId,
+    targetKind: row.targetKind,
+    targetId: row.targetId,
+    action: row.action,
+    reason: row.reason,
+    effectiveFrom: row.effectiveFrom === null ? null : row.effectiveFrom.toISOString(),
+    expiresAt: row.expiresAt.toISOString(),
+    createdAt: row.createdAt.toISOString(),
+  };
+}
+
+// --- Group schedules (#182) ------------------------------------------------
+// Group-targeted recurring rules (ADR 0007). Identical to the user-keyed
+// schedule DTOs minus `userId` — the owning group comes from the
+// `/user-groups/:groupId/schedules` path. The PATCH body is identical to a
+// user schedule's ({@link updateScheduleSchema}) and is reused there.
+
+/**
+ * Group-schedule create body: the rule's target/action/order, intersected with
+ * the shared recurrence + date-scoping fields ({@link scheduleRecurrenceSchema}).
+ * No `userId` — the group is the path param.
+ */
+export const createGroupScheduleSchema = z.intersection(
+  z.object({
+    targetKind: scopeSchema,
+    targetId: targetIdSchema.default(null),
+    action: scheduleActionSchema,
+    ordinal: z.number().int().min(0).optional(),
+  }),
+  scheduleRecurrenceSchema,
+);
+
+export const groupScheduleResponseSchema = z.object({
+  id: z.number().int(),
+  userGroupId: z.number().int(),
+  targetKind: scopeSchema,
+  targetId: z.number().int().nullable(),
+  action: scheduleActionSchema,
+  recurrenceDays: z.number().int().nullable(),
+  recurrenceStartMinute: z.number().int().nullable(),
+  recurrenceEndMinute: z.number().int().nullable(),
+  effectiveFrom: z.string().nullable(),
+  effectiveTo: z.string().nullable(),
+  ordinal: z.number().int(),
+});
+
+export type CreateGroupScheduleRequest = z.infer<typeof createGroupScheduleSchema>;
+export type GroupScheduleResponse = z.infer<typeof groupScheduleResponseSchema>;
+
+/** Map a stored group-schedule row to its wire DTO (timestamps → ISO-8601 UTC). */
+export function toGroupScheduleResponse(row: GroupScheduleRow): GroupScheduleResponse {
+  return {
+    id: row.id,
+    userGroupId: row.userGroupId,
+    targetKind: row.targetKind,
+    targetId: row.targetId,
+    action: row.action,
+    recurrenceDays: row.recurrenceDays,
+    recurrenceStartMinute: row.recurrenceStartMinute,
+    recurrenceEndMinute: row.recurrenceEndMinute,
+    effectiveFrom: row.effectiveFrom === null ? null : row.effectiveFrom.toISOString(),
+    effectiveTo: row.effectiveTo === null ? null : row.effectiveTo.toISOString(),
+    ordinal: row.ordinal,
+  };
+}
+
+// --- Group exceptions (#182) -----------------------------------------------
+// Group-targeted one-off overrides (ADR 0007). Identical to the user-keyed
+// exception DTOs minus `userId`; the PATCH body reuses {@link updateExceptionSchema}.
+
+/**
+ * Group-exception create body. Active during `[effectiveFrom ?? createdAt,
+ * expiresAt)`; the superRefine enforces `effectiveFrom < expiresAt`. No
+ * `userId` — the group is the path param.
+ */
+export const createGroupExceptionSchema = z
+  .object({
+    targetKind: scopeSchema,
+    targetId: targetIdSchema.default(null),
+    action: scheduleActionSchema,
+    reason: z.string().trim().min(1).max(500).nullable().default(null),
+    effectiveFrom: z.string().datetime().nullable().default(null),
+    expiresAt: z.string().datetime(),
+  })
+  .superRefine((value, ctx) => {
+    if (
+      value.effectiveFrom !== null &&
+      Date.parse(value.effectiveFrom) >= Date.parse(value.expiresAt)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "expiresAt must be after effectiveFrom",
+        path: ["expiresAt"],
+      });
+    }
+  });
+
+export const groupExceptionResponseSchema = z.object({
+  id: z.number().int(),
+  userGroupId: z.number().int(),
+  targetKind: scopeSchema,
+  targetId: z.number().int().nullable(),
+  action: scheduleActionSchema,
+  reason: z.string().nullable(),
+  effectiveFrom: z.string().nullable(),
+  expiresAt: z.string(),
+  createdAt: z.string(),
+});
+
+export type CreateGroupExceptionRequest = z.infer<typeof createGroupExceptionSchema>;
+export type GroupExceptionResponse = z.infer<typeof groupExceptionResponseSchema>;
+
+/** Map a stored group-exception row to its wire DTO (timestamps → ISO-8601 UTC). */
+export function toGroupExceptionResponse(row: GroupExceptionRow): GroupExceptionResponse {
+  return {
+    id: row.id,
+    userGroupId: row.userGroupId,
     targetKind: row.targetKind,
     targetId: row.targetId,
     action: row.action,
