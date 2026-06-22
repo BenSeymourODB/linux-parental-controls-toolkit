@@ -46,6 +46,7 @@ export type {
   CreateExceptionRequest,
   UpdateExceptionRequest,
 } from "../../../../src/api/policy/dtos.js";
+export type { AuditEntryResponse, AuditListResponse } from "../../../../src/api/audit/dtos.js";
 export type {
   MintEnrolmentTokenRequest,
   EnrolmentTokenResponse,
@@ -62,5 +63,6 @@ export type {
   Scope,
   BudgetWindow,
   ScheduleAction,
+  AuditOutcome,
 } from "../../../../src/policy/enums.js";
 export type { ErrorEnvelope, ErrorDetail } from "../../../../src/api/errors.js";
