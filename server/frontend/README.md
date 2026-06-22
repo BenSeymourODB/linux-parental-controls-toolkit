@@ -98,8 +98,17 @@ npm test         # vitest: api wrappers + component/flow smoke tests
     login form, a successful login swapping to the authenticated shell, a
     failed login surfaced inline, and logout returning to the form.
   - `users-view-crud.test.ts` — `UsersView` end to end (the canonical editor
-    the deferred editors repeat): list → create → inline edit → delete, plus
-    the shared inline error surface (`role="alert"`).
+    pattern the other editors repeat): list → create → inline edit → delete,
+    plus the shared inline error surface (`role="alert"`).
+  - `clients-view-crud.test.ts` / `activities-view-crud.test.ts` — the two
+    editors that are straight repeats of the `UsersView` pattern, confirming it
+    generalises (Activities adds the enum `<select>` create flow).
+
+The logic-heavy editors (Budgets, Schedules, Exceptions, Activity Groups,
+Client Health, Audit Log, Links) carry real client-side behaviour beyond the
+CRUD skeleton — duration/bitmask/`datetime-local` conversions, membership
+management, conditional target pickers, pagination — and are covered by their
+own follow-up issue rather than this slice.
 
 Deeper in-browser E2E (Playwright) is intentionally **out of scope** — these
 headless component tests cover the highest-value flows without a heavyweight
