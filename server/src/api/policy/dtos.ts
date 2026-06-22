@@ -638,3 +638,82 @@ export function toGroupExceptionResponse(row: GroupExceptionRow): GroupException
     createdAt: row.createdAt.toISOString(),
   };
 }
+
+// --- "Add time today" same-day adjustment (#257) ---------------------------
+
+/**
+ * The most a single adjustment may add, subtract, or set — one day in seconds.
+ * `timekpra` tracks today's remaining time, so anything beyond a day is a
+ * fat-finger rather than a real intent; the bound keeps the lever sane.
+ */
+export const TIME_TODAY_MAX_SECONDS = 86_400;
+
+/**
+ * Body of `POST /users/:userId/time-today`: adjust the user's **remaining time
+ * for today** on their linked client(s), without touching the standing daily
+ * `Budget` (#257). Exactly one of:
+ *
+ * - `deltaSeconds` — a signed, non-zero adjustment (`+1800` = "+30 min",
+ *   `-600` = "take back 10 min"), or
+ * - `setSeconds` — set today's remaining time outright (`0` = lock out now).
+ *
+ * `clientId`, when given, restricts the adjustment to that one linked client;
+ * omitted, it applies to every client the user is linked to.
+ */
+export const adjustTimeTodaySchema = z
+  .object({
+    deltaSeconds: z
+      .number()
+      .int()
+      .min(-TIME_TODAY_MAX_SECONDS)
+      .max(TIME_TODAY_MAX_SECONDS)
+      .refine((n) => n !== 0, { message: "deltaSeconds must be non-zero" })
+      .optional(),
+    setSeconds: z.number().int().min(0).max(TIME_TODAY_MAX_SECONDS).optional(),
+    clientId: z.number().int().positive().optional(),
+  })
+  .refine((b) => (b.deltaSeconds === undefined) !== (b.setSeconds === undefined), {
+    message: "Provide exactly one of deltaSeconds or setSeconds",
+  });
+
+/** The `timekpra --settimeleft` operation: `+`/`-` delta, or `=` set. */
+export const timeLeftOperationSchema = z.enum(["+", "-", "="]);
+
+/** Per-client outcome of an adjustment (mirrors the transport service result). */
+export const clientAdjustmentResultSchema = z.object({
+  clientId: z.number().int(),
+  osUsername: z.string(),
+  status: z.enum(["applied", "unreachable", "failed"]),
+  error: z.string().optional(),
+});
+
+/** Response of `POST /users/:userId/time-today`: the resolved op + per-client results. */
+export const timeTodayResponseSchema = z.object({
+  userId: z.number().int(),
+  operation: timeLeftOperationSchema,
+  seconds: z.number().int(),
+  results: z.array(clientAdjustmentResultSchema),
+});
+
+export type AdjustTimeTodayRequest = z.infer<typeof adjustTimeTodaySchema>;
+export type ClientAdjustmentResultDto = z.infer<typeof clientAdjustmentResultSchema>;
+export type TimeTodayResponse = z.infer<typeof timeTodayResponseSchema>;
+
+/**
+ * Resolve the request body to the `timekpra --settimeleft` operation + a
+ * non-negative second count. A positive delta adds (`+`), a negative delta
+ * subtracts (`-`) its magnitude, and `setSeconds` sets outright (`=`). The DTO's
+ * `refine` guarantees exactly one branch applies.
+ */
+export function toTimeLeftCommand(body: AdjustTimeTodayRequest): {
+  operation: z.infer<typeof timeLeftOperationSchema>;
+  seconds: number;
+} {
+  if (body.deltaSeconds !== undefined) {
+    return body.deltaSeconds >= 0
+      ? { operation: "+", seconds: body.deltaSeconds }
+      : { operation: "-", seconds: -body.deltaSeconds };
+  }
+  // The refine guarantees setSeconds is present when deltaSeconds is not.
+  return { operation: "=", seconds: body.setSeconds ?? 0 };
+}
