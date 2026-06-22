@@ -213,15 +213,17 @@
     }
     creating = true;
     error = null;
+    // Append after the current rules: one past the largest existing ordinal, so
+    // a new rule sorts last whether or not the ordinals have been densified by a
+    // reorder (mirrors the server's `nextOrdinal`).
+    const appendOrdinal = schedules.reduce((max, s) => Math.max(max, s.ordinal + 1), 0);
     try {
       await createSchedule({
         userId: selectedUserId,
         targetKind: newScope,
         targetId: newScope === "overall" ? null : newTargetId,
         action: newAction,
-        // Append after the current rules so a new rule sorts last regardless of
-        // whether the existing ordinals have been densified by a reorder yet.
-        ordinal: schedules.length,
+        ordinal: appendOrdinal,
         recurrenceDays: null,
         recurrenceStartMinute: null,
         recurrenceEndMinute: null,
@@ -427,6 +429,7 @@
               ondragstart={() => onDragStart(index)}
               ondragover={onDragOver}
               ondrop={() => onDrop(index)}
+              ondragend={() => (dragIndex = null)}
             >
               <span class="handle" aria-hidden="true" title="Drag to reorder">⠿</span>
               <span class="pos">{index + 1}</span>

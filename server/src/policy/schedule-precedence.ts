@@ -234,9 +234,12 @@ export function findShadowedRules(rules: readonly ScheduleRule[]): ShadowFinding
  * target, using the same coverage relation as {@link findShadowedRules}: an
  * `overall` rule covers every target, and an identical `target_kind`+`target_id`
  * covers itself. Resolving coverage the same way is what keeps the two views
- * consistent — a rule a broader rule shadows can never appear here, because that
- * broader rule wins for its target too. Group membership is **not** resolved
- * (see {@link findShadowedRules}).
+ * consistent: provided `isActive` agrees on rules with identical windows (which
+ * the real resolver does — `findShadowedRules` only flags a `sameWindow` pair,
+ * so the shadower is active in exactly the instants the shadowed rule is), a
+ * rule a broader rule shadows can never also appear here, because that broader
+ * rule wins for its target too. Group membership is **not** resolved (see
+ * {@link findShadowedRules}).
  *
  * `isActive` decides whether a rule's window is active at the caller's instant
  * (see {@link RuleActivePredicate}); a target whose covering rules are all
