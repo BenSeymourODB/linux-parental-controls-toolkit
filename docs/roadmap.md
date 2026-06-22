@@ -457,17 +457,29 @@ limits only** — no content filtering, no usage charts, no graceful
 notifications (the device-side Timekpr tray is the user-facing warning).
 Enforcement authority is Timekpr-nExT, not an agent (there is none yet).
 
-Most of the backend has landed (install/enrol #76/#77, live CRUD→SSH push
-#201, audit log #85, offline queue #161, resolver #176, version reporting
-#164). **Gate — remaining before first install:**
+The core **set-limits → enforce → observe** loop is **code-complete**:
+install/enrol (#76/#77), live CRUD→SSH push (#201), audit log (#85), offline
+queue (#161), resolver (#176), version reporting (#164), first-run SSH keypair
+(#205), client health + Clients page + enrol flow (#196/#194), and the full
+`/admin` policy-editor UI — login + Users/Clients/Activities/Groups/Budgets/
+links/Schedules/Exceptions (#53 via #189/#244/#246) — have all landed.
 
-- First-run server SSH keypair generation (the Phase-4 step of #39).
-- Admin policy-editor UI (#53) + Clients page / health + enrol-token flow
-  (#81) + save-and-push preview diff (#64).
+**Gate — remaining before first install:**
+
+- Live `timekpra`-over-SSH round-trip test (#157) — *the key confidence gate*:
+  the enforcement code is complete and unit-tested, but this confirms the CLI
+  grammar against the real binary before trusting it on a child's machine.
+- `/admin` smoke/e2e coverage — the one open quality slice of #53 (all editors
+  and login are functionally complete; `svelte-check` and the build are green).
 - "Add time today" same-day unlock lever
   ([#257](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/257)).
-- Live `timekpra`-over-SSH round-trip test (#157) — confirm the CLI grammar
-  against the real binary before trusting enforcement on a real machine.
+
+**Fast-follow (not blocking the first install):**
+
+- Save-and-push preview diff (#64) — policy already pushes on save, and client
+  health (#196/#194) + the audit log (#85) already let the admin confirm a
+  limit took effect, so the diff is a trust/UX nicety rather than a blocker.
+- Clear/unmanage a user's limits when a user↔client link is removed (#253).
 
 Assumes each child already has their own Linux account (the toolkit does not
 create OS accounts); per-child enforcement requires per-child accounts, since
