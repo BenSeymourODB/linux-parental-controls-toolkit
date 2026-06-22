@@ -216,6 +216,9 @@ describe("AnsibleVenvSupervisor.bootstrap — failure handling", () => {
 
     expect(status.state).toBe("unavailable");
     expect(status.detail).toContain("simulated pip failure");
+    // The sentinel must not be written when the install fails, so the next boot
+    // re-detects "drift" and retries rather than trusting a half-done install.
+    expect(existsSync(sentinel(dir))).toBe(false);
   });
 });
 

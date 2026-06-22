@@ -192,7 +192,6 @@ export class AnsibleVenvSupervisor {
    * `detail`, and logged at `error` level so startup is not blocked.
    */
   async bootstrap(logger?: AnsibleVenvLogger): Promise<AnsibleVenvStatus> {
-    const at = this.#deps.now().toISOString();
     this.#status = { ...this.#status, state: "bootstrapping" };
 
     // Playbook sync is independent of the venv: a failure here must not stop the
@@ -203,7 +202,7 @@ export class AnsibleVenvSupervisor {
     try {
       const reason = this.#installNeeded();
       if (reason === null) {
-        return this.#settle("ready", at, null, logger, "Ansible venv already present");
+        return this.#settle("ready", null, logger, "Ansible venv already present");
       }
 
       this.#deps.makeDir(this.#config.ansibleDir);
@@ -224,10 +223,17 @@ export class AnsibleVenvSupervisor {
         reason === "missing"
           ? "created Ansible venv and installed ansible-core (first run)"
           : "reconciled Ansible venv to the pinned ansible-core version";
-      return this.#settle("ready", at, null, logger, msg);
+      return this.#settle("ready", null, logger, msg);
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
-      this.#status = { ...this.#status, state: "unavailable", checkedAt: at, detail };
+      // Timestamp captured at completion (here, after the potentially
+      // multi-minute pip install), so `checkedAt` means "last settled".
+      this.#status = {
+        ...this.#status,
+        state: "unavailable",
+        checkedAt: this.#deps.now().toISOString(),
+        detail,
+      };
       logger?.error(
         { event: "ansible_venv_bootstrap", state: "unavailable", err },
         `Ansible venv bootstrap failed; Ansible disabled: ${detail}`,
@@ -272,12 +278,13 @@ export class AnsibleVenvSupervisor {
 
   #settle(
     state: AnsibleVenvState,
-    at: string,
     detail: string | null,
     logger: AnsibleVenvLogger | undefined,
     msg: string,
   ): AnsibleVenvStatus {
-    this.#status = { ...this.#status, state, checkedAt: at, detail };
+    // Timestamp captured at completion so `checkedAt` reflects when the
+    // bootstrap settled, not when it began (pip install can take minutes).
+    this.#status = { ...this.#status, state, checkedAt: this.#deps.now().toISOString(), detail };
     logger?.info({ event: "ansible_venv_bootstrap", state }, msg);
     return this.status;
   }
