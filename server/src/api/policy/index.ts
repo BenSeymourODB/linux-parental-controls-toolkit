@@ -89,4 +89,10 @@ export {
   groupExceptionResponseSchema,
   type CreateGroupExceptionRequest,
   type GroupExceptionResponse,
+  // Group-targeted budgets (#134). The PATCH body reuses the user-keyed
+  // `updateBudgetSchema` above.
+  createGroupBudgetSchema,
+  groupBudgetResponseSchema,
+  type CreateGroupBudgetRequest,
+  type GroupBudgetResponse,
 } from "./dtos.js";

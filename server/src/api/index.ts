@@ -102,6 +102,11 @@ export {
   groupExceptionResponseSchema,
   type CreateGroupExceptionRequest,
   type GroupExceptionResponse,
+  // Group-targeted budgets (#134)
+  createGroupBudgetSchema,
+  groupBudgetResponseSchema,
+  type CreateGroupBudgetRequest,
+  type GroupBudgetResponse,
 } from "./policy/index.js";
 
 // Client-enrolment DTOs (#77): the admin token-mint + install-script enrol
