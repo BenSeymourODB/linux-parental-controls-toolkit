@@ -62,9 +62,9 @@ ships `python3-venv` solely for this).
    exists; a missing source is a logged no-op (does not fail the venv). The
    image does not yet COPY the playbooks (build context is `server/`; playbooks
    live in `client/ansible/playbooks/`, outside it) — so today the sync no-ops
-   on the real image. That packaging gap is **out of scope here** and gets its
-   own follow-up issue linked from the PR; the sync code is complete and
-   correct the moment the playbooks ship.
+   on the real image. That packaging gap is **out of scope here** and tracked
+   in the follow-up **#260** (Dockerfile/build-context work); the sync code is
+   complete and correct the moment the playbooks ship.
 
 ## Injectable seams (so tests never spawn `python3`)
 
