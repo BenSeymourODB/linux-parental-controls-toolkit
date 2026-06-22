@@ -15,6 +15,7 @@ export const moduleName = "transport/policy-push";
 export { policyPushPayloadSchema, type ValidatedPolicyPushPayload } from "./payload.js";
 export {
   resolvePolicyPush,
+  unrestrictedPolicyPush,
   type PolicyPushResolveInput,
   type ResolvedPolicyPush,
 } from "./resolve.js";

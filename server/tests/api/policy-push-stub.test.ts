@@ -221,7 +221,14 @@ describe("stub transport push on policy change (#54)", () => {
 
     const pushed = pushLines("link.deleted");
     expect(pushed).toHaveLength(1);
-    expect(pushed[0]).toMatchObject({ clientId, userId, reason: "link.deleted" });
+    // The detail carries the Linux account name captured before the link
+    // cascaded away, so the live executor can unmanage it on the client (#253).
+    expect(pushed[0]).toMatchObject({
+      clientId,
+      userId,
+      reason: "link.deleted",
+      detail: { linuxUsername: "alice", linuxUid: 1001 },
+    });
   });
 
   /** A user linked to one client, ready for user-scoped policy pushes (#148). */

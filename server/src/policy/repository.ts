@@ -238,15 +238,23 @@ export function listUserClientIds(db: PolicyDb, userId: number): number[] {
     .map((row) => row.clientId);
 }
 
-/** Delete a link. Returns whether a row was removed. */
-export function deleteLink(db: PolicyDb, userId: number, clientId: number): boolean {
-  return (
-    db
-      .delete(usersOnClients)
-      .where(and(eq(usersOnClients.userId, userId), eq(usersOnClients.clientId, clientId)))
-      .returning({ userId: usersOnClients.userId })
-      .get() !== undefined
-  );
+/**
+ * Delete a link, returning the **removed** row, or `undefined` if there was no
+ * such link. Returning the row (rather than a bare boolean) lets the caller read
+ * the `linux_username` it carried *before* it cascaded away — the unlink push
+ * (#253) needs that name to "unmanage" the account's `timekpra` config on the
+ * client, where there is no longer a link row to resolve it from.
+ */
+export function deleteLink(
+  db: PolicyDb,
+  userId: number,
+  clientId: number,
+): UserOnClientRow | undefined {
+  return db
+    .delete(usersOnClients)
+    .where(and(eq(usersOnClients.userId, userId), eq(usersOnClients.clientId, clientId)))
+    .returning()
+    .get();
 }
 
 // --- User groups -----------------------------------------------------------

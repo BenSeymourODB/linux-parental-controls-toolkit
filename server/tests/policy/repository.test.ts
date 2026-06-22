@@ -173,10 +173,13 @@ describe("policy repository — user/client links", () => {
     expect(repo.listUserLinks(db, userId)).toEqual([]);
   });
 
-  it("deleteLink reports whether a row was removed", () => {
+  it("deleteLink returns the removed row, then undefined when there is none", () => {
     repo.upsertLink(db, userId, clientId, { linuxUsername: "alice", linuxUid: 1001 });
-    expect(repo.deleteLink(db, userId, clientId)).toBe(true);
-    expect(repo.deleteLink(db, userId, clientId)).toBe(false);
+    const removed = repo.deleteLink(db, userId, clientId);
+    // The removed row carries the Linux account name the unlink push (#253)
+    // needs, since the link has now cascaded away.
+    expect(removed).toMatchObject({ userId, clientId, linuxUsername: "alice", linuxUid: 1001 });
+    expect(repo.deleteLink(db, userId, clientId)).toBeUndefined();
   });
 
   it("listUserClientIds returns the linked client ids ascending, [] when none", () => {

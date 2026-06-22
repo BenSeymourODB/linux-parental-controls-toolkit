@@ -7,7 +7,10 @@ import { describe, expect, it } from "vitest";
 
 import type { BudgetInput } from "../../../src/policy/resolve.js";
 import type { ScheduleRule } from "../../../src/policy/schedule-precedence.js";
-import { resolvePolicyPush } from "../../../src/transport/policy-push/resolve.js";
+import {
+  resolvePolicyPush,
+  unrestrictedPolicyPush,
+} from "../../../src/transport/policy-push/resolve.js";
 
 /** A fixed mid-week instant (Wed 2026-06-17, 12:00 UTC) for determinism. */
 const NOW = new Date("2026-06-17T12:00:00Z");
@@ -90,5 +93,23 @@ describe("resolvePolicyPush", () => {
 
     expect(resolved.weekly.get(1)).toEqual([{ start: 360, end: 1440 }]);
     expect(resolved.weekly.get(7)).toEqual([{ start: 360, end: 1440 }]);
+  });
+
+  describe("unrestrictedPolicyPush (#253 unmanage)", () => {
+    it("is the maximal allowance with all hours allowed every day", () => {
+      const resolved = unrestrictedPolicyPush();
+
+      // 86400s (a whole day) for each of the 7 weekdays.
+      expect(resolved.perWeekdaySeconds).toEqual(Array.from({ length: 7 }, () => 86_400));
+      expect(resolved.weeklySeconds).toBe(86_400 * 7);
+      expect(resolved.monthlySeconds).toBe(86_400 * 31);
+
+      // Every ISO weekday allows the whole day, so the grid is never empty and
+      // the executor's full-lockout allowed-hours skip can never trigger here.
+      expect(resolved.weekly.size).toBe(7);
+      for (const day of [1, 2, 3, 4, 5, 6, 7] as const) {
+        expect(resolved.weekly.get(day)).toEqual([{ start: 0, end: 1440 }]);
+      }
+    });
   });
 });

@@ -71,6 +71,24 @@ function action(clientId: number, userId: number | null): QueuedAction {
   };
 }
 
+/**
+ * A `link.deleted` (unmanage) `policy.push` action, mirroring what the DELETE
+ * link route enqueues: the captured Linux account name travels in `detail`
+ * because the link row has already cascaded away (#253).
+ */
+function unlinkAction(
+  clientId: number,
+  userId: number,
+  detail: Record<string, unknown> = { linuxUsername: "alice", linuxUid: 1001 },
+): QueuedAction {
+  return {
+    clientId,
+    coalesceKey: `user:${userId}`,
+    kind: "policy.push",
+    payload: { userId, reason: "link.deleted", detail },
+  };
+}
+
 describe("createPolicyPushExecutor", () => {
   let db: TestDb;
 
@@ -218,6 +236,101 @@ describe("createPolicyPushExecutor", () => {
     expect(otherClientId).not.toBe(clientId);
     await executor(action(otherClientId, userId));
     expect(build).not.toHaveBeenCalled();
+  });
+
+  describe("unlink unmanage push (#253)", () => {
+    /** A user and client that exist but are *not* linked — the post-unlink state. */
+    function unlinkedSetup(): { userId: number; clientId: number } {
+      db = testDb();
+      const userId = createUser(db, { displayName: "Alice", tz: "UTC" }).id;
+      const clientId = createClient(db, { hostname: "mint-01", sshUser: "pct-agent" }).id;
+      return { userId, clientId };
+    }
+
+    it("pushes the fully-unrestricted config when a link is deleted", async () => {
+      const { userId, clientId } = unlinkedSetup();
+      const rec = recordingClient();
+      const executor = createPolicyPushExecutor({
+        db,
+        defaultTz: "UTC",
+        buildClient: (t) => {
+          rec.built = t;
+          return rec.client;
+        },
+      });
+
+      await executor(unlinkAction(clientId, userId));
+
+      // Built with the username carried in the detail, attributed to link.deleted.
+      expect(rec.built).toMatchObject({ username: "alice", userId, reason: "link.deleted" });
+      expect(rec.built?.client.id).toBe(clientId);
+      // Maximal limits (86400/day × 7, 604800/week, 31×86400/month) + all-hours,
+      // every-day grid — so the allowed-hours push is never skipped.
+      expect(rec.calls).toEqual([
+        "setTimeLimits:86400,86400,86400,86400,86400,86400,86400",
+        "setTimeLimitWeek:604800",
+        "setTimeLimitMonth:2678400",
+        "setWeeklyAllowedHours:7",
+      ]);
+    });
+
+    it("ignores the user's stale policy rows when unmanaging", async () => {
+      const { userId, clientId } = unlinkedSetup();
+      // Leftover budget/schedule for the (now unlinked) user must not shape the
+      // unmanage push — it is always the fixed unrestricted config.
+      createBudget(db, { userId, scope: "overall", window: "daily", secondsAllowed: 3600 });
+      createSchedule(db, { userId, targetKind: "overall", action: "deny" });
+
+      const rec = recordingClient();
+      const executor = createPolicyPushExecutor({
+        db,
+        defaultTz: "UTC",
+        buildClient: () => rec.client,
+      });
+
+      await executor(unlinkAction(clientId, userId));
+
+      expect(rec.calls).toEqual([
+        "setTimeLimits:86400,86400,86400,86400,86400,86400,86400",
+        "setTimeLimitWeek:604800",
+        "setTimeLimitMonth:2678400",
+        "setWeeklyAllowedHours:7",
+      ]);
+    });
+
+    it("is a no-op when the link.deleted detail carries no usable username", async () => {
+      const { userId, clientId } = unlinkedSetup();
+      const build = vi.fn();
+      const executor = createPolicyPushExecutor({ db, defaultTz: "UTC", buildClient: build });
+
+      await executor(unlinkAction(clientId, userId, {}));
+      await executor(unlinkAction(clientId, userId, { linuxUsername: "" }));
+      expect(build).not.toHaveBeenCalled();
+    });
+
+    it("does not unmanage a non-link.deleted reason for an unlinked user", async () => {
+      const { userId, clientId } = unlinkedSetup();
+      const build = vi.fn();
+      const executor = createPolicyPushExecutor({ db, defaultTz: "UTC", buildClient: build });
+
+      // Same missing-link state, but a user-scoped edit reason — nothing to do.
+      await executor({
+        clientId,
+        coalesceKey: `user:${userId}`,
+        kind: "policy.push",
+        payload: { userId, reason: "budget.updated", detail: { linuxUsername: "alice" } },
+      });
+      expect(build).not.toHaveBeenCalled();
+    });
+
+    it("is a no-op when the client no longer exists, even for a link.deleted", async () => {
+      const { userId } = unlinkedSetup();
+      const build = vi.fn();
+      const executor = createPolicyPushExecutor({ db, defaultTz: "UTC", buildClient: build });
+
+      await executor(unlinkAction(9999, userId));
+      expect(build).not.toHaveBeenCalled();
+    });
   });
 
   it("propagates a retriable (unreachable) failure for the queue to keep", async () => {
