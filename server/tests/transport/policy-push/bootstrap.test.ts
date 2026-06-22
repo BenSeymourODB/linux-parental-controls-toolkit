@@ -156,7 +156,13 @@ describe("createPolicyPushTransport", () => {
     // ...and it is audited with admin attribution + the time.adjusted reason.
     const entries = listAuditEntries(db, { limit: 50 });
     expect(
-      entries.some((e) => e.clientId === clientId && e.userId === userId && e.actor === "admin"),
+      entries.some(
+        (e) =>
+          e.clientId === clientId &&
+          e.userId === userId &&
+          e.actor === "admin" &&
+          e.reason === "time.adjusted",
+      ),
     ).toBe(true);
 
     transport.dispose();

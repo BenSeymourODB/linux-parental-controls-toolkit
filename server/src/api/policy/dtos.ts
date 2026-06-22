@@ -691,7 +691,9 @@ export const clientAdjustmentResultSchema = z.object({
 export const timeTodayResponseSchema = z.object({
   userId: z.number().int(),
   operation: timeLeftOperationSchema,
-  seconds: z.number().int(),
+  // The applied magnitude in seconds — always the non-negative count passed to
+  // `--settimeleft`, bounded like the request (one day max).
+  seconds: z.number().int().min(0).max(TIME_TODAY_MAX_SECONDS),
   results: z.array(clientAdjustmentResultSchema),
 });
 
