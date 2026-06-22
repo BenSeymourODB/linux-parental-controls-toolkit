@@ -442,6 +442,58 @@ client tools keep coming from the distro/PPA/upstream — `CLAUDE.md`,
 unchanged (these are *operations* features, not hardening —
 `docs/client-install.md`).
 
+## Alpha rollout — testing gates
+
+The phases above are the *build* plan; this section is the *release* plan —
+the points at which the toolkit is put in front of real users, and what must
+be true before each. Tracked operationally by the Alpha-1 readiness epic
+([#185](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/185)).
+
+### Alpha-1 — "screen-time dogfood" (maintainer + technical, forgiving households)
+
+The first real install: install on a Linux Mint box, enrol it, set per-child
+daily/weekly limits and allowed-hours, have Timekpr-nExT enforce them. **Time
+limits only** — no content filtering, no usage charts, no graceful
+notifications (the device-side Timekpr tray is the user-facing warning).
+Enforcement authority is Timekpr-nExT, not an agent (there is none yet).
+
+Most of the backend has landed (install/enrol #76/#77, live CRUD→SSH push
+#201, audit log #85, offline queue #161, resolver #176, version reporting
+#164). **Gate — remaining before first install:**
+
+- First-run server SSH keypair generation (the Phase-4 step of #39).
+- Admin policy-editor UI (#53) + Clients page / health + enrol-token flow
+  (#81) + save-and-push preview diff (#64).
+- "Add time today" same-day unlock lever
+  ([#257](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/257)).
+- Live `timekpra`-over-SSH round-trip test (#157) — confirm the CLI grammar
+  against the real binary before trusting enforcement on a real machine.
+
+Assumes each child already has their own Linux account (the toolkit does not
+create OS accounts); per-child enforcement requires per-child accounts, since
+Timekpr/AW/e2guardian all key on the OS account.
+
+### Alpha-1.5 — add usage visibility (same trusted testers)
+
+**Gate: Phase 5 burndown.** AW event normalisation into `UsageSample`
+(#88) + the per-user burndown view (#62), on top of the telemetry transport
+that already landed (#86/#162). This is also the correctness check that makes
+alpha feedback trustworthy — until the admin can see "Alice used 1h52 of 2h,"
+there's no way to confirm enforcement matches reality.
+
+### Alpha-2 — "friends & family" (non-technical households)
+
+**Gate: Phase 8b + Phase 6 (+ Phase 8c).** Do not widen past technical testers
+until:
+
+- **Phase 8b** — the `pct-client` agent: warning cadence, grace period,
+  graceful per-app close. The raw Timekpr session-kill UX is the main reason
+  Alpha-1 is unfit for a non-technical household.
+- **Phase 6** — server-pushed e2guardian web filtering + tamper reversion;
+  "parental controls" without content filtering reads as incomplete.
+- **Phase 8c** — clean lockout / grant-unlock so "out of time → granted more →
+  back in" is seamless.
+
 ## Out of scope (for now)
 
 - Non-Linux **enforcement** clients (macOS, Windows, Chromebook). The
