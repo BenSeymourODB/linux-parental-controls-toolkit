@@ -284,4 +284,30 @@ describe("gatherUserBudgets (#134)", () => {
     expect(gathered.every((b) => b.source.kind === "user")).toBe(true);
     expect(gathered.reduce((sum, b) => sum + b.secondsAllowed, 0)).toBe(1800);
   });
+
+  it("sums duplicate same-slot budgets within a single inherited group", () => {
+    const group = repo.createUserGroup(db, { name: "Kids" });
+    repo.addUserToGroup(db, group.id, userId);
+    repo.createGroupBudget(db, {
+      userGroupId: group.id,
+      scope: "overall",
+      window: "daily",
+      secondsAllowed: 1200,
+    });
+    repo.createGroupBudget(db, {
+      userGroupId: group.id,
+      scope: "overall",
+      window: "daily",
+      secondsAllowed: 600,
+    });
+
+    const gathered = gatherUserBudgets(db, userId);
+    // Two same-slot rows *within one group* are both emitted — the gatherer
+    // folds a group's slots into `covered` only after the whole group, so the
+    // resolver sums them exactly as it does the user's own duplicates. This is
+    // the branch that distinguishes `covered.has(key)` from per-group dedup.
+    expect(gathered).toHaveLength(2);
+    expect(gathered.every((b) => b.source.kind === "group")).toBe(true);
+    expect(gathered.reduce((sum, b) => sum + b.secondsAllowed, 0)).toBe(1800);
+  });
 });
