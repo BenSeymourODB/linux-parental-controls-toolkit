@@ -19,7 +19,7 @@
  * - a **client-scoped** change (`userId === null`): `timekpra` is per-user;
  * - a **missing client** (deleted before replay);
  * - a **missing `(user, client)` link** (e.g. `link.deleted`): the
- *   `linux_username` can't be resolved and there is nothing left to enforce.
+ *   `os_username` can't be resolved and there is nothing left to enforce.
  *
  * Errors propagate the SSH taxonomy unchanged so the queue classifies them: an
  * `SshUnreachableError`/timeout (retriable) keeps the action queued for replay;
@@ -131,7 +131,7 @@ export function createPolicyPushExecutor(options: PolicyPushExecutorOptions): Ac
 
     const resolved = resolvePolicyPush({ tz, schedules, budgets, now: now() });
 
-    const timekpr = buildClient({ client, username: link.linuxUsername, userId, reason });
+    const timekpr = buildClient({ client, username: link.osUsername, userId, reason });
 
     if (resolved.perWeekdaySeconds !== null) {
       await timekpr.setTimeLimits(resolved.perWeekdaySeconds);

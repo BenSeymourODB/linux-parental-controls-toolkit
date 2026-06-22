@@ -343,12 +343,12 @@ export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushSt
       }
       const row = asConflict(
         () => repo.upsertLink(scope.db, userId, clientId, request.body),
-        `Linux UID ${request.body.linuxUid} is already mapped to another user on client ${clientId}`,
+        `OS account reference ${request.body.osUserRef} is already mapped to another user on client ${clientId}`,
       );
       pushStub.push(
         linkPushCommands("link.upserted", userId, clientId, {
-          linuxUsername: row.linuxUsername,
-          linuxUid: row.linuxUid,
+          osUsername: row.osUsername,
+          osUserRef: row.osUserRef,
         }),
       );
       return toLinkResponse(row);

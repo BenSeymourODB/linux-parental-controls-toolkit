@@ -141,17 +141,27 @@ export const userClientParamsSchema = z.object({
 });
 
 export const upsertLinkSchema = z.object({
-  linuxUsername: z.string().trim().min(1).max(32),
-  // Linux UIDs are non-negative; 0 (root) is permitted at the type level even
-  // if policy would never map a supervised user to it.
-  linuxUid: z.number().int().min(0),
+  osUsername: z.string().trim().min(1).max(32),
+  // OS account reference: a uid on Linux, a SID on Windows (#230). A string so
+  // the published contract is stable across platforms; the charset forbids
+  // `"`/`\`/control chars. On Linux this is the numeric uid as a decimal string
+  // ("0" for root is permitted at the type level even if policy never uses it).
+  osUserRef: z
+    .string()
+    .trim()
+    .min(1)
+    .max(64)
+    .regex(
+      /^[A-Za-z0-9._:-]+$/,
+      "must be an OS account reference (a uid on Linux, a SID on Windows)",
+    ),
 });
 
 export const linkResponseSchema = z.object({
   userId: z.number().int(),
   clientId: z.number().int(),
-  linuxUsername: z.string(),
-  linuxUid: z.number().int(),
+  osUsername: z.string(),
+  osUserRef: z.string(),
 });
 
 export type UpsertLinkRequest = z.infer<typeof upsertLinkSchema>;
@@ -162,8 +172,8 @@ export function toLinkResponse(row: UserOnClientRow): LinkResponse {
   return {
     userId: row.userId,
     clientId: row.clientId,
-    linuxUsername: row.linuxUsername,
-    linuxUid: row.linuxUid,
+    osUsername: row.osUsername,
+    osUserRef: row.osUserRef,
   };
 }
 
