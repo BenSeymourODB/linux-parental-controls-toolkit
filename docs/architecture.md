@@ -237,13 +237,30 @@ Key derived views the dashboard renders:
 5. If a client is offline, the change is queued; an Ansible run is
    scheduled on next reconnect (detected by SSH probe).
 
-In **Phase 2** (`docs/roadmap.md`) none of the transport in steps 3–5 exists
-yet: every mutating policy write instead runs through a **stub transport**
-(`server/src/transport/stub.ts`, #54) that computes the intended per-client
-effect and *logs* it (`component: "transport/stub"`) rather than dispatching
-it. The logged command is shaped like the real per-client transport command,
-so Phase 4 (SSH + `timekpra`) and Phase 6 (Ansible) swap the log for a real
-dispatch without changing the call sites.
+In **Phase 4** the session-limit push (step 3) is **live** (#201). Every
+mutating policy write computes the same per-client `PolicyPushCommand` it always
+did, but the dispatcher (`server/src/transport/policy-push/`,
+`component: "transport/policy-push"`) now resolves the affected user's effective
+overall policy and pushes it over the SSH + `timekpra` transport:
+
+- the per-weekday daily limit, the rolling weekly/monthly limits, and the
+  recurring allowed-days/allowed-hours grid (resolved via the #143 resolver and
+  the #140 weekly-window bridge);
+- through the **offline queue** (#84): reachable clients are pushed immediately,
+  unreachable ones are queued and replayed on the next successful SSH probe
+  (step 5);
+- recorded in the **audit log** (#85): every issued command, with attribution,
+  for the admin Clients/audit views.
+
+The push is **fire-and-forget** from the HTTP handler — a mutation does not block
+on SSH round-trips to (possibly offline) clients; durability for offline clients
+comes from the queue + the periodic drainer. The live transport needs the
+server's SSH key (generated on first run, #39); until it exists the dispatcher
+falls back to the **logging stub** (`server/src/transport/stub.ts`, #54,
+`component: "transport/stub"`) so the dashboard still starts and CRUD still
+works (the change is logged, not dispatched). The file-level Ansible push
+(step 4) is still Phase 6, and PlayTime / per-activity limits are Phase 8 — both
+plug into the same call sites without reshaping them.
 
 ### Inbound (client → server) — telemetry pull
 

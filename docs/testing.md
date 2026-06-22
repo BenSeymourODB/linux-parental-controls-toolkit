@@ -316,8 +316,32 @@ The tool is dev-only: it lives in `server/scripts/` (outside `src/`, so it never
 ships in the Docker image) and runs via `node --experimental-strip-types`. Its
 logic is pure functions plus an orchestrator behind injected git/fs/script
 seams, unit-tested in `tests/scripts/rebase-migrations.test.ts` with in-memory
-fakes — no live git or drizzle-kit. Slice 2 (an opt-in CI auto-fix workflow) is
-tracked separately; see issue #199.
+fakes — no live git or drizzle-kit.
+
+### CI auto-fix (`migration-autofix.yml`, Slice 2 of #199 / #210)
+
+On a `claude/**` PR you usually do not have to run `db:rebase` by hand: the
+`Migration auto-fix` workflow (`.github/workflows/migration-autofix.yml`) does it
+for you. On every PR `synchronize`/`opened`/`reopened` it runs `drizzle-kit
+check` and — **only** when that fails *for the parent-collision reason
+specifically* — re-runs `npm run db:rebase` (never `--force`), commits the
+regenerated migration with a `[skip-regen]` marker, and pushes it back to the PR
+branch, leaving an audit comment. It deliberately does **nothing** on an
+unrelated check failure (that stays a normal red), on a green branch, or when its
+own regen commit is at `HEAD` (the loop guard). When `db:rebase` *refuses* (a
+hand-edited / multi-migration branch it will not touch without `--force`) the
+workflow comments for human attention instead of pushing.
+
+The decision logic lives in (and is unit-tested as)
+`server/scripts/ci-autofix-migrations.ts`
+(`tests/scripts/ci-autofix-migrations.test.ts`), driving the Slice-1 CLI as a
+subprocess; the YAML only wires the real seams.
+
+One caveat: the push uses the default `GITHUB_TOKEN`, whose pushes do **not**
+re-trigger workflows, so the `migrations` check does not auto re-run after a
+fix — the auto-fix comment asks you to re-run it (or it re-runs on your next
+push). Forcing that re-run via a write-scoped GitHub App / PAT is a tracked
+follow-up rather than a silently-added repo secret.
 
 ---
 
