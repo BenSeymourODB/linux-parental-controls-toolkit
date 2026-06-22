@@ -288,10 +288,10 @@ describe("policy CRUD routes", () => {
     const put = await auth({
       method: "PUT",
       url: `/api/users/${userId}/clients/${clientId}`,
-      payload: { linuxUsername: "alice", linuxUid: 1001 },
+      payload: { osUsername: "alice", osUserRef: "1001" },
     });
     expect(put.statusCode).toBe(200);
-    expect(put.json()).toEqual({ userId, clientId, linuxUsername: "alice", linuxUid: 1001 });
+    expect(put.json()).toEqual({ userId, clientId, osUsername: "alice", osUserRef: "1001" });
 
     const list = await auth({ method: "GET", url: `/api/users/${userId}/clients` });
     expect(list.json()).toHaveLength(1);
@@ -300,9 +300,9 @@ describe("policy CRUD routes", () => {
     const again = await auth({
       method: "PUT",
       url: `/api/users/${userId}/clients/${clientId}`,
-      payload: { linuxUsername: "alice2", linuxUid: 1002 },
+      payload: { osUsername: "alice2", osUserRef: "1002" },
     });
-    expect(again.json().linuxUid).toBe(1002);
+    expect(again.json().osUserRef).toBe("1002");
     expect(
       (await auth({ method: "GET", url: `/api/users/${userId}/clients` })).json(),
     ).toHaveLength(1);
@@ -313,13 +313,13 @@ describe("policy CRUD routes", () => {
     const noUser = await auth({
       method: "PUT",
       url: `/api/users/999/clients/${clientId}`,
-      payload: { linuxUsername: "x", linuxUid: 1001 },
+      payload: { osUsername: "x", osUserRef: "1001" },
     });
     expect(noUser.statusCode).toBe(404);
     const noClient = await auth({
       method: "PUT",
       url: `/api/users/${userId}/clients/999`,
-      payload: { linuxUsername: "x", linuxUid: 1001 },
+      payload: { osUsername: "x", osUserRef: "1001" },
     });
     expect(noClient.statusCode).toBe(404);
   });
@@ -329,7 +329,7 @@ describe("policy CRUD routes", () => {
     expect(res.statusCode).toBe(404);
   });
 
-  it("409s when a UID is already mapped to another user on the same client", async () => {
+  it("409s when an OS account reference is already mapped to another user on the same client", async () => {
     const { userId, clientId } = await makeUserAndClient();
     const otherUser = (
       await auth({ method: "POST", url: "/api/users", payload: { displayName: "Bob" } })
@@ -337,12 +337,12 @@ describe("policy CRUD routes", () => {
     await auth({
       method: "PUT",
       url: `/api/users/${userId}/clients/${clientId}`,
-      payload: { linuxUsername: "alice", linuxUid: 1001 },
+      payload: { osUsername: "alice", osUserRef: "1001" },
     });
     const conflict = await auth({
       method: "PUT",
       url: `/api/users/${otherUser}/clients/${clientId}`,
-      payload: { linuxUsername: "bob", linuxUid: 1001 },
+      payload: { osUsername: "bob", osUserRef: "1001" },
     });
     expect(conflict.statusCode).toBe(409);
   });
@@ -352,7 +352,7 @@ describe("policy CRUD routes", () => {
     await auth({
       method: "PUT",
       url: `/api/users/${userId}/clients/${clientId}`,
-      payload: { linuxUsername: "alice", linuxUid: 1001 },
+      payload: { osUsername: "alice", osUserRef: "1001" },
     });
     const del = await auth({ method: "DELETE", url: `/api/users/${userId}/clients/${clientId}` });
     expect(del.statusCode).toBe(204);
@@ -1272,7 +1272,7 @@ describe("policy CRUD routes — group schedules & exceptions (#182)", () => {
     await auth({
       method: "PUT",
       url: `/api/users/${alice}/clients/${client}`,
-      payload: { linuxUsername: "alice", linuxUid: 1000 },
+      payload: { osUsername: "alice", osUserRef: "1000" },
     });
 
     // The mutation must succeed (the stub logs the fan-out); no client → no-op

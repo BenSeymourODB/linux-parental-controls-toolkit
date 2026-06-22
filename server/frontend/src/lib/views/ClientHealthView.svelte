@@ -37,8 +37,8 @@
   // Enrol flow.
   let users = $state<UserResponse[]>([]);
   let enrolHostname = $state("");
-  let enrolRows = $state<{ userId: number | null; linuxUsername: string }[]>([
-    { userId: null, linuxUsername: "" },
+  let enrolRows = $state<{ userId: number | null; osUsername: string }[]>([
+    { userId: null, osUsername: "" },
   ]);
   let minting = $state(false);
   let minted = $state<EnrolmentTokenResponse | null>(null);
@@ -93,18 +93,18 @@
   }
 
   function addEnrolRow(): void {
-    enrolRows = [...enrolRows, { userId: null, linuxUsername: "" }];
+    enrolRows = [...enrolRows, { userId: null, osUsername: "" }];
   }
 
   function removeEnrolRow(index: number): void {
     enrolRows = enrolRows.filter((_, i) => i !== index);
   }
 
-  /** True when every row names a user + a Linux username and rows are distinct. */
+  /** True when every row names a user + an OS username and rows are distinct. */
   let enrolReady = $derived(
     enrolRows.length > 0 &&
-      enrolRows.every((r) => r.userId !== null && r.linuxUsername.trim() !== "") &&
-      new Set(enrolRows.map((r) => r.linuxUsername.trim())).size === enrolRows.length,
+      enrolRows.every((r) => r.userId !== null && r.osUsername.trim() !== "") &&
+      new Set(enrolRows.map((r) => r.osUsername.trim())).size === enrolRows.length,
   );
 
   async function handleMint(event: SubmitEvent): Promise<void> {
@@ -119,12 +119,12 @@
     try {
       // `enrolReady` already guarantees every row has a non-null userId; this
       // loop narrows the type without an `as` cast (CLAUDE.md → no casts).
-      const supervisedUsers: { userId: number; linuxUsername: string }[] = [];
+      const supervisedUsers: { userId: number; osUsername: string }[] = [];
       for (const r of enrolRows) {
         if (r.userId === null) {
           return;
         }
-        supervisedUsers.push({ userId: r.userId, linuxUsername: r.linuxUsername.trim() });
+        supervisedUsers.push({ userId: r.userId, osUsername: r.osUsername.trim() });
       }
       const hostname = enrolHostname.trim();
       minted = await mintEnrolmentToken({
@@ -132,7 +132,7 @@
         ttlSeconds: 3600,
         ...(hostname === "" ? {} : { hostname }),
       });
-      mintedUsernames = supervisedUsers.map((u) => u.linuxUsername);
+      mintedUsernames = supervisedUsers.map((u) => u.osUsername);
     } catch (err) {
       enrolError = messageOf(err);
     } finally {
@@ -146,7 +146,7 @@
     enrolError = null;
     copied = false;
     enrolHostname = "";
-    enrolRows = [{ userId: null, linuxUsername: "" }];
+    enrolRows = [{ userId: null, osUsername: "" }];
   }
 
   /**
@@ -345,9 +345,9 @@
             </select>
             <input
               type="text"
-              placeholder="Linux username (e.g. chloe)"
-              bind:value={row.linuxUsername}
-              aria-label="Linux username"
+              placeholder="OS username (e.g. chloe)"
+              bind:value={row.osUsername}
+              aria-label="OS username"
             />
             {#if enrolRows.length > 1}
               <button type="button" class="ghost" onclick={() => removeEnrolRow(index)}>

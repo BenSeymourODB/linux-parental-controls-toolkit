@@ -179,8 +179,10 @@ plan_strict() {
   ok_args
   [ "$status" -eq 0 ]
   [[ "$output" == *'"sshUser":"pct-agent"'* ]]
-  [[ "$output" == *'"linuxUsername":"alice"'* ]]
-  [[ "$output" == *'"linuxUid":'* ]]
+  [[ "$output" == *'"osUsername":"alice"'* ]]
+  # osUserRef is the OS-neutral account reference (#230), a JSON string (the
+  # numeric uid in decimal-string form on Linux).
+  [[ "$output" == *'"osUserRef":"'* ]]
 }
 
 @test "--ssh-user overrides the SSH principal in the enrol body" {

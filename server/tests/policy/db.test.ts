@@ -76,8 +76,8 @@ describe("createDb", () => {
     expect(() =>
       db.$client
         .prepare(
-          "INSERT INTO users_on_clients (user_id, client_id, linux_username, linux_uid) " +
-            "VALUES (999, 999, 'ghost', 1000)",
+          "INSERT INTO users_on_clients (user_id, client_id, os_username, os_user_ref) " +
+            "VALUES (999, 999, 'ghost', '1000')",
         )
         .run(),
     ).toThrow(/FOREIGN KEY/i);
