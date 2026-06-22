@@ -20,6 +20,7 @@
     "db:migrate": "drizzle-kit migrate",
     "db:check": "drizzle-kit check",
     "db:rebase": "node --experimental-strip-types scripts/rebase-migrations.ts",
+    "db:autofix-ci": "node --experimental-strip-types scripts/ci-autofix-migrations.ts",
     "test": "vitest run --coverage",
     "test:integration": "vitest run --config vitest.integration.config.ts"
   },
