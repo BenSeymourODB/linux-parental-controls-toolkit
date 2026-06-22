@@ -1,0 +1,132 @@
+---
+# AppArmor per-app hard-deny profiles — Phase 6, issue #92.
+#
+# Drops AppArmor profiles that hard-block designated executables for the
+# supervised users on a client, reconciling drift on every run so a locally
+# removed profile is restored on the next re-apply (the Phase-6 periodic
+# re-apply scheduler, #93). It is the AppArmor half of the enforcement table in
+# docs/architecture.md → "Per-app deny (hard block) | AppArmor | Ansible-
+# deployed profile"; the e2guardian web-filter half is #90.
+#
+# Mechanism: an empty profile in enforce mode grants the executable no
+# permissions, so the process cannot read/map its own libraries and fails to
+# start — a per-app hard block. AppArmor attaches per *executable* (not per
+# Linux UID), so a profile blocks the binary client-wide; the per-user
+# attribution that drove the deny lives in the dashboard's audit log, and true
+# per-UID exec gating is a separate follow-up. This is in-scope per-app blocking
+# enforcement: it does NOT lock down /etc, /usr, or boot media against root, and
+# does not fight a root user (CLAUDE.md → "Tamper resistance is deliberately
+# bounded"; docs/client-install.md).
+#
+# License boundary: AppArmor is configured ONLY by writing profile files and
+# signalling a reload (apparmor_parser); nothing is linked, imported, or
+# vendored, and no GPL binary is added to the dashboard image. Ansible (GPL-3.0)
+# is only ever exec'd as a subprocess by the transport/ansible runner
+# (CLAUDE.md → "License boundaries", rules 3 & 6; docs/licensing-analysis.md).
+#
+# Invoked by the dashboard's Ansible runner as `playbooks/apparmor-profiles.yml`
+# with the plan supplied as `--extra-vars`, e.g.:
+#   {"apparmor_plan": {"clientId": 1, "hostname": "mint-01.lan",
+#     "denials": [{"profileName": "pct.usr.bin.steam",
+#                  "executable": "/usr/bin/steam",
+#                  "blockedFor": [{"userId": 1, "linuxUid": 1001,
+#                                  "linuxUsername": "alice"}]}]}}
+#
+# Profiles are written under /etc/apparmor.d/pct.d/ (our namespace) and loaded
+# explicitly here; the apparmor systemd service re-parses /etc/apparmor.d on
+# boot, which descends into pct.d, so the blocks survive a reboot.
+- name: Drop AppArmor per-app hard-deny profiles
+  hosts: all
+  become: true
+  gather_facts: false
+
+  vars:
+    pct_apparmor_dir: /etc/apparmor.d/pct.d
+
+  tasks:
+    - name: Apply the empty-plan default when no plan was supplied
+      ansible.builtin.set_fact:
+        apparmor_plan: { "denials": [] }
+      when: apparmor_plan is not defined
+
+    - name: Ensure AppArmor (and apparmor_parser) is installed
+      ansible.builtin.apt:
+        name: apparmor
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    # The systemd service re-parses /etc/apparmor.d on boot (descending into
+    # pct.d), so enabling it is what makes the dropped profiles survive a reboot.
+    - name: Ensure the AppArmor service is enabled and running
+      ansible.builtin.systemd_service:
+        name: apparmor
+        enabled: true
+        state: started
+
+    - name: Ensure the managed profile directory exists
+      ansible.builtin.file:
+        path: "{{ pct_apparmor_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Render a hard-deny profile per blocked executable
+      ansible.builtin.template:
+        src: pct-deny.profile.j2
+        dest: "{{ pct_apparmor_dir }}/{{ item.profileName }}"
+        owner: root
+        group: root
+        mode: "0644"
+      vars:
+        profile_name: "{{ item.profileName }}"
+        executable: "{{ item.executable }}"
+      loop: "{{ apparmor_plan.denials }}"
+      loop_control:
+        label: "{{ item.profileName }}"
+      notify: Reload managed AppArmor profiles
+
+    # --- reconcile: remove profiles a lifted deny left behind ---------------
+
+    - name: Discover the managed profiles currently on disk
+      ansible.builtin.find:
+        paths: "{{ pct_apparmor_dir }}"
+        file_type: file
+      register: pct_existing_profiles
+
+    - name: Compute the set of managed profiles the plan keeps
+      ansible.builtin.set_fact:
+        pct_wanted_profiles: "{{ apparmor_plan.denials | map(attribute='profileName') | list }}"
+
+    # Unload from the kernel first (tolerate an already-unloaded profile: -R on a
+    # profile that isn't loaded exits non-zero), then remove the file. `find`
+    # supplies real on-disk paths, so `command` (no shell) is injection-safe.
+    - name: Unload profiles no longer in the plan from the kernel
+      ansible.builtin.command:
+        cmd: "apparmor_parser -R {{ item.path }}"
+      loop: "{{ pct_existing_profiles.files }}"
+      when: item.path | basename not in pct_wanted_profiles
+      loop_control:
+        label: "{{ item.path | basename }}"
+      register: pct_unload
+      changed_when: pct_unload.rc == 0
+      failed_when: false
+
+    - name: Remove profile files no longer in the plan
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ pct_existing_profiles.files }}"
+      when: item.path | basename not in pct_wanted_profiles
+      loop_control:
+        label: "{{ item.path | basename }}"
+
+  handlers:
+    - name: Reload managed AppArmor profiles
+      ansible.builtin.command:
+        cmd: "apparmor_parser -r {{ pct_apparmor_dir }}/{{ item.profileName }}"
+      loop: "{{ apparmor_plan.denials }}"
+      loop_control:
+        label: "{{ item.profileName }}"
+      changed_when: true
