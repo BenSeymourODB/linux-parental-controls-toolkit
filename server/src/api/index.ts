@@ -151,6 +151,14 @@ export {
   type DnsStatusResponse,
 } from "./dns/index.js";
 
+// System-status DTO (#39): the read-only contract surfacing first-run subsystem
+// health (the Ansible venv bootstrap). Schema lives in `./system/dtos.ts`.
+export {
+  ansibleVenvStateSchema,
+  ansibleVenvStatusResponseSchema,
+  type AnsibleVenvStatusResponse,
+} from "./system/index.js";
+
 // Auth DTOs (#52). Re-exported here so the frontend imports the auth contract
 // from the same `/api` surface as every other DTO; the schemas themselves live
 // in `../auth/dtos.ts` next to the routes that use them.

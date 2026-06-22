@@ -16,6 +16,7 @@ import { registerApi } from "../api/index.js";
 import { loadSettings, type Settings } from "../config.js";
 import { EventHub } from "../events/index.js";
 import { createDb, type PolicyDb } from "../policy/db.js";
+import { createAnsibleVenvSupervisor, type AnsibleVenvSupervisor } from "../setup/ansible-venv.js";
 import { createAdGuardService, type AdGuardService } from "../transport/adguard/index.js";
 import { createPolicyPushTransport } from "../transport/policy-push/index.js";
 import { registerFrontend } from "./frontend.js";
@@ -35,6 +36,14 @@ declare module "fastify" {
      * `settings.adguard` unless injected via {@link BuildAppOptions.adguard}.
      */
     adguard: AdGuardService;
+    /**
+     * The first-run Ansible venv bootstrap supervisor (#39). `GET
+     * /api/system/ansible` reads its `status` snapshot. Built from settings
+     * here but **not** run by `buildApp`: `main.ts` fires `bootstrap()` after
+     * `listen` (a slow `pip install` must not block startup), so building the
+     * app — including in tests — spawns nothing.
+     */
+    ansibleVenv: AnsibleVenvSupervisor;
   }
 }
 
@@ -62,6 +71,13 @@ export interface BuildAppOptions {
    * existing tests make no AdGuard calls.
    */
   adguard?: AdGuardService;
+  /**
+   * Inject an {@link AnsibleVenvSupervisor} (tests pass one with a fake runner).
+   * When omitted, {@link buildApp} builds one from settings. Either way
+   * `buildApp` never calls `bootstrap()`, so no subprocess is spawned by
+   * constructing the app.
+   */
+  ansibleVenv?: AnsibleVenvSupervisor;
 }
 
 /**
@@ -115,6 +131,20 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   app.addHook("onReady", async () => {
     await adguard.runPreflight(app.log);
   });
+
+  // The first-run Ansible venv bootstrap supervisor (#39), read by
+  // GET /api/system/ansible. Built (or injected) here so the route has a status
+  // to serialise, but NOT run here: `main.ts` fires `bootstrap()` after `listen`
+  // so a slow `pip install` never delays startup, and constructing the app —
+  // including every test that builds it — spawns no subprocess.
+  const ansibleVenv =
+    options.ansibleVenv ??
+    createAnsibleVenvSupervisor({
+      ansibleDir: settings.ansibleDir,
+      coreVersion: settings.ansibleCoreVersion,
+      playbookSourceDir: settings.ansiblePlaybookSourceDir,
+    });
+  app.decorate("ansibleVenv", ansibleVenv);
 
   app.get("/", async (_request, reply) => {
     return reply.type("text/plain").send("hello, no policy yet");
