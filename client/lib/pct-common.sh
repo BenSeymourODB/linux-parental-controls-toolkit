@@ -131,3 +131,33 @@ pct_chown_user() {
   local user="$1" path="$2"
   pct_run chown -R "${user}:" "$path"
 }
+
+# Set `KEY = VALUE` in a simple `key = value` config file, replacing an existing
+# (uncommented) assignment in place or appending it, and leaving every other
+# line untouched. Dry-run aware. Used to tune specific keys in an upstream
+# tool's own config (e.g. Timekpr-nExT's warning lead times in
+# /etc/timekpr/timekpr.conf) without rewriting the whole file — so the package's
+# other settings survive. KEY must be a bare token (no regex metacharacters);
+# VALUE must not contain a newline. A leading `#` comment is never matched, so a
+# documentation comment for the same key is left alone.
+# Usage: pct_set_conf_key /etc/timekpr/timekpr.conf TIMEKPR_FINAL_WARNING_TIME 60
+pct_set_conf_key() {
+  local file="$1" key="$2" value="$3"
+  if pct_is_dry_run; then
+    printf '%s set %s = %s in %s\n' "$PCT_DRYRUN_PREFIX" "$key" "$value" "$file" >&2
+    return 0
+  fi
+  mkdir -p "$(dirname "$file")"
+  [ -f "$file" ] || : >"$file"
+  if grep -qE "^[[:space:]]*${key}[[:space:]]*=" "$file"; then
+    # Replace the existing assignment in place via a temp file, then copy the
+    # result back so the original file keeps its inode/permissions.
+    local tmp
+    tmp="$(mktemp)"
+    sed -E "s|^[[:space:]]*${key}[[:space:]]*=.*|${key} = ${value}|" "$file" >"$tmp"
+    cat "$tmp" >"$file"
+    rm -f "$tmp"
+  else
+    printf '%s = %s\n' "$key" "$value" >>"$file"
+  fi
+}

@@ -63,6 +63,25 @@ TIMEKPR_PPA="${TIMEKPR_PPA:-ppa:mjasnik/ppa}"
 # step idempotent; overridable so tests can point it at a fixture.
 TIMEKPR_PPA_LIST_GLOB="${TIMEKPR_PPA_LIST_GLOB:-/etc/apt/sources.list.d/*mjasnik*.list}"
 
+# Timekpr-nExT's own config + client-indicator autostart (#268). In Alpha-1 the
+# richer pct-client-agent cadence/grace UX (Phase 8b) is not shipped, so
+# Timekpr-nExT's native client indicator is the ONLY warning a supervised user
+# gets before a session cutoff. We tune its warning lead times to be generous
+# and ensure its indicator autostarts for each supervised user. All paths +
+# values are overridable on the established PCT_* pattern so the tests can
+# exercise this without root or the package installed.
+PCT_TIMEKPR_CONF="${PCT_TIMEKPR_CONF:-/etc/timekpr/timekpr.conf}"
+# Seconds before a cutoff for the single "time's almost up" heads-up
+# (upstream default 60). Generous Alpha-1 value: 5 minutes of warning.
+PCT_TIMEKPR_FINAL_NOTIFICATION_TIME="${PCT_TIMEKPR_FINAL_NOTIFICATION_TIME:-300}"
+# Seconds of continuous final countdown before a cutoff (upstream default 10).
+# Generous Alpha-1 value: the whole final minute counts down.
+PCT_TIMEKPR_FINAL_WARNING_TIME="${PCT_TIMEKPR_FINAL_WARNING_TIME:-60}"
+# The package's system-wide client-indicator autostart entry, and the per-user
+# filename we drop into ~/.config/autostart to guarantee + force-enable it.
+PCT_TIMEKPR_AUTOSTART_SRC="${PCT_TIMEKPR_AUTOSTART_SRC:-/etc/xdg/autostart/timekpr-client.desktop}"
+PCT_TIMEKPR_CLIENT_DESKTOP="${PCT_TIMEKPR_CLIENT_DESKTOP:-timekpr-client.desktop}"
+
 # Where the per-supervised-user e2guardian baseline skeletons live. A
 # pct-namespaced directory so we never disturb a household's existing
 # e2guardian config; Phase 6 Ansible reads these as the seed for the real
@@ -159,11 +178,21 @@ pct_baseline_install_activitywatch() {
 # --- step: Timekpr-nExT ----------------------------------------------------
 
 pct_baseline_configure_timekpr() {
-  pct_step "Configure Timekpr-nExT (baseline: enable daemon, empty policy)"
+  pct_step "Configure Timekpr-nExT (baseline: daemon + generous Alpha-1 warnings)"
   # Initial policy is intentionally empty — the dashboard pushes limits via
   # `timekpra` over SSH after enrolment. We only ensure the daemon is up and
   # the CLI the server drives is on PATH.
   pct_run systemctl enable --now timekpr.service
+
+  # Give supervised users plenty of advance warning before a session cutoff.
+  # Alpha-1 has no pct-client-agent cadence/grace UX (Phase 8b), so this is the
+  # only warning the user gets. Edit just these keys in place — the rest of the
+  # upstream config (session types, excluded users, polltime, …) is preserved.
+  pct_set_conf_key "$PCT_TIMEKPR_CONF" \
+    TIMEKPR_FINAL_NOTIFICATION_TIME "$PCT_TIMEKPR_FINAL_NOTIFICATION_TIME"
+  pct_set_conf_key "$PCT_TIMEKPR_CONF" \
+    TIMEKPR_FINAL_WARNING_TIME "$PCT_TIMEKPR_FINAL_WARNING_TIME"
+
   if pct_is_dry_run; then
     printf '%s %s\n' "$PCT_DRYRUN_PREFIX" "command -v timekpra" >&2
   elif command -v timekpra >/dev/null 2>&1; then
@@ -171,6 +200,50 @@ pct_baseline_configure_timekpr() {
   else
     pct_warn "timekpra not found on PATH; the dashboard's SSH transport needs it (check the timekpr-next install)"
   fi
+}
+
+# --- step: Timekpr-nExT client indicator autostart (per supervised user) ----
+
+# Copy the package's client-indicator autostart entry to `dest`, forcing it
+# enabled (stripping any Hidden / X-GNOME-Autostart-enabled lines and appending
+# the enabled forms). Factored out so it is unit-testable without resolving a
+# real user's home. Copying the package's own .desktop keeps its `Exec` correct
+# across upgrades; the force-enable defends against a stale per-user override.
+pct_timekpr_write_user_autostart() {
+  local src="$1" dest="$2"
+  mkdir -p "$(dirname "$dest")"
+  {
+    grep -viE '^[[:space:]]*(Hidden|X-GNOME-Autostart-enabled)[[:space:]]*=' "$src" || true
+    printf 'Hidden=false\nX-GNOME-Autostart-enabled=true\n'
+  } >"$dest"
+}
+
+pct_baseline_configure_timekpr_client() {
+  pct_step "Enable the Timekpr-nExT client indicator autostart (per supervised user)"
+  local user home dest
+  for user in "$@"; do
+    if ! pct_is_dry_run && ! getent passwd "$user" >/dev/null 2>&1; then
+      pct_warn "supervised user '${user}' does not exist; skipping client-indicator autostart"
+      continue
+    fi
+    home="$(getent passwd "$user" | cut -d: -f6 || true)"
+    [ -n "$home" ] || home="/home/${user}"
+    dest="${home}/.config/autostart/${PCT_TIMEKPR_CLIENT_DESKTOP}"
+    pct_log "Timekpr-nExT client indicator autostart for ${user}"
+
+    if pct_is_dry_run; then
+      printf '%s enable timekpr client indicator autostart for %s -> %s (from %s)\n' \
+        "$PCT_DRYRUN_PREFIX" "$user" "$dest" "$PCT_TIMEKPR_AUTOSTART_SRC" >&2
+      continue
+    fi
+
+    if [ ! -r "$PCT_TIMEKPR_AUTOSTART_SRC" ]; then
+      pct_warn "no system autostart entry ${PCT_TIMEKPR_AUTOSTART_SRC}; is timekpr-next installed? the time-left indicator may not appear for ${user}"
+      continue
+    fi
+    pct_timekpr_write_user_autostart "$PCT_TIMEKPR_AUTOSTART_SRC" "$dest"
+    pct_chown_user "$user" "${home}/.config/autostart"
+  done
 }
 
 # --- step: ActivityWatch per-user systemd --user units ---------------------
@@ -323,6 +396,7 @@ pct_install_baseline_tools() {
   pct_baseline_install_activitywatch
   pct_baseline_configure_timekpr
   pct_baseline_configure_activitywatch "$@"
+  pct_baseline_configure_timekpr_client "$@"
   pct_baseline_configure_e2guardian "$@"
   pct_ok "baseline tool install complete for: $*"
   if pct_is_dry_run; then
