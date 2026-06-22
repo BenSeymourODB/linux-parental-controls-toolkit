@@ -21,15 +21,18 @@ export {
   buildSetPlayTimeLimitOverride,
   buildSetPlayTimeUnaccountedIntervalsEnabled,
   buildSetPlayTimeLimits,
+  buildSetTimeLeft,
   buildSetTimeLimits,
   buildSetTimeLimitMonth,
   buildSetTimeLimitWeek,
   buildUserInfo,
   assertUsername,
+  TIME_LEFT_OPERATIONS,
   type AllowedHour,
   type AllowedHoursDay,
   type IsoWeekday,
   type PlayTimeActivity,
+  type TimeLeftOperation,
 } from "./commands.js";
 export {
   DEFAULT_TIMEKPRA_BINARY,
