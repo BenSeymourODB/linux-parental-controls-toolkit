@@ -21,6 +21,7 @@ describe("loadSettings", () => {
     expect(settings.adguard).toEqual({ mode: "disabled" });
     expect(settings.telemetry).toEqual({ pullCron: "*/5 * * * *", pullConcurrency: 4 });
     expect(settings.reapply).toEqual({ cron: "0 * * * *", playbooks: [] });
+    expect(settings.clientHealth).toEqual({ probeConcurrency: 4, probeDeadlineMs: 15000 });
   });
 
   it("honours an explicit PCT_ANSIBLE_DIR", () => {
@@ -223,6 +224,41 @@ describe("loadSettings", () => {
       expect(() => loadSettings({ PCT_TELEMETRY_PULL_CONCURRENCY: "0" })).toThrow(SettingsError);
       expect(() => loadSettings({ PCT_TELEMETRY_PULL_CONCURRENCY: "-3" })).toThrow(SettingsError);
       expect(() => loadSettings({ PCT_TELEMETRY_PULL_CONCURRENCY: "many" })).toThrow(SettingsError);
+    });
+  });
+
+  describe("PCT_CLIENT_HEALTH_*", () => {
+    it("honours explicit probe concurrency and deadline", () => {
+      const settings = loadSettings({
+        PCT_CLIENT_HEALTH_PROBE_CONCURRENCY: "8",
+        PCT_CLIENT_HEALTH_PROBE_DEADLINE_MS: "5000",
+      });
+      expect(settings.clientHealth).toEqual({ probeConcurrency: 8, probeDeadlineMs: 5000 });
+    });
+
+    it("accepts a deadline of 0 to disable the per-list deadline", () => {
+      expect(loadSettings({ PCT_CLIENT_HEALTH_PROBE_DEADLINE_MS: "0" }).clientHealth).toEqual({
+        probeConcurrency: 4,
+        probeDeadlineMs: 0,
+      });
+    });
+
+    it("rejects a non-positive or non-numeric concurrency", () => {
+      expect(() => loadSettings({ PCT_CLIENT_HEALTH_PROBE_CONCURRENCY: "0" })).toThrow(
+        SettingsError,
+      );
+      expect(() => loadSettings({ PCT_CLIENT_HEALTH_PROBE_CONCURRENCY: "-1" })).toThrow(
+        SettingsError,
+      );
+      expect(() => loadSettings({ PCT_CLIENT_HEALTH_PROBE_CONCURRENCY: "lots" })).toThrow(
+        SettingsError,
+      );
+    });
+
+    it("rejects a negative deadline", () => {
+      expect(() => loadSettings({ PCT_CLIENT_HEALTH_PROBE_DEADLINE_MS: "-1" })).toThrow(
+        SettingsError,
+      );
     });
   });
 

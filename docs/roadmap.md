@@ -273,7 +273,9 @@ so chore/calendar completions can grant screen-time rewards.
 
 ## Phase 11 — Hardening and polish
 
-- Reverse-proxy + TLS instructions for non-LAN deployments.
+- Reverse-proxy + TLS instructions for non-LAN deployments
+  ([`reverse-proxy-tls.md`](reverse-proxy-tls.md);
+  [#119](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/119)).
 - Multi-admin / OIDC option. This is the first step beyond the
   single-admin Argon2 model of Phase 2; evaluate a managed TypeScript
   auth library (e.g. [Better-auth](https://www.better-auth.com/),

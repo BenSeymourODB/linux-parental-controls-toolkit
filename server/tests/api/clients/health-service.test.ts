@@ -4,7 +4,7 @@
  * transport queue, and an optional injected {@link ClientProber} — plus the
  * `last_seen` bump on a reachable probe.
  */
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import * as repo from "../../../src/policy/repository.js";
 import type { ClientRow } from "../../../src/policy/repository.js";
@@ -143,5 +143,97 @@ describe("listClientHealth", () => {
   it("returns an empty list when no clients are enrolled", async () => {
     const empty = testDb();
     expect(await listClientHealth(empty)).toEqual([]);
+  });
+
+  it("preserves id order even when probes finish out of order (bounded concurrency)", async () => {
+    const second = repo.createClient(db, { hostname: "bob-pc.local", sshUser: "pct-agent" });
+    // bob's probe resolves before alice's, but the result stays ordered by id.
+    const orderedProber: ClientProber = {
+      async probe(seen) {
+        const delay = seen.hostname === "alice-pc.local" ? 20 : 0;
+        await new Promise((r) => setTimeout(r, delay));
+        return { ...onlineResult };
+      },
+    };
+    const list = await listClientHealth(db, orderedProber, { concurrency: 2 });
+    expect(list.map((h) => h.clientId)).toEqual([client.id, second.id]);
+    expect(list.every((h) => h.reachability === "online")).toBe(true);
+  });
+
+  it("degrades only the host that misses the per-list deadline; others still probe", async () => {
+    const second = repo.createClient(db, { hostname: "bob-pc.local", sshUser: "pct-agent" });
+    // A manually-controlled deadline so the test is deterministic.
+    let fireDeadline!: () => void;
+    const deadlineReached = new Promise<void>((resolve) => {
+      fireDeadline = resolve;
+    });
+    const cancel = vi.fn();
+    const deadlineFactory = () => ({ reached: deadlineReached, cancel });
+
+    // alice answers; bob hangs forever (until the deadline fires).
+    const hangingProber: ClientProber = {
+      async probe(seen) {
+        if (seen.hostname === "bob-pc.local") {
+          return new Promise<ClientProbeResult>(() => {
+            /* never resolves — this host is wedged until the deadline trips */
+          });
+        }
+        return { ...onlineResult };
+      },
+    };
+
+    const pending = listClientHealth(db, hangingProber, { concurrency: 2, deadlineFactory });
+    // Let alice resolve, then trip the deadline for the still-hanging bob.
+    await new Promise((r) => setTimeout(r, 0));
+    fireDeadline();
+    const list = await pending;
+
+    const alice = list.find((h) => h.clientId === client.id);
+    const bob = list.find((h) => h.clientId === second.id);
+    expect(alice?.reachability).toBe("online");
+    expect(bob?.reachability).toBe("unknown");
+    expect(bob?.probedAt).toBeNull();
+    expect(bob?.components.every((c) => c.detail.includes("#198"))).toBe(true);
+    // The deadline timer is released once the walk finishes.
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("isolates a throwing probe to its client rather than failing the walk", async () => {
+    const second = repo.createClient(db, { hostname: "bob-pc.local", sshUser: "pct-agent" });
+    const flakyProber: ClientProber = {
+      async probe(seen) {
+        if (seen.hostname === "bob-pc.local") throw new Error("ssh handshake failed");
+        return { ...onlineResult };
+      },
+    };
+    const list = await listClientHealth(db, flakyProber, { concurrency: 2 });
+    const alice = list.find((h) => h.clientId === client.id);
+    const bob = list.find((h) => h.clientId === second.id);
+    expect(alice?.reachability).toBe("online");
+    expect(bob?.reachability).toBe("unknown");
+    expect(bob?.components[0]?.detail).toContain("ssh handshake failed");
+  });
+
+  it("stringifies a non-Error thrown by a probe into the component detail", async () => {
+    const oddProber: ClientProber = {
+      async probe() {
+        throw "boom";
+      },
+    };
+    const list = await listClientHealth(db, oddProber);
+    expect(list[0]?.reachability).toBe("unknown");
+    expect(list[0]?.components[0]?.detail).toBe("probe failed: boom");
+  });
+
+  it("waits for every probe when the deadline is disabled (0)", async () => {
+    const second = repo.createClient(db, { hostname: "bob-pc.local", sshUser: "pct-agent" });
+    const factory = vi.fn();
+    const prober = new FakeProber(onlineResult);
+    const list = await listClientHealth(db, prober, { deadlineMs: 0, deadlineFactory: factory });
+    expect(list.every((h) => h.reachability === "online")).toBe(true);
+    expect(prober.seen).toHaveLength(2);
+    expect(second.id).toBeGreaterThan(client.id);
+    // A disabled deadline never builds a timer.
+    expect(factory).not.toHaveBeenCalled();
   });
 });

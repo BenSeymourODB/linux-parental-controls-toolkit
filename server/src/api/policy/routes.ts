@@ -23,6 +23,7 @@ import {
   createPolicyPushStub,
   linkPushCommands,
   userPushCommands,
+  type PolicyPushStub,
   type UserPushReason,
 } from "../../transport/stub.js";
 import { ApiError } from "../errors.js";
@@ -162,16 +163,20 @@ function groupMemberPushCommands(
 /**
  * Register the policy CRUD routes on an already-`/api`-prefixed scope. Call
  * after {@link registerAuth} so `scope.requireAdmin` is decorated.
+ *
+ * Every successful mutation hands the intended per-client effect to `push`. In
+ * production that is the live `timekpra`-over-SSH dispatcher (#201, wired in
+ * `buildApp`), which pushes to reachable clients and queues for offline ones
+ * (#84) — see `transport/policy-push/` and `docs/architecture.md` → "Outbound
+ * (server → client) — policy push". When no dispatcher is injected (no SSH key
+ * yet, #39; or a test), it defaults to the logging stub (#54), so CRUD still
+ * works and the change is logged rather than dispatched.
  */
-export function registerPolicyRoutes(scope: FastifyInstance): void {
+export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushStub): void {
   const typed = scope.withTypeProvider<ZodTypeProvider>();
   const guard = { preHandler: scope.requireAdmin };
 
-  // Phase-2 stub transport (#54): every successful mutation logs the intended
-  // per-client effect instead of dispatching it. This is the seam Phase 4
-  // (SSH + `timekpra`) and Phase 6 (Ansible) fill in — see `transport/stub.ts`
-  // and `docs/architecture.md` → "Outbound (server → client) — policy push".
-  const pushStub = createPolicyPushStub(scope.log);
+  const pushStub = push ?? createPolicyPushStub(scope.log);
 
   // --- Users ---------------------------------------------------------------
 
