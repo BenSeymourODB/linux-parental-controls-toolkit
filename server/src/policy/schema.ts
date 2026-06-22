@@ -522,6 +522,46 @@ export const groupExceptions = sqliteTable(
 );
 
 /**
+ * A time allowance defined **once for a {@link userGroups group}** and inherited
+ * by every member as the baseline (#134,
+ * `docs/adr/0008-group-targeted-budgets.md`). Column-for-column the same shape
+ * as {@link budgets} — the same polymorphic `scope`/`target_id` (see the file
+ * header) and `window`/`seconds_allowed` — but keyed by `user_group_id` instead
+ * of `user_id`.
+ *
+ * Kept in a separate table rather than relaxing `budgets.user_id` to nullable,
+ * for the same reasons ADR 0007 chose separate tables for group schedules: the
+ * user-keyed table and its `BudgetResponse` wire contract stay untouched, and
+ * the two tables converge at *resolution*, not in storage. `policy/group-
+ * resolution.ts` → `gatherUserBudgets` resolves a member's effective baseline by
+ * taking the member's own budget for a `(scope, window, target)` slot when set,
+ * otherwise the inherited group budget for that slot (lowest group id wins). A
+ * `Budget` is a single baseline figure, not an additive layer — grants are the
+ * additive layer (architecture → "Policy model"), so override is full-replace
+ * per slot, never a sum.
+ */
+export const groupBudgets = sqliteTable(
+  "group_budgets",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    userGroupId: integer("user_group_id")
+      .notNull()
+      .references(() => userGroups.id, { onDelete: "cascade" }),
+    scope: text("scope", { enum: scopeValues }).notNull(),
+    targetId: integer("target_id"),
+    window: text("window", { enum: budgetWindowValues }).notNull(),
+    secondsAllowed: integer("seconds_allowed").notNull(),
+  },
+  (table) => [
+    index("group_budgets_group_scope_window_idx").on(table.userGroupId, table.scope, table.window),
+    check("group_budgets_scope_check", oneOf(table.scope, scopeValues)),
+    check("group_budgets_window_check", oneOf(table.window, budgetWindowValues)),
+    check("group_budgets_seconds_check", sql`${table.secondsAllowed} >= 0`),
+    check("group_budgets_target_coherence_check", targetCoherence(table.scope, table.targetId)),
+  ],
+);
+
+/**
  * A normalised usage interval pulled from ActivityWatch. Both `started_at`
  * and `ended_at` are UTC. Burndown views read these per user over a time
  * window, optionally narrowed to one activity — hence the two indexes.

@@ -713,3 +713,83 @@ describe("policy repository — group schedules & exceptions (#182)", () => {
     expect(repo.listGroupExceptions(db, groupId)).toEqual([]);
   });
 });
+
+describe("policy repository — group budgets (#134)", () => {
+  let db: TestDb;
+  let groupId: number;
+  beforeEach(() => {
+    db = testDb();
+    groupId = repo.createUserGroup(db, { name: "Kids" }).id;
+  });
+  afterEach(() => {
+    db.$client.close();
+  });
+
+  it("creates, lists, gets, updates and deletes a group budget", () => {
+    const overall = repo.createGroupBudget(db, {
+      userGroupId: groupId,
+      scope: "overall",
+      window: "daily",
+      secondsAllowed: 7200,
+    });
+    expect(overall.targetId).toBeNull();
+    expect(overall.secondsAllowed).toBe(7200);
+
+    const weekly = repo.createGroupBudget(db, {
+      userGroupId: groupId,
+      scope: "overall",
+      window: "weekly",
+      secondsAllowed: 36000,
+    });
+    expect(repo.listGroupBudgets(db, groupId).map((r) => r.id)).toEqual([overall.id, weekly.id]);
+    expect(repo.getGroupBudget(db, overall.id)?.window).toBe("daily");
+
+    const updated = repo.updateGroupBudget(db, overall.id, { secondsAllowed: 5400 });
+    expect(updated?.secondsAllowed).toBe(5400);
+    expect(repo.deleteGroupBudget(db, overall.id)).toBe(true);
+    expect(repo.deleteGroupBudget(db, overall.id)).toBe(false);
+    expect(repo.getGroupBudget(db, overall.id)).toBeUndefined();
+  });
+
+  it("rejects a negative allowance at the storage CHECK", () => {
+    let caught: unknown;
+    try {
+      repo.createGroupBudget(db, {
+        userGroupId: groupId,
+        scope: "overall",
+        window: "daily",
+        secondsAllowed: -1,
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(repo.isCheckViolation(caught)).toBe(true);
+  });
+
+  it("rejects an overall budget carrying a target_id (coherence CHECK)", () => {
+    let caught: unknown;
+    try {
+      repo.createGroupBudget(db, {
+        userGroupId: groupId,
+        scope: "overall",
+        targetId: 1,
+        window: "daily",
+        secondsAllowed: 60,
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(repo.isCheckViolation(caught)).toBe(true);
+  });
+
+  it("cascades group budgets when the group is deleted", () => {
+    repo.createGroupBudget(db, {
+      userGroupId: groupId,
+      scope: "overall",
+      window: "daily",
+      secondsAllowed: 3600,
+    });
+    repo.deleteUserGroup(db, groupId);
+    expect(repo.listGroupBudgets(db, groupId)).toEqual([]);
+  });
+});

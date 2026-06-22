@@ -73,6 +73,7 @@ const EXPECTED_TABLES = [
   "enrolment_tokens",
   "exceptions",
   "grants",
+  "group_budgets",
   "group_exceptions",
   "group_schedules",
   "integration_tokens",
@@ -183,6 +184,31 @@ describe("policy migrations", () => {
     );
     expect(groupExceptionColumns).not.toContain("user_id");
     expect(groupExceptionColumns).not.toContain("effective_to");
+
+    sqlite.close();
+  });
+
+  it("materialises the group-targeted budgets table (#134, ADR 0008)", () => {
+    // ADR 0008: group budgets live in their own table (keyed by user_group_id),
+    // mirroring the user-keyed budgets shape rather than relaxing budgets.user_id.
+    const sqlite = new Database(":memory:");
+    const db = drizzle(sqlite);
+
+    migrate(db, { migrationsFolder });
+
+    // group_budgets mirrors budgets but is keyed by user_group_id, not user_id.
+    const groupBudgetColumns = columnNames(sqlite, "group_budgets");
+    expect(groupBudgetColumns).toEqual(
+      expect.arrayContaining([
+        "id",
+        "user_group_id",
+        "scope",
+        "target_id",
+        "window",
+        "seconds_allowed",
+      ]),
+    );
+    expect(groupBudgetColumns).not.toContain("user_id");
 
     sqlite.close();
   });

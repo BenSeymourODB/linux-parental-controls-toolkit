@@ -14,6 +14,7 @@ import { loadSettings } from "../../src/config.js";
 import {
   budgets,
   grants,
+  groupBudgets,
   groupSchedules,
   schedules,
   userGroupMemberships,
@@ -259,6 +260,49 @@ describe("GET /api/users/:userId/effective", () => {
       "allow",
       "deny",
     ]);
+  });
+
+  it("inherits a group budget, with the user's own budget taking precedence (#134)", async () => {
+    const userId = await createUser("Alice"); // tz null → UTC
+    const group = harness.db
+      .insert(userGroups)
+      .values({ name: "Kids" })
+      .returning({ id: userGroups.id })
+      .get();
+    if (group === undefined) throw new Error("group insert returned no row");
+    harness.db.insert(userGroupMemberships).values({ userId, groupId: group.id }).run();
+
+    // Group sets a 2h daily overall baseline; with no own budget the member
+    // inherits it.
+    harness.db
+      .insert(groupBudgets)
+      .values({
+        userGroupId: group.id,
+        scope: "overall",
+        targetId: null,
+        window: "daily",
+        secondsAllowed: 7200,
+      })
+      .run();
+
+    const inherited = await auth({
+      method: "GET",
+      url: `/api/users/${userId}/effective?date=2026-06-20`,
+    });
+    expect(inherited.json().overallSeconds).toBe(7200);
+
+    // The user's own daily overall budget fully replaces the inherited baseline
+    // (no sum) — 30 minutes wins over the group's 2 hours.
+    harness.db
+      .insert(budgets)
+      .values({ userId, scope: "overall", targetId: null, window: "daily", secondsAllowed: 1800 })
+      .run();
+
+    const overridden = await auth({
+      method: "GET",
+      url: `/api/users/${userId}/effective?date=2026-06-20`,
+    });
+    expect(overridden.json().overallSeconds).toBe(1800);
   });
 
   it("defaults to today in the user's effective timezone when no date is given", async () => {
