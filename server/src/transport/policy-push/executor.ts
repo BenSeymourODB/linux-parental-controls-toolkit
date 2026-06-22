@@ -38,6 +38,8 @@
  * `timekpra` client, which execs over the existing SSH subprocess facade. No GPL
  * code is linked in-process (`CLAUDE.md` → "License boundaries").
  */
+import { z } from "zod";
+
 import type { PolicyDb } from "../../policy/db.js";
 import {
   getClient,
@@ -47,8 +49,6 @@ import {
   listUserSchedules,
   type ClientRow,
 } from "../../policy/repository.js";
-import { z } from "zod";
-
 import type { WeeklyAllowedWindows } from "../timekpr/allowed-hours.js";
 import type { ActionExecutor, QueuedAction } from "../queue/types.js";
 import { policyPushPayloadSchema } from "./payload.js";

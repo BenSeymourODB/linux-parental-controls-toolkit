@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import type { BudgetInput } from "../../../src/policy/resolve.js";
 import type { ScheduleRule } from "../../../src/policy/schedule-precedence.js";
+import { buildWeeklyAllowedHoursCommands } from "../../../src/transport/timekpr/allowed-hours.js";
 import {
   resolvePolicyPush,
   unrestrictedPolicyPush,
@@ -110,6 +111,22 @@ describe("resolvePolicyPush", () => {
       for (const day of [1, 2, 3, 4, 5, 6, 7] as const) {
         expect(resolved.weekly.get(day)).toEqual([{ start: 0, end: 1440 }]);
       }
+    });
+
+    it("maps to valid timekpra argv: every day allowed, all 24 hours, collapsed to ALL", () => {
+      // Prove the unmanage grid survives the real allowed-hours builder (not just
+      // the map shape): a single --setalloweddays for all 7 days, then one
+      // collapsed --setallowedhours USER ALL listing the 24 bare (whole) hours.
+      const commands = buildWeeklyAllowedHoursCommands("alice", unrestrictedPolicyPush().weekly);
+      expect(commands).toEqual([
+        ["--setalloweddays", "alice", "1;2;3;4;5;6;7"],
+        [
+          "--setallowedhours",
+          "alice",
+          "ALL",
+          "0;1;2;3;4;5;6;7;8;9;10;11;12;13;14;15;16;17;18;19;20;21;22;23",
+        ],
+      ]);
     });
   });
 });
