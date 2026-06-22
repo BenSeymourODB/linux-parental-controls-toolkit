@@ -248,7 +248,8 @@ pct_orch_build_component_versions_json() {
 #
 # Built in pure bash (no JSON library): safe here because every interpolated
 # value is a constrained token — an OS username (validated [<=32], the usual
-# [a-z_][a-z0-9_-]* charset), a hostname (RFC-1035 charset), an integer UID, or
+# [a-z_][a-z0-9_-]* charset), a hostname (RFC-1035 charset), the account
+# reference (the numeric uid from `id -u` on Linux), or
 # a version string already reduced to the [A-Za-z0-9._+~:-] charset by
 # pct_orch_version_token — none of which can contain a '"' or '\' to break out
 # of the JSON string. The orchestrator's CLI parsing and the version tokeniser
