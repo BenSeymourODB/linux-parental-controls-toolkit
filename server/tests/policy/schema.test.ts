@@ -485,13 +485,13 @@ describe("users_on_clients", () => {
     if (clientId === undefined) throw new Error("client insert returned no row");
 
     db.insert(usersOnClients)
-      .values({ userId: userA, clientId, linuxUsername: "alice", linuxUid: 1001 })
+      .values({ userId: userA, clientId, osUsername: "alice", osUserRef: "1001" })
       .run();
 
     expect(() =>
       db
         .insert(usersOnClients)
-        .values({ userId: userB, clientId, linuxUsername: "bob", linuxUid: 1001 })
+        .values({ userId: userB, clientId, osUsername: "bob", osUserRef: "1001" })
         .run(),
     ).toThrow(/UNIQUE constraint/i);
   });
@@ -604,13 +604,13 @@ describe("enrolment_tokens", () => {
     db.insert(enrolmentTokens)
       .values({
         tokenHash: "abc123",
-        supervisedUsers: [{ userId, linuxUsername: "alice" }],
+        supervisedUsers: [{ userId, osUsername: "alice" }],
         expiresAt: new Date("2026-12-31T00:00:00Z"),
       })
       .run();
     const row = db.select().from(enrolmentTokens).get();
 
-    expect(row?.supervisedUsers).toStrictEqual([{ userId, linuxUsername: "alice" }]);
+    expect(row?.supervisedUsers).toStrictEqual([{ userId, osUsername: "alice" }]);
     expect(row?.consumedAt).toBeNull();
     expect(row?.consumedClientId).toBeNull();
   });

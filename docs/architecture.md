@@ -120,12 +120,16 @@ Client        (id, hostname, ssh_user, bearer_token_hash?, enrolled_at,
               --  fleet inventory the client reports at enrolment (#164); all
               --  NULL until reported. The Phase-8b heartbeat (#165/#101)
               --  refreshes agent_version + versions_reported_at later.
-UserOnClient  (user_id, client_id, linux_username, linux_uid)
+UserOnClient  (user_id, client_id, os_username, os_user_ref)
+              --  os_username / os_user_ref are OS-neutral (#230): the local
+              --  login name and an account reference — a uid on Linux, a SID
+              --  on Windows — so os_user_ref is TEXT (the Linux uid in its
+              --  decimal-string form). UNIQUE(client_id, os_user_ref).
 
 EnrolmentToken (id, token_hash, hostname?, supervised_users[],
                 expires_at, created_at, consumed_at?, consumed_client_id?)
               --  single-use, expiring client-enrolment credential (#77).
-              --  Admin mints one bound to the policy-user ↔ Linux-account
+              --  Admin mints one bound to the policy-user ↔ OS-account
               --  mapping; POST /api/clients/enrol redeems it (creating the
               --  Client + UserOnClient rows) and marks it consumed. Only the
               --  SHA-256 token_hash is stored, never the plaintext.

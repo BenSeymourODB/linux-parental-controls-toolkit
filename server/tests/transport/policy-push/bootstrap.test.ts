@@ -92,7 +92,7 @@ describe("createPolicyPushTransport", () => {
   it("assembles a live, audited dispatch when credentials and an SSH transport are present", async () => {
     const userId = createUser(db, { displayName: "Alice", tz: "UTC" }).id;
     const clientId = createClient(db, { hostname: "mint-01", sshUser: "pct-agent" }).id;
-    upsertLink(db, userId, clientId, { linuxUsername: "alice", linuxUid: 1001 });
+    upsertLink(db, userId, clientId, { osUsername: "alice", osUserRef: "1001" });
     createBudget(db, { userId, scope: "overall", window: "daily", secondsAllowed: 7200 });
 
     const ssh = fakeSsh();

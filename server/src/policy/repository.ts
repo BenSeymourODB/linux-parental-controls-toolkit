@@ -71,8 +71,9 @@ export interface ClientUpdate {
 
 /** The link's own attributes (the user/client pair comes from the route). */
 export interface LinkUpsert {
-  linuxUsername: string;
-  linuxUid: number;
+  osUsername: string;
+  /** OS account reference: a uid on Linux, a SID on Windows (#230). */
+  osUserRef: string;
 }
 
 // --- Users -----------------------------------------------------------------
@@ -199,12 +200,23 @@ export function listUserLinks(db: PolicyDb, userId: number): UserOnClientRow[] {
     .all();
 }
 
+/** All links for a client, ascending by user id (inverse of {@link listUserLinks}). */
+export function listClientLinks(db: PolicyDb, clientId: number): UserOnClientRow[] {
+  return db
+    .select()
+    .from(usersOnClients)
+    .where(eq(usersOnClients.clientId, clientId))
+    .orderBy(usersOnClients.userId)
+    .all();
+}
+
 /**
  * Create or replace the link between `userId` and `clientId` (idempotent on the
- * composite key). Throws on the `(client, linux_uid)` uniqueness collision —
- * i.e. another user already mapped to that UID on the same client (see
- * {@link isUniqueViolation}). The caller is responsible for confirming the user
- * and client exist first (FK violations otherwise surface as opaque errors).
+ * composite key). Throws on the `(client, os_user_ref)` uniqueness collision —
+ * i.e. another user already mapped to that OS account reference on the same
+ * client (see {@link isUniqueViolation}). The caller is responsible for
+ * confirming the user and client exist first (FK violations otherwise surface
+ * as opaque errors).
  */
 export function upsertLink(
   db: PolicyDb,
@@ -214,10 +226,10 @@ export function upsertLink(
 ): UserOnClientRow {
   return db
     .insert(usersOnClients)
-    .values({ userId, clientId, linuxUsername: input.linuxUsername, linuxUid: input.linuxUid })
+    .values({ userId, clientId, osUsername: input.osUsername, osUserRef: input.osUserRef })
     .onConflictDoUpdate({
       target: [usersOnClients.userId, usersOnClients.clientId],
-      set: { linuxUsername: input.linuxUsername, linuxUid: input.linuxUid },
+      set: { osUsername: input.osUsername, osUserRef: input.osUserRef },
     })
     .returning()
     .get();

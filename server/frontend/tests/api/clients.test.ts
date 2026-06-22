@@ -93,7 +93,7 @@ describe("clients API", () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(201, minted));
 
     const request = {
-      supervisedUsers: [{ userId: 1, linuxUsername: "chloe" }],
+      supervisedUsers: [{ userId: 1, osUsername: "chloe" }],
       ttlSeconds: 3600,
       hostname: "chloe-laptop",
     };
