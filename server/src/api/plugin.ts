@@ -17,7 +17,11 @@ import { registerClientEnrolmentRoutes, registerClientHealthRoutes } from "./cli
 import { registerDnsRoutes } from "./dns/index.js";
 import { registerIntegrationRoutes } from "./integrations/index.js";
 import { registerMetaRoute } from "./meta.js";
-import { registerEffectiveRoutes, registerPolicyRoutes } from "./policy/index.js";
+import {
+  registerEffectiveRoutes,
+  registerPolicyRoutes,
+  registerScheduleOrderRoutes,
+} from "./policy/index.js";
 import { registerSystemRoutes } from "./system/index.js";
 import { installApiConventions } from "./validation.js";
 
@@ -56,6 +60,10 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (scope, opt
   // Effective-policy preview (#143): GET /users/:userId/effective. Needs
   // `settings` for the server-default timezone of users with no `tz`.
   registerEffectiveRoutes(scope, opts.settings);
+  // Schedule drag-to-reorder editor support (#63): GET/PUT
+  // /users/:userId/schedules/order. Needs `settings` for the server-default
+  // timezone used to resolve which rule is in effect "right now".
+  registerScheduleOrderRoutes(scope, opts.settings);
   // Client enrolment (#77): admin-minted token + the install script's enrol
   // exchange. `settings` carries the SSH-public-key path the enrol response returns.
   registerClientEnrolmentRoutes(scope, opts.settings);

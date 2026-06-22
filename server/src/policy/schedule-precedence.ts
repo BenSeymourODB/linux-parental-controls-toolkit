@@ -226,3 +226,36 @@ export function findShadowedRules(rules: readonly ScheduleRule[]): ShadowFinding
   }
   return findings;
 }
+
+/**
+ * The ids of the rules in effect **right now** — the input to the editor's "in
+ * effect now" badge. For each distinct target the rules address, the winner is
+ * the first active rule (by {@link byOrdinal}) among the rules that *cover* that
+ * target, using the same coverage relation as {@link findShadowedRules}: an
+ * `overall` rule covers every target, and an identical `target_kind`+`target_id`
+ * covers itself. Resolving coverage the same way is what keeps the two views
+ * consistent — a rule a broader rule shadows can never appear here, because that
+ * broader rule wins for its target too. Group membership is **not** resolved
+ * (see {@link findShadowedRules}).
+ *
+ * `isActive` decides whether a rule's window is active at the caller's instant
+ * (see {@link RuleActivePredicate}); a target whose covering rules are all
+ * inactive contributes no id. Each id appears at most once.
+ */
+export function effectiveRuleIds(
+  rules: readonly ScheduleRule[],
+  isActive: RuleActivePredicate,
+): number[] {
+  const ordered = byOrdinal(rules);
+  const winners = new Set<number>();
+  const seenTargets = new Set<string>();
+  for (const rule of ordered) {
+    const key = `${rule.targetKind}:${rule.targetId ?? "overall"}`;
+    if (seenTargets.has(key)) continue;
+    seenTargets.add(key);
+    const covering = ordered.filter((candidate) => targetSupersetOf(candidate, rule));
+    const winner = resolveEffectiveRule(covering, isActive);
+    if (winner !== undefined) winners.add(winner.id);
+  }
+  return [...winners];
+}

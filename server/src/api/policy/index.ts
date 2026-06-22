@@ -4,6 +4,7 @@
  * top-level `api/` barrel so the contract is imported from one place.
  */
 export { registerPolicyRoutes } from "./routes.js";
+export { registerScheduleOrderRoutes } from "./schedule-order.js";
 export {
   registerEffectiveRoutes,
   activeRuleResponseSchema,
@@ -72,6 +73,13 @@ export {
   type ScheduleResponse,
   type CreateScheduleRequest,
   type UpdateScheduleRequest,
+  // Schedule ordering / drag-reorder editor (#63)
+  reorderSchedulesSchema,
+  shadowFindingSchema,
+  scheduleOrderViewSchema,
+  type ReorderSchedulesRequest,
+  type ShadowFindingDto,
+  type ScheduleOrderView,
   // Exceptions (#148)
   exceptionResponseSchema,
   createExceptionSchema,
