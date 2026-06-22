@@ -53,3 +53,5 @@ export {
   overrideToResolved,
   resolveRetention,
 } from "./retention.js";
+
+export { type WeeklyWindowsInput, resolveWeeklyAllowedWindows } from "./weekly-windows.js";

@@ -15,7 +15,23 @@ export {
   AdGuardAuthError,
   AdGuardParseError,
   AdGuardScopeError,
+  AdGuardConfigError,
 } from "./errors.js";
+export {
+  resolveAdGuardAuth,
+  type ReadSecretFile,
+  type ResolveAdGuardAuthDeps,
+  type ExternalAdGuardSettings,
+} from "./secrets.js";
+export {
+  AdGuardService,
+  createAdGuardService,
+  type AdGuardServiceDeps,
+  type DnsHealth,
+  type DnsMode,
+  type DnsStatus,
+  type PreflightLogger,
+} from "./service.js";
 export {
   adGuardClientSchema,
   adGuardClientsResponseSchema,

@@ -210,6 +210,12 @@ expiry, lock + grant-unlock on overall-screen-time expiry.
   that haven't updated yet. Cheap in the handshake now, impossible to
   retrofit onto already-deployed clients (pulled forward from Phase 14;
   [#165](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/165)).
+  The contract — two integer version axes (`apiVersion` + a new
+  `eventProtocol`), the N-1 window, the `hello`/`accept`/`refuse`
+  handshake, capability advertisement, and `update_required` semantics —
+  is decided in
+  [`docs/adr/0007-event-stream-version-compatibility.md`](adr/0007-event-stream-version-compatibility.md);
+  this phase implements it.
 
 ## Phase 8c — Lockout / grant-unlock flow
 
@@ -267,7 +273,9 @@ so chore/calendar completions can grant screen-time rewards.
 
 ## Phase 11 — Hardening and polish
 
-- Reverse-proxy + TLS instructions for non-LAN deployments.
+- Reverse-proxy + TLS instructions for non-LAN deployments
+  ([`reverse-proxy-tls.md`](reverse-proxy-tls.md);
+  [#119](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/119)).
 - Multi-admin / OIDC option. This is the first step beyond the
   single-admin Argon2 model of Phase 2; evaluate a managed TypeScript
   auth library (e.g. [Better-auth](https://www.better-auth.com/),

@@ -34,6 +34,16 @@ export interface ClientHealthRoutesDeps {
    * state is still real).
    */
   prober?: ClientProber;
+  /**
+   * Max clients probed concurrently in the list walk (#198). Defaults applied
+   * by {@link listClientHealth}. Inert until `prober` is wired (#39).
+   */
+  probeConcurrency?: number;
+  /**
+   * Per-list probe deadline in ms (#198); `0` disables. Defaults applied by
+   * {@link listClientHealth}. Inert until `prober` is wired (#39).
+   */
+  probeDeadlineMs?: number;
 }
 
 /**
@@ -50,7 +60,11 @@ export function registerClientHealthRoutes(
   typed.get(
     "/clients/health",
     guard,
-    async (): Promise<ClientHealthResponse[]> => listClientHealth(scope.db, deps.prober),
+    async (): Promise<ClientHealthResponse[]> =>
+      listClientHealth(scope.db, deps.prober, {
+        concurrency: deps.probeConcurrency,
+        deadlineMs: deps.probeDeadlineMs,
+      }),
   );
 
   typed.get(

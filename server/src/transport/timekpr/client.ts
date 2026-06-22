@@ -2,7 +2,7 @@
  * `TimekprClient` — the typed Timekpr-nExT control surface for one supervised
  * user on one enrolled client.
  *
- * It binds an SSH {@link SshTarget} and a `linux_username` to the pure argv
+ * It binds an SSH {@link SshTarget} and an OS `username` to the pure argv
  * builders in {@link ./commands.ts}, runs each command over the Phase-4 SSH
  * facade ({@link ../ssh/facade.ts}) as a **subprocess**, and confirms reads by
  * zod-parsing stdout. Setters use the facade's `execChecked` (a non-zero

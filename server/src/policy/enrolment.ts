@@ -18,10 +18,10 @@ import type { ClientRow, UserOnClientRow } from "./repository.js";
 /** A persisted {@link enrolmentTokens} row. */
 export type EnrolmentTokenRow = typeof enrolmentTokens.$inferSelect;
 
-/** The policy-user ↔ Linux-account mapping the admin binds at mint time. */
+/** The policy-user ↔ OS-account mapping the admin binds at mint time. */
 export interface SupervisedUserMapping {
   userId: number;
-  linuxUsername: string;
+  osUsername: string;
 }
 
 /** Fields accepted when minting an {@link enrolmentTokens} row. */
@@ -33,11 +33,14 @@ export interface EnrolmentTokenCreate {
   expiresAt: Date;
 }
 
-/** One supervised-user link to create at enrol time (uid supplied by the client). */
+/**
+ * One supervised-user link to create at enrol time (the OS account reference is
+ * supplied by the client — a uid on Linux, a SID on Windows, #230).
+ */
 export interface EnrolLink {
   userId: number;
-  linuxUsername: string;
-  linuxUid: number;
+  osUsername: string;
+  osUserRef: string;
 }
 
 /** Inputs to the {@link consumeTokenAndEnrol} transaction. */
@@ -91,8 +94,8 @@ export function findEnrolmentTokenByHash(
  * Redeem a token in a single transaction: create the {@link clients} row (with
  * its bearer-token hash), insert the {@link usersOnClients} links, and mark the
  * token consumed (recording which client it created). Any failure — a duplicate
- * hostname, a duplicate `(client, linux_uid)`, or a vanished user FK — rolls the
- * whole thing back, so a failed enrolment never half-creates a client or burns
+ * hostname, a duplicate `(client, os_user_ref)`, or a vanished user FK — rolls
+ * the whole thing back, so a failed enrolment never half-creates a client or burns
  * the token. The caller is responsible for having validated the token's
  * state (unexpired/unconsumed) and that each `userId` still exists first.
  *
@@ -135,8 +138,8 @@ export function consumeTokenAndEnrol(
         .values({
           userId: link.userId,
           clientId: client.id,
-          linuxUsername: link.linuxUsername,
-          linuxUid: link.linuxUid,
+          osUsername: link.osUsername,
+          osUserRef: link.osUserRef,
         })
         .returning()
         .get(),

@@ -93,6 +93,15 @@ export {
   type ExceptionResponse,
   type CreateExceptionRequest,
   type UpdateExceptionRequest,
+  // Group-targeted schedules + exceptions (#182)
+  createGroupScheduleSchema,
+  groupScheduleResponseSchema,
+  type CreateGroupScheduleRequest,
+  type GroupScheduleResponse,
+  createGroupExceptionSchema,
+  groupExceptionResponseSchema,
+  type CreateGroupExceptionRequest,
+  type GroupExceptionResponse,
 } from "./policy/index.js";
 
 // Client-enrolment DTOs (#77): the admin token-mint + install-script enrol
@@ -146,6 +155,23 @@ export {
   type RetentionConfigResponse,
 } from "./retention/index.js";
 
+// DNS-status DTO (#95): the read-only contract surfacing the active AdGuard mode
+// and its health. Schema lives in `./dns/dtos.ts` next to the route.
+export {
+  dnsModeSchema,
+  dnsHealthSchema,
+  dnsStatusResponseSchema,
+  type DnsStatusResponse,
+} from "./dns/index.js";
+
+// System-status DTO (#39): the read-only contract surfacing first-run subsystem
+// health (the Ansible venv bootstrap). Schema lives in `./system/dtos.ts`.
+export {
+  ansibleVenvStateSchema,
+  ansibleVenvStatusResponseSchema,
+  type AnsibleVenvStatusResponse,
+} from "./system/index.js";
+
 // Auth DTOs (#52). Re-exported here so the frontend imports the auth contract
 // from the same `/api` surface as every other DTO; the schemas themselves live
 // in `../auth/dtos.ts` next to the routes that use them.
@@ -155,3 +181,20 @@ export {
   type LoginRequest,
   type SessionResponse,
 } from "../auth/dtos.js";
+
+// Event-stream taxonomy (#100): the `/api/events/stream` wire contract — the
+// five server-pushed events and the frame envelope. Re-exported here so the
+// client bridge (#101) and any consumer share one definition; the schemas live
+// in `../events/taxonomy.ts` next to the stream route.
+export {
+  serverEventSchema,
+  eventFrameSchema,
+  grantAppliedSchema,
+  policyChangedSchema,
+  enforceForceCloseSchema,
+  enforceSessionLockSchema,
+  lockoutClearedSchema,
+  type ServerEvent,
+  type ServerEventType,
+  type EventFrame,
+} from "../events/index.js";
