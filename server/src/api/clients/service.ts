@@ -32,7 +32,7 @@ export interface EnrolServiceResult {
   sshUser: string;
   bearerToken: string;
   sshPublicKey: string | null;
-  supervisedUsers: { userId: number; linuxUsername: string; linuxUid: number }[];
+  supervisedUsers: { userId: number; osUsername: string; osUserRef: string }[];
   /** The agent version recorded at enrolment, or `null` if none reported (#164). */
   agentVersion: string | null;
   /** The component versions recorded at enrolment, or `null` if none (#164). */
@@ -142,14 +142,14 @@ export function enrolClient(
     throw new ApiError(401, "enrolment_token_expired", "This enrolment token has expired");
   }
 
-  // Join the minted mapping (userId ↔ linuxUsername) with the request's
-  // (linuxUsername ↔ linuxUid) on linuxUsername; the sets must match exactly so
+  // Join the minted mapping (userId ↔ osUsername) with the request's
+  // (osUsername ↔ osUserRef) on osUsername; the sets must match exactly so
   // the client can neither drop a bound user nor smuggle in an extra one.
-  const requestByName = new Map(input.supervisedUsers.map((entry) => [entry.linuxUsername, entry]));
+  const requestByName = new Map(input.supervisedUsers.map((entry) => [entry.osUsername, entry]));
   const minted = tokenRow.supervisedUsers;
   const mismatch =
     minted.length !== input.supervisedUsers.length ||
-    minted.some((entry) => !requestByName.has(entry.linuxUsername));
+    minted.some((entry) => !requestByName.has(entry.osUsername));
   if (mismatch) {
     throw new ApiError(
       400,
@@ -159,7 +159,7 @@ export function enrolClient(
   }
 
   const links: enrolmentRepo.EnrolLink[] = minted.map((entry) => {
-    const requested = requestByName.get(entry.linuxUsername);
+    const requested = requestByName.get(entry.osUsername);
     if (requested === undefined) {
       // Unreachable given the exact-match check above, but keeps the map access
       // total without a non-null assertion.
@@ -170,8 +170,8 @@ export function enrolClient(
     }
     return {
       userId: entry.userId,
-      linuxUsername: entry.linuxUsername,
-      linuxUid: requested.linuxUid,
+      osUsername: entry.osUsername,
+      osUserRef: requested.osUserRef,
     };
   });
 
@@ -202,7 +202,7 @@ export function enrolClient(
       throw new ApiError(
         409,
         "conflict",
-        `Client "${input.hostname}" is already enrolled, or a Linux UID is duplicated for it`,
+        `Client "${input.hostname}" is already enrolled, or an OS account reference is duplicated for it`,
       );
     }
     throw err;
@@ -220,8 +220,8 @@ export function enrolClient(
     sshPublicKey: readSshPublicKey(options),
     supervisedUsers: result.links.map((link) => ({
       userId: link.userId,
-      linuxUsername: link.linuxUsername,
-      linuxUid: link.linuxUid,
+      osUsername: link.osUsername,
+      osUserRef: link.osUserRef,
     })),
     agentVersion: result.client.agentVersion,
     componentVersions: result.client.componentVersions,

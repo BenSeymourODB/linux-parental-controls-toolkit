@@ -1,0 +1,79 @@
+name: Migration auto-fix
+
+# Opt-in CI auto-fix for drizzle-kit snapshot **parent-collisions** on
+# `claude/**` PRs (issue #210, Slice 2 of #199). When a branch merges `main`
+# in, its branch-only migration's snapshot can claim the same parent as a
+# migration that landed on `main`, which the `migrations` round-trip
+# (integration.yml) surfaces as
+#   "… pointing to a parent snapshot: … which is a collision".
+# This workflow re-runs the Slice-1 `npm run db:rebase` helper to regenerate the
+# migration onto the merged base and pushes the fix back — or, when db:rebase
+# refuses (a hand-edited / multi-migration branch it will not touch without
+# --force), comments for human attention instead. All the decision logic lives
+# in (and is unit-tested as) server/scripts/ci-autofix-migrations.ts; this YAML
+# only wires the real seams.
+#
+# Trade-off (deliberate, see PR / docs/testing.md): the push uses the default
+# GITHUB_TOKEN, whose pushes do NOT re-trigger workflows — so the `migrations`
+# check does not auto re-run after the fix. The auto-fix comment tells the human
+# to re-run it. Adopting a write-scoped app/PAT to force the re-run is a tracked
+# follow-up, not silently bundled here.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+# One auto-fix per PR ref; a rapid re-push cancels the superseded run.
+concurrency:
+  group: migration-autofix-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  autofix:
+    name: Auto-rebase migration on snapshot collision
+    runs-on: ubuntu-22.04
+    # Only same-repo `claude/**` branches: the default GITHUB_TOKEN cannot push
+    # to a fork, and human branches keep the manual `npm run db:rebase` flow.
+    if: >-
+      startsWith(github.head_ref, 'claude/') &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: write # push the regenerated migration back to the PR branch
+      pull-requests: write # post the audit-trail / call-for-attention comment
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Check out the PR head branch (not the merge ref) with full history so
+          # db:rebase can diff origin/main...HEAD and we can push back.
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - name: Fetch the base branch (db:rebase diffs against origin/main)
+        run: git fetch origin main
+
+      - name: Configure the bot git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Install dependencies
+        run: |
+          if [ -f server/package.json ]; then
+            cd server && npm ci
+          else
+            echo "server/package.json not yet present — skipping"
+          fi
+
+      - name: Auto-fix a migration snapshot collision (if any)
+        if: hashFiles('server/package.json') != ''
+        run: cd server && npm run db:autofix-ci
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
