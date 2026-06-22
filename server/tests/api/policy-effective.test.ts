@@ -11,7 +11,14 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { SESSION_COOKIE } from "../../src/auth/session.js";
 import { loadSettings } from "../../src/config.js";
-import { budgets, grants, schedules } from "../../src/policy/schema.js";
+import {
+  budgets,
+  grants,
+  groupSchedules,
+  schedules,
+  userGroupMemberships,
+  userGroups,
+} from "../../src/policy/schema.js";
 import { buildTestApp, type TestApp } from "../helpers/app.js";
 
 function configuredSettings() {
@@ -121,7 +128,12 @@ describe("GET /api/users/:userId/effective", () => {
         { userId, scope: "activity", targetId: 5, window: "daily", secondsAllowed: 3600 },
       ])
       .run();
-    // An active overall grant (+30 min) expiring well after the queried day.
+    // An active overall grant (+30 min): granted before, and expiring well
+    // after, the queried day so it overlaps it deterministically. `grantedAt`
+    // is set explicitly rather than defaulting to insertion time, which would
+    // make the test a time-bomb — once the wall clock passes the hardcoded
+    // 2026-06-20 query date, a now-defaulted grant falls *after* the queried
+    // day and `grantOverlapsDay` (correctly) drops it.
     harness.db
       .insert(grants)
       .values({
@@ -129,6 +141,7 @@ describe("GET /api/users/:userId/effective", () => {
         scope: "overall",
         targetId: null,
         secondsGranted: 1800,
+        grantedAt: new Date("2026-06-01T00:00:00Z"),
         expiresAt: new Date("2026-12-31T00:00:00Z"),
         source: "admin",
       })
@@ -159,6 +172,47 @@ describe("GET /api/users/:userId/effective", () => {
         },
       ],
     });
+  });
+
+  it("inherits a group schedule, with the user's own rule taking precedence (#182)", async () => {
+    const userId = await createUser("Alice"); // tz null → UTC
+    const group = harness.db
+      .insert(userGroups)
+      .values({ name: "Kids" })
+      .returning({ id: userGroups.id })
+      .get();
+    if (group === undefined) throw new Error("group insert returned no row");
+    harness.db.insert(userGroupMemberships).values({ userId, groupId: group.id }).run();
+
+    // Group denies all day; with only the inherited rule, the day is fully denied.
+    harness.db
+      .insert(groupSchedules)
+      .values({ userGroupId: group.id, targetKind: "overall", targetId: null, action: "deny" })
+      .run();
+
+    const inheritedOnly = await auth({
+      method: "GET",
+      url: `/api/users/${userId}/effective?date=2026-06-20`,
+    });
+    expect(inheritedOnly.json().allowedWindows).toEqual([]);
+    expect(inheritedOnly.json().activeRules).toHaveLength(1);
+
+    // The user's own always-on allow wins over the inherited group deny.
+    harness.db
+      .insert(schedules)
+      .values({ userId, targetKind: "overall", targetId: null, action: "allow", ordinal: 0 })
+      .run();
+
+    const overridden = await auth({
+      method: "GET",
+      url: `/api/users/${userId}/effective?date=2026-06-20`,
+    });
+    expect(overridden.json().allowedWindows).toEqual([{ start: 0, end: 1440 }]);
+    // Both rules surface in precedence order: the user's own allow first.
+    expect(overridden.json().activeRules.map((r: { action: string }) => r.action)).toEqual([
+      "allow",
+      "deny",
+    ]);
   });
 
   it("defaults to today in the user's effective timezone when no date is given", async () => {
