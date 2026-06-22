@@ -15,6 +15,7 @@ import type { PolicyPushStub } from "../transport/stub.js";
 import { registerAuditRoutes } from "./audit/index.js";
 import { registerClientEnrolmentRoutes, registerClientHealthRoutes } from "./clients/index.js";
 import { registerDnsRoutes } from "./dns/index.js";
+import { registerIntegrationRoutes } from "./integrations/index.js";
 import { registerMetaRoute } from "./meta.js";
 import { registerEffectiveRoutes, registerPolicyRoutes } from "./policy/index.js";
 import { installApiConventions } from "./validation.js";
@@ -74,6 +75,10 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (scope, opt
   registerAuditRoutes(scope);
   // DNS status (#95): admin-only read of the active AdGuard mode + health.
   registerDnsRoutes(scope);
+  // Integration tokens (#114): admin-only mint/list/revoke of per-integration
+  // bearer tokens, and the `scope.requireIntegrationToken` guard the inbound
+  // `/api/integrations/*` endpoints (#113) authenticate with.
+  registerIntegrationRoutes(scope);
 };
 
 /** Mount the JSON API under `/api` on the given app. */
