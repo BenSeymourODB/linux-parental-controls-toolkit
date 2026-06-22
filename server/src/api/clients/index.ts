@@ -3,7 +3,7 @@
  * inferred types the frontend and install script consume. Re-exported from the
  * top-level `api/` barrel so the whole `/api` contract imports from one place.
  */
-export { registerClientEnrolmentRoutes, parseBearer } from "./routes.js";
+export { registerClientEnrolmentRoutes } from "./routes.js";
 export {
   enrolClientSchema,
   enrolResponseSchema,

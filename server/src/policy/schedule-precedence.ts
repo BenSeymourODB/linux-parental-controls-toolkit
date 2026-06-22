@@ -67,7 +67,7 @@ export type RuleActivePredicate = (rule: ScheduleRule) => boolean;
  * a stable, reproducible precedence. Returns a new array; the input is not
  * mutated.
  */
-export function byOrdinal(rules: readonly ScheduleRule[]): ScheduleRule[] {
+export function byOrdinal<T extends ScheduleRule>(rules: readonly T[]): T[] {
   return [...rules].sort((a, b) => a.ordinal - b.ordinal || a.id - b.id);
 }
 
@@ -77,10 +77,10 @@ export function byOrdinal(rules: readonly ScheduleRule[]): ScheduleRule[] {
  * caller decides what "no rule applies" means for its surface (typically a
  * baseline allow), rather than this module baking in a default action.
  */
-export function resolveEffectiveRule(
-  rules: readonly ScheduleRule[],
+export function resolveEffectiveRule<T extends ScheduleRule>(
+  rules: readonly T[],
   isActive: RuleActivePredicate,
-): ScheduleRule | undefined {
+): T | undefined {
   return byOrdinal(rules).find((rule) => isActive(rule));
 }
 

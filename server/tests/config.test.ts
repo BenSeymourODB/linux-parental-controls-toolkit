@@ -16,15 +16,33 @@ describe("loadSettings", () => {
     expect(settings.logLevel).toBe("info");
     expect(settings.secretKey).toBeUndefined();
     expect(settings.ansibleDir).toBe("/data/ansible");
+    expect(settings.ansibleCoreVersion).toBe("2.18.1");
+    expect(settings.ansiblePlaybookSourceDir).toBe("/app/ansible/playbooks");
     expect(settings.sshPublicKeyPath).toBe("/data/secrets/ssh/id_ed25519.pub");
     expect(settings.sshPrivateKeyPath).toBe("/data/secrets/ssh/id_ed25519");
     expect(settings.adguard).toEqual({ mode: "disabled" });
     expect(settings.telemetry).toEqual({ pullCron: "*/5 * * * *", pullConcurrency: 4 });
     expect(settings.reapply).toEqual({ cron: "0 * * * *", playbooks: [] });
+    expect(settings.clientHealth).toEqual({ probeConcurrency: 4, probeDeadlineMs: 15000 });
   });
 
   it("honours an explicit PCT_ANSIBLE_DIR", () => {
     expect(loadSettings({ PCT_ANSIBLE_DIR: "/srv/ansible" }).ansibleDir).toBe("/srv/ansible");
+  });
+
+  it("honours explicit Ansible venv bootstrap settings", () => {
+    const settings = loadSettings({
+      PCT_ANSIBLE_CORE_VERSION: "2.17.6",
+      PCT_ANSIBLE_PLAYBOOK_SRC: "/opt/playbooks",
+    });
+    expect(settings.ansibleCoreVersion).toBe("2.17.6");
+    expect(settings.ansiblePlaybookSourceDir).toBe("/opt/playbooks");
+  });
+
+  it("rejects a non-version PCT_ANSIBLE_CORE_VERSION", () => {
+    expect(() => loadSettings({ PCT_ANSIBLE_CORE_VERSION: "latest; rm -rf /" })).toThrow(
+      /bare version/,
+    );
   });
 
   it("honours explicit SSH key paths", () => {
@@ -223,6 +241,41 @@ describe("loadSettings", () => {
       expect(() => loadSettings({ PCT_TELEMETRY_PULL_CONCURRENCY: "0" })).toThrow(SettingsError);
       expect(() => loadSettings({ PCT_TELEMETRY_PULL_CONCURRENCY: "-3" })).toThrow(SettingsError);
       expect(() => loadSettings({ PCT_TELEMETRY_PULL_CONCURRENCY: "many" })).toThrow(SettingsError);
+    });
+  });
+
+  describe("PCT_CLIENT_HEALTH_*", () => {
+    it("honours explicit probe concurrency and deadline", () => {
+      const settings = loadSettings({
+        PCT_CLIENT_HEALTH_PROBE_CONCURRENCY: "8",
+        PCT_CLIENT_HEALTH_PROBE_DEADLINE_MS: "5000",
+      });
+      expect(settings.clientHealth).toEqual({ probeConcurrency: 8, probeDeadlineMs: 5000 });
+    });
+
+    it("accepts a deadline of 0 to disable the per-list deadline", () => {
+      expect(loadSettings({ PCT_CLIENT_HEALTH_PROBE_DEADLINE_MS: "0" }).clientHealth).toEqual({
+        probeConcurrency: 4,
+        probeDeadlineMs: 0,
+      });
+    });
+
+    it("rejects a non-positive or non-numeric concurrency", () => {
+      expect(() => loadSettings({ PCT_CLIENT_HEALTH_PROBE_CONCURRENCY: "0" })).toThrow(
+        SettingsError,
+      );
+      expect(() => loadSettings({ PCT_CLIENT_HEALTH_PROBE_CONCURRENCY: "-1" })).toThrow(
+        SettingsError,
+      );
+      expect(() => loadSettings({ PCT_CLIENT_HEALTH_PROBE_CONCURRENCY: "lots" })).toThrow(
+        SettingsError,
+      );
+    });
+
+    it("rejects a negative deadline", () => {
+      expect(() => loadSettings({ PCT_CLIENT_HEALTH_PROBE_DEADLINE_MS: "-1" })).toThrow(
+        SettingsError,
+      );
     });
   });
 
