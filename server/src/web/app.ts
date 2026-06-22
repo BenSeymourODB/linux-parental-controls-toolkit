@@ -101,7 +101,8 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   // Open (and migrate) the policy store unless a handle was injected. buildApp
   // owns only the handle it creates: that one is closed on shutdown; an
   // injected handle's lifecycle belongs to its provider (no double-close).
-  const db = options.db ?? createDb(settings);
+  // `app.log` carries the migrate-on-boot pre-migration backup outcome (#166).
+  const db = options.db ?? createDb(settings, { log: app.log });
   const ownsDb = options.db === undefined;
   app.decorate("db", db);
 
