@@ -17,7 +17,7 @@
  */
 import { hashToken } from "../auth/secret-token.js";
 import { ApiError } from "../api/errors.js";
-import { parseBearer } from "../api/clients/routes.js";
+import { parseBearer } from "../auth/bearer.js";
 import type { PolicyDb } from "../policy/db.js";
 import { findClientByBearerTokenHash, type ClientRow } from "../policy/repository.js";
 

@@ -15,6 +15,7 @@ import type { PolicyPushStub } from "../transport/stub.js";
 import { registerAuditRoutes } from "./audit/index.js";
 import { registerClientEnrolmentRoutes, registerClientHealthRoutes } from "./clients/index.js";
 import { registerDnsRoutes } from "./dns/index.js";
+import { registerIntegrationRoutes } from "./integrations/index.js";
 import { registerMetaRoute } from "./meta.js";
 import { registerEffectiveRoutes, registerPolicyRoutes } from "./policy/index.js";
 import { registerSystemRoutes } from "./system/index.js";
@@ -78,6 +79,10 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (scope, opt
   // System status (#39): admin-only read of first-run subsystem health (the
   // Ansible venv bootstrap, so the admin sees when/why Ansible is unavailable).
   registerSystemRoutes(scope);
+  // Integration tokens (#114): admin-only mint/list/revoke of per-integration
+  // bearer tokens, and the `scope.requireIntegrationToken` guard the inbound
+  // `/api/integrations/*` endpoints (#113) authenticate with.
+  registerIntegrationRoutes(scope);
 };
 
 /** Mount the JSON API under `/api` on the given app. */
