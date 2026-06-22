@@ -6,10 +6,11 @@
   calls go through the typed `$lib/api/links` wrappers; errors are surfaced
   inline.
 
-  A link maps a policy `User` to a Linux account (`linuxUsername` + `linuxUid`)
+  A link maps a policy `User` to an OS account (`osUsername` + `osUserRef`)
   on a specific `Client` — the mapping enforcement needs to drive `timekpra`
-  and read ActivityWatch for the right OS account. The `PUT` is idempotent, so
-  the same form both creates and updates a link.
+  and read ActivityWatch for the right OS account. `osUserRef` is the OS-neutral
+  account reference (#230): a uid on Linux, a SID on Windows. The `PUT` is
+  idempotent, so the same form both creates and updates a link.
 -->
 <script lang="ts">
   import { onMount } from "svelte";
@@ -31,8 +32,8 @@
 
   // Create/update form.
   let formClientId = $state<number | null>(null);
-  let formUsername = $state("");
-  let formUid = $state("");
+  let formOsUsername = $state("");
+  let formOsUserRef = $state("");
   let submitting = $state(false);
 
   onMount(load);
@@ -58,10 +59,15 @@
     clients.filter((c) => !links.some((l) => l.clientId === c.id)),
   );
 
-  /** Parse the UID field to a non-negative integer, or `null` if invalid. */
-  function parseUid(value: string): number | null {
-    const uid = Number(value);
-    return Number.isInteger(uid) && uid >= 0 ? uid : null;
+  /**
+   * Whether the OS-user-ref field is a valid account reference (#230): a
+   * non-empty token matching the same `[A-Za-z0-9._:-]` charset the `/api`
+   * `upsertLink` DTO enforces (a uid on Linux, a SID on Windows). Mirrors the
+   * server rule so the form gives early feedback; the server stays the
+   * authority.
+   */
+  function osUserRefValid(value: string): boolean {
+    return /^[A-Za-z0-9._:-]+$/.test(value.trim());
   }
 
   async function onSelectUser(): Promise<void> {
@@ -84,29 +90,28 @@
 
   function resetForm(): void {
     formClientId = null;
-    formUsername = "";
-    formUid = "";
+    formOsUsername = "";
+    formOsUserRef = "";
   }
 
   let submitDisabled = $derived(
     submitting ||
       formClientId === null ||
-      formUsername.trim() === "" ||
-      parseUid(formUid) === null,
+      formOsUsername.trim() === "" ||
+      !osUserRefValid(formOsUserRef),
   );
 
   async function handleSubmit(event: SubmitEvent): Promise<void> {
     event.preventDefault();
-    const uid = parseUid(formUid);
-    if (selectedUserId === null || formClientId === null || uid === null) {
+    if (selectedUserId === null || formClientId === null || !osUserRefValid(formOsUserRef)) {
       return;
     }
     submitting = true;
     error = null;
     try {
       const saved = await upsertLink(selectedUserId, formClientId, {
-        linuxUsername: formUsername.trim(),
-        linuxUid: uid,
+        osUsername: formOsUsername.trim(),
+        osUserRef: formOsUserRef.trim(),
       });
       // `PUT` is upsert: replace an existing link to this client, else append.
       const existing = links.some((l) => l.clientId === saved.clientId);
@@ -124,8 +129,8 @@
   /** Load a link's values into the form so the upsert updates it. */
   function startEdit(link: LinkResponse): void {
     formClientId = link.clientId;
-    formUsername = link.linuxUsername;
-    formUid = String(link.linuxUid);
+    formOsUsername = link.osUsername;
+    formOsUserRef = link.osUserRef;
     error = null;
   }
 
@@ -158,8 +163,9 @@
   <header class="head">
     <h1>User ↔ Client links</h1>
     <p class="hint">
-      Map a supervised user to their Linux account (username + UID) on each
-      client. Enforcement uses this mapping to target the right OS account.
+      Map a supervised user to their OS account (username + account reference —
+      a UID on Linux) on each client. Enforcement uses this mapping to target
+      the right OS account.
     </p>
   </header>
 
@@ -201,21 +207,20 @@
           </select>
           <input
             type="text"
-            placeholder="Linux username"
-            bind:value={formUsername}
+            placeholder="OS username"
+            bind:value={formOsUsername}
             disabled={submitting}
             required
-            aria-label="Linux username"
+            aria-label="OS username"
           />
           <input
-            type="number"
-            min="0"
-            step="1"
+            type="text"
+            inputmode="numeric"
             placeholder="UID"
-            bind:value={formUid}
+            bind:value={formOsUserRef}
             disabled={submitting}
             required
-            aria-label="Linux UID"
+            aria-label="OS user reference (UID on Linux)"
           />
           <button type="submit" disabled={submitDisabled}>
             {submitting ? "Saving…" : "Save link"}
@@ -231,8 +236,8 @@
             <thead>
               <tr>
                 <th>Client</th>
-                <th>Linux username</th>
-                <th>UID</th>
+                <th>OS username</th>
+                <th>User ref</th>
                 <th class="actions-col">Actions</th>
               </tr>
             </thead>
@@ -240,8 +245,8 @@
               {#each links as link (link.clientId)}
                 <tr>
                   <td>{clientName(link.clientId)}</td>
-                  <td><code>{link.linuxUsername}</code></td>
-                  <td class="muted">{link.linuxUid}</td>
+                  <td><code>{link.osUsername}</code></td>
+                  <td class="muted">{link.osUserRef}</td>
                   <td class="actions">
                     <button class="ghost" onclick={() => startEdit(link)}>Edit</button>
                     <button class="danger" onclick={() => handleDelete(link)}>Delete</button>
