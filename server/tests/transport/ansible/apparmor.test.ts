@@ -71,9 +71,9 @@ function seedClient(db: TestDb, hostname = "mint-01.lan", sshUser = "pct-agent")
 }
 
 /** Link a fresh supervised user to a client and return the user id. */
-function linkUser(db: TestDb, clientId: number, name: string, linuxUid: number): number {
+function linkUser(db: TestDb, clientId: number, name: string, osUid: number): number {
   const user = createUser(db, { displayName: name });
-  upsertLink(db, user.id, clientId, { linuxUsername: name.toLowerCase(), linuxUid });
+  upsertLink(db, user.id, clientId, { osUsername: name.toLowerCase(), osUserRef: String(osUid) });
   return user.id;
 }
 
@@ -144,7 +144,7 @@ describe("buildAppArmorPlan", () => {
     expect(plan.denials[0]?.executable).toBe("/usr/bin/steam");
     expect(plan.denials[0]?.profileName).toMatch(/^pct\.usr\.bin\.steam\.[0-9a-f]{8}$/);
     expect(plan.denials[0]?.blockedFor).toEqual([
-      { userId, linuxUid: 1001, linuxUsername: "alice" },
+      { userId, osUsername: "alice", osUserRef: "1001" },
     ]);
   });
 

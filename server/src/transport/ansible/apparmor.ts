@@ -103,8 +103,9 @@ export class AppArmorPlanError extends Error {
 /** A single supervised user a deny is attributed to. */
 export const appArmorBlockedForSchema = z.object({
   userId: z.number().int(),
-  linuxUid: z.number().int(),
-  linuxUsername: z.string().min(1),
+  osUsername: z.string().min(1),
+  /** OS account reference: a uid on Linux, a SID on Windows (#230). */
+  osUserRef: z.string().min(1),
 });
 export type AppArmorBlockedFor = z.infer<typeof appArmorBlockedForSchema>;
 
@@ -210,8 +211,8 @@ export function buildAppArmorPlan(db: PolicyDb, clientId: number): AppArmorPlan 
   for (const link of listClientLinks(db, clientId)) {
     const attribution: AppArmorBlockedFor = {
       userId: link.userId,
-      linuxUid: link.linuxUid,
-      linuxUsername: link.linuxUsername,
+      osUsername: link.osUsername,
+      osUserRef: link.osUserRef,
     };
     for (const rule of listUserAlwaysOnDenies(db, link.userId)) {
       for (const executable of executablesForDeny(db, rule)) {
