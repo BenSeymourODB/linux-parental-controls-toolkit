@@ -92,14 +92,24 @@ idempotently:
    `policy.sqlite` (issue #166) — see "Backup and restore" → "Automatic
    pre-migration snapshot" below — so a regretted upgrade is recoverable; a
    fresh or already-up-to-date database is skipped.
-2. **Ansible bootstrap** — if `/data/ansible/venv` is missing, create it
-   and `pip install ansible-core` (downloaded from PyPI at runtime, not
-   from the image). Sync `playbooks/` from the image. The directory root is
+2. **Ansible bootstrap** — the Node server ensures the venv **in-process on
+   boot** (issue #39), mirroring the in-process migrator and SSH keygen above:
+   if `<PCT_ANSIBLE_DIR>/venv/bin/ansible-playbook` is missing it creates the
+   venv and `pip install ansible-core==<PCT_ANSIBLE_CORE_VERSION>` (downloaded
+   from PyPI at runtime, not bundled in the image), then records the version in
+   a sentinel inside the venv so an image upgrade that bumps the pin reconciles
+   it (see "Upgrade path"). It also syncs `playbooks/` from the image's
+   read-only copy (`PCT_ANSIBLE_PLAYBOOK_SRC`) — a missing source is a logged
+   no-op. `python3`/`pip`/`ansible-playbook` are all driven **as subprocesses**,
+   never linked in-process (`docs/licensing-analysis.md`); the image ships only
+   a stock `python3-venv` for this, no Ansible binary. The directory root is
    `PCT_ANSIBLE_DIR` (default `/data/ansible`); the Phase-6 runner
-   (`transport/ansible`) execs `ansible-playbook` from
-   `<PCT_ANSIBLE_DIR>/venv/bin/` against playbooks in
-   `<PCT_ANSIBLE_DIR>/playbooks/` — always as a subprocess, never linked
-   in-process (`docs/licensing-analysis.md`).
+   (`transport/ansible`) execs `ansible-playbook` from `<PCT_ANSIBLE_DIR>/venv/
+   bin/` against playbooks in `<PCT_ANSIBLE_DIR>/playbooks/`. The bootstrap runs
+   in the background after the HTTP listener is up (a slow `pip install` does not
+   delay startup) and never crashes the process: a network-less first run leaves
+   Ansible disabled with the reason surfaced at `GET /api/system/ansible` for the
+   admin UI.
 3. **AdGuard Home bootstrap** — driven by `PCT_ADGUARD_MODE` (see
    "AdGuard Home deployment modes" below). In `managed` mode, the
    first-time fetch downloads the latest stable release from
@@ -255,7 +265,12 @@ volumes:
 For LAN-only access, exposing port 8000 directly is fine. For external
 access, terminate TLS at a reverse proxy (TrueNAS's built-in or a
 separate Nginx Proxy Manager / Caddy instance) and put the dashboard
-behind authentication.
+behind authentication. See
+[`reverse-proxy-tls.md`](reverse-proxy-tls.md) for a full guide —
+copy-pasteable Caddy / nginx / Traefik configs, how to proxy the
+`/api/events/stream` WebSocket, the connectivity model (the proxy fronts
+the HTTP surface only; SSH to clients stays LAN-side), and the
+application-layer caveats behind a proxy.
 
 The reverse proxy is also where volumetric/DoS protection belongs — the
 dashboard does not rate-limit by request volume. It does apply a small

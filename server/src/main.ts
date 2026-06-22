@@ -59,6 +59,13 @@ async function main(): Promise<void> {
     app.log.error(err);
     process.exit(1);
   }
+
+  // Bootstrap the first-run Ansible venv (#39, Phase-6 step) in the background,
+  // after listen so a slow `pip install ansible-core` never delays the dashboard
+  // becoming reachable. `bootstrap()` never throws — a network-less first run
+  // records `unavailable` and the reason is surfaced at GET /api/system/ansible
+  // (docs/server-deployment.md → "First-run setup") — so a bare `void` is safe.
+  void app.ansibleVenv.bootstrap(app.log);
 }
 
 void main();

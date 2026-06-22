@@ -73,6 +73,8 @@ const EXPECTED_TABLES = [
   "enrolment_tokens",
   "exceptions",
   "grants",
+  "group_exceptions",
+  "group_schedules",
   "integration_tokens",
   "notification_policies",
   "schedules",
@@ -135,6 +137,52 @@ describe("policy migrations", () => {
     expect(exceptionColumns).toContain("effective_from");
     // expires_at remains the effective end — no separate effective_to (ADR 0005 §2).
     expect(exceptionColumns).not.toContain("effective_to");
+
+    sqlite.close();
+  });
+
+  it("materialises the group-targeted schedule/exception tables (#182)", () => {
+    // ADR 0007: group rules live in their own tables (keyed by user_group_id),
+    // mirroring the user-keyed shape rather than relaxing schedules.user_id.
+    const sqlite = new Database(":memory:");
+    const db = drizzle(sqlite);
+
+    migrate(db, { migrationsFolder });
+
+    // group_schedules mirrors schedules but is keyed by user_group_id, not user_id.
+    const groupScheduleColumns = columnNames(sqlite, "group_schedules");
+    expect(groupScheduleColumns).toEqual(
+      expect.arrayContaining([
+        "user_group_id",
+        "target_kind",
+        "target_id",
+        "recurrence_days",
+        "recurrence_start_minute",
+        "recurrence_end_minute",
+        "effective_from",
+        "effective_to",
+        "action",
+        "ordinal",
+      ]),
+    );
+    expect(groupScheduleColumns).not.toContain("user_id");
+
+    // group_exceptions mirrors exceptions, keyed by user_group_id.
+    const groupExceptionColumns = columnNames(sqlite, "group_exceptions");
+    expect(groupExceptionColumns).toEqual(
+      expect.arrayContaining([
+        "user_group_id",
+        "target_kind",
+        "target_id",
+        "action",
+        "reason",
+        "effective_from",
+        "expires_at",
+        "created_at",
+      ]),
+    );
+    expect(groupExceptionColumns).not.toContain("user_id");
+    expect(groupExceptionColumns).not.toContain("effective_to");
 
     sqlite.close();
   });

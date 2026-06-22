@@ -144,6 +144,28 @@ const settingsSchema = z
      */
     ansibleDir: z.string().min(1).default("/data/ansible"),
     /**
+     * Pinned `ansible-core` version installed into the first-run venv
+     * (`PCT_ANSIBLE_CORE_VERSION`). The boot-time bootstrap (#39) runs
+     * `pip install ansible-core==<version>` and records it in a sentinel under
+     * the venv so an image upgrade that bumps this default reconciles the venv
+     * (`docs/server-deployment.md` → "Upgrade path"). A bare version string so
+     * the install is reproducible; validated here so a typo fails fast.
+     */
+    ansibleCoreVersion: z
+      .string()
+      .regex(/^[0-9][0-9A-Za-z.-]*$/, {
+        message: "must be a bare version like 2.18.1",
+      })
+      .default("2.18.1"),
+    /**
+     * Read-only, in-image source directory the first-run bootstrap (#39) syncs
+     * playbooks from into `<ansibleDir>/playbooks/` (`PCT_ANSIBLE_PLAYBOOK_SRC`).
+     * Defaults to the path the image is expected to ship them at. A missing
+     * source is a logged no-op (the venv still bootstraps), so the dashboard
+     * starts cleanly before the playbooks are packaged into the image.
+     */
+    ansiblePlaybookSourceDir: z.string().min(1).default("/app/ansible/playbooks"),
+    /**
      * Path to the dashboard's SSH **public** key (`PCT_SSH_PUBLIC_KEY_PATH`).
      * The client-enrolment response (#77) returns this so the client can
      * authorize the dashboard in `pct-agent`'s `authorized_keys`. The key pair
@@ -243,6 +265,27 @@ const settingsSchema = z
        */
       retain: z.coerce.number().int().positive().default(5),
     }),
+    /**
+     * Phase-3 client health probe (#198): how the `GET /api/clients/health`
+     * list walk bounds its live SSH fan-out. Parsed-and-ready ahead of the
+     * prober wiring (#39) — like the `telemetry`/`reapply` blocks above — so the
+     * page can't take ~N×`readyTimeout` once a fleet of offline hosts is probed.
+     */
+    clientHealth: z.object({
+      /**
+       * Max clients probed concurrently per list pass
+       * (`PCT_CLIENT_HEALTH_PROBE_CONCURRENCY`). Mirrors
+       * `telemetry.pullConcurrency`; defaults to 4.
+       */
+      probeConcurrency: z.coerce.number().int().positive().default(4),
+      /**
+       * Per-list probe deadline in ms (`PCT_CLIENT_HEALTH_PROBE_DEADLINE_MS`): a
+       * client that hasn't answered by then is reported un-probed so one wedged
+       * host can't stall the page. `0` disables it. Defaults to 15000 (≈1.5× the
+       * SSH `readyTimeout`).
+       */
+      probeDeadlineMs: z.coerce.number().int().nonnegative().default(15_000),
+    }),
     adguard: adguardSchema,
   })
   .superRefine((settings, ctx) => {
@@ -300,6 +343,8 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
     adminUsername: env.PCT_ADMIN_USERNAME,
     adminPassword: env.PCT_ADMIN_PASSWORD,
     ansibleDir: env.PCT_ANSIBLE_DIR,
+    ansibleCoreVersion: env.PCT_ANSIBLE_CORE_VERSION,
+    ansiblePlaybookSourceDir: env.PCT_ANSIBLE_PLAYBOOK_SRC,
     sshPublicKeyPath: env.PCT_SSH_PUBLIC_KEY_PATH,
     sshPrivateKeyPath: env.PCT_SSH_PRIVATE_KEY_PATH,
     telemetry: {
@@ -314,6 +359,10 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
       enabled: env.PCT_PRE_MIGRATION_BACKUP,
       dir: env.PCT_PRE_MIGRATION_BACKUP_DIR,
       retain: env.PCT_PRE_MIGRATION_BACKUP_RETAIN,
+    },
+    clientHealth: {
+      probeConcurrency: env.PCT_CLIENT_HEALTH_PROBE_CONCURRENCY,
+      probeDeadlineMs: env.PCT_CLIENT_HEALTH_PROBE_DEADLINE_MS,
     },
     adguard: {
       mode: env.PCT_ADGUARD_MODE ?? "disabled",
