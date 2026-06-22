@@ -139,7 +139,9 @@ pct_chown_user() {
 # /etc/timekpr/timekpr.conf) without rewriting the whole file — so the package's
 # other settings survive. KEY must be a bare token (no regex metacharacters);
 # VALUE must not contain a newline. A leading `#` comment is never matched, so a
-# documentation comment for the same key is left alone.
+# documentation comment for the same key is left alone. Assumes at most one
+# uncommented assignment of KEY (the upstream config shape); if several exist
+# they are all rewritten to the same value rather than collapsed to one.
 # Usage: pct_set_conf_key /etc/timekpr/timekpr.conf TIMEKPR_FINAL_WARNING_TIME 60
 pct_set_conf_key() {
   local file="$1" key="$2" value="$3"

@@ -73,6 +73,9 @@ TIMEKPR_PPA_LIST_GLOB="${TIMEKPR_PPA_LIST_GLOB:-/etc/apt/sources.list.d/*mjasnik
 PCT_TIMEKPR_CONF="${PCT_TIMEKPR_CONF:-/etc/timekpr/timekpr.conf}"
 # Seconds before a cutoff for the single "time's almost up" heads-up
 # (upstream default 60). Generous Alpha-1 value: 5 minutes of warning.
+# Invariant: keep this >= the final-warning countdown below — the heads-up
+# fires first, then the continuous countdown runs through to the cutoff. If you
+# override one, override the other so the ordering holds.
 PCT_TIMEKPR_FINAL_NOTIFICATION_TIME="${PCT_TIMEKPR_FINAL_NOTIFICATION_TIME:-300}"
 # Seconds of continuous final countdown before a cutoff (upstream default 10).
 # Generous Alpha-1 value: the whole final minute counts down.
