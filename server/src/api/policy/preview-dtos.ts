@@ -24,6 +24,16 @@ import { budgetResponseSchema, scheduleResponseSchema } from "./dtos.js";
  * is an optional reference instant (ISO-8601) the proposed/current resolution
  * is computed against; it exists for deterministic tests and future-dated
  * previews, and defaults to the current time when absent.
+ *
+ * Note: `scheduleResponseSchema` validates the recurrence fields only
+ * structurally (each `int | null`), not the cross-field invariants the write
+ * path enforces (`scheduleRecurrenceSchema`: both-or-neither minutes,
+ * `start < end`, `effectiveFrom < effectiveTo`). That is acceptable here — the
+ * body is the already-validated rows the admin editor holds, the route is
+ * `requireAdmin`-only, and preview neither persists nor pushes; a malformed
+ * proposed rule at worst yields a misleading *preview*, never a bad write. If a
+ * non-editor caller is ever given this endpoint, tighten this to apply
+ * `scheduleRecurrenceSchema`'s refinements.
  */
 export const policyPreviewRequestSchema = z.object({
   budgets: z.array(budgetResponseSchema).default([]),

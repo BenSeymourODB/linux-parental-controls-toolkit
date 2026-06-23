@@ -105,10 +105,14 @@ describe("POST /api/users/:userId/policy-preview", () => {
   }
 
   /** Insert a client + link it to the user, returning the client id. */
-  function linkClient(userId: number, hostname: string): number {
+  function linkClient(userId: number, hostname: string, lastSeen?: Date): number {
     const client = harness.db
       .insert(clients)
-      .values({ hostname, sshUser: "pct-agent" })
+      .values(
+        lastSeen === undefined
+          ? { hostname, sshUser: "pct-agent" }
+          : { hostname, sshUser: "pct-agent", lastSeen },
+      )
       .returning({ id: clients.id })
       .get();
     if (client === undefined) throw new Error("client insert returned no row");
@@ -296,5 +300,53 @@ describe("POST /api/users/:userId/policy-preview", () => {
     });
     expect(res.statusCode).toBe(200);
     expect(res.json().affectedClients).toEqual([]);
+  });
+
+  it("serializes a non-null lastSeen and orders multiple clients by id", async () => {
+    const userId = await createUser("Alice");
+    const seen = new Date("2026-06-16T08:30:00Z");
+    // Link in reverse hostname order to prove the sort is by clientId, not insert order.
+    const firstId = linkClient(userId, "desk-pc", seen);
+    const secondId = linkClient(userId, "mint-laptop");
+
+    const res = await auth({
+      method: "POST",
+      url: `/api/users/${userId}/policy-preview`,
+      payload: { budgets: [], schedules: [], now: "2026-06-17T12:00:00Z" },
+    });
+    expect(res.statusCode).toBe(200);
+    const ids = res.json().affectedClients.map((c: { clientId: number }) => c.clientId);
+    expect(ids).toEqual([firstId, secondId].sort((a, b) => a - b));
+    const first = res
+      .json()
+      .affectedClients.find((c: { clientId: number }) => c.clientId === firstId);
+    expect(first.lastSeen).toBe(seen.toISOString());
+  });
+
+  it("defaults the reference instant to now when `now` is omitted", async () => {
+    const userId = await createUser("Alice");
+    harness.db
+      .insert(budgets)
+      .values({ userId, scope: "overall", targetId: null, window: "daily", secondsAllowed: 7200 })
+      .run();
+
+    // No `now` in the body → handler uses new Date(); a 2h→2h30 daily change
+    // is date-independent, so the diff is deterministic regardless of clock.
+    const res = await auth({
+      method: "POST",
+      url: `/api/users/${userId}/policy-preview`,
+      payload: { budgets: [proposedBudget({ userId, secondsAllowed: 9000 })], schedules: [] },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().changes).toEqual([
+      {
+        field: "daily-overall",
+        kind: "changed",
+        weekday: null,
+        before: "2h",
+        after: "2h 30m",
+        summary: "Daily overall limit: 2h → 2h 30m",
+      },
+    ]);
   });
 });

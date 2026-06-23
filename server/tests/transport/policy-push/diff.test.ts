@@ -191,9 +191,14 @@ describe("diffResolvedPush — allowed-hours grid", () => {
     });
   });
 
-  it("marks a window removed when a day goes from allowed to fully denied", () => {
-    const before = push({ weekly: weekly({ 3: [{ start: 0, end: 1440 }] }) });
-    const diff = diffResolvedPush(before, push());
+  it("marks a window removed when a day goes from allowed to fully denied (week still has an allowed day)", () => {
+    // Mon stays allowed (so the grid is still pushed); Wed loses its window.
+    const before = push({
+      weekly: weekly({ 1: [{ start: 480, end: 1260 }], 3: [{ start: 0, end: 1440 }] }),
+    });
+    const after = push({ weekly: weekly({ 1: [{ start: 480, end: 1260 }] }) });
+    const diff = diffResolvedPush(before, after);
+    expect(diff.changes).toHaveLength(1);
     expect(diff.changes[0]).toMatchObject({
       field: "allowed-hours",
       kind: "removed",
@@ -230,6 +235,21 @@ describe("diffResolvedPush — allowed-hours grid", () => {
     });
     const diff = diffResolvedPush(before, after);
     expect(diff.changes.map((c) => c.weekday)).toEqual([6]);
+  });
+
+  it("suppresses allowed-hours rows when the proposed week is fully denied (executor skips the push)", () => {
+    // before allows Mon–Fri; after denies every day. The executor would NOT
+    // call setWeeklyAllowedHours (no allowed weekday), so the preview must not
+    // claim the grid changes — even though the windows literally differ.
+    const before = push({
+      weekly: weekly({
+        1: [{ start: 480, end: 1260 }],
+        2: [{ start: 480, end: 1260 }],
+      }),
+    });
+    const after = push({ weekly: weekly({}) });
+    const diff = diffResolvedPush(before, after);
+    expect(diff.changes.some((c) => c.field === "allowed-hours")).toBe(false);
   });
 });
 

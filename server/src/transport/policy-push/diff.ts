@@ -199,11 +199,30 @@ function diffDailyOverall(
   return changes;
 }
 
-/** Diff the recurring allowed-hours grid, one row per weekday whose windows differ. */
+/** Does any weekday in the grid carry at least one allowed window? */
+function hasAnyAllowedWindow(weekly: ResolvedPolicyPush["weekly"]): boolean {
+  return [...weekly.values()].some((windows) => windows.length > 0);
+}
+
+/**
+ * Diff the recurring allowed-hours grid, one row per weekday whose windows
+ * differ.
+ *
+ * **Mirrors the executor's full-lockout skip.** When the *proposed* week denies
+ * access on every day, the live executor (`policy-push/executor.ts`) does **not**
+ * push the allowed-hours grid at all (`--setalloweddays` cannot take an empty
+ * set; a fully-denied week is enforced via a zero daily limit / session-kill in
+ * Phase 8c, not allowed-hours). Emitting `removed` rows here would tell the admin
+ * the grid will change when no `setWeeklyAllowedHours` call is made — exactly the
+ * "windows the push never sends" the preview's fidelity contract avoids. So when
+ * `after` has no allowed window on any day, no allowed-hours rows are produced.
+ */
 function diffAllowedHours(
   before: ResolvedPolicyPush["weekly"],
   after: ResolvedPolicyPush["weekly"],
 ): PolicyPushChange[] {
+  if (!hasAnyAllowedWindow(after)) return [];
+
   const changes: PolicyPushChange[] = [];
   for (const weekday of ALL_ISO_WEEKDAYS) {
     const b = before.get(weekday) ?? [];
