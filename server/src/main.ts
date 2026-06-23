@@ -66,6 +66,16 @@ async function main(): Promise<void> {
   // records `unavailable` and the reason is surfaced at GET /api/system/ansible
   // (docs/server-deployment.md → "First-run setup") — so a bare `void` is safe.
   void app.ansibleVenv.bootstrap(app.log);
+
+  // Bootstrap the managed AdGuard Home instance (#96, Phase-7 step) in the
+  // background too, for the same reason — a first-run release download must not
+  // delay startup. Present only when PCT_ADGUARD_MODE=managed; `bootstrap()`
+  // never throws (a failed fetch records `failed`, surfaced at
+  // GET /api/system/adguard-managed), so a bare `void` is safe. It is stopped
+  // on shutdown by the onClose hook in buildApp.
+  if (app.adguardManaged !== null) {
+    void app.adguardManaged.bootstrap(app.log);
+  }
 }
 
 void main();

@@ -73,6 +73,18 @@ const adguardSchema = z.discriminatedUnion("mode", [
     mode: z.literal("managed"),
     bindAddr: z.string().min(1).default("0.0.0.0:53"),
     adminPort: z.coerce.number().int().positive().default(3000),
+    /**
+     * Data-volume directory the managed AdGuard Home binary, seed config, and
+     * work dir live under (`PCT_ADGUARD_DATA_DIR`). Defaults to the documented
+     * `/data/adguard` layout (`docs/server-deployment.md` → "Volume layout").
+     */
+    dataDir: z.string().min(1).default("/data/adguard"),
+    /**
+     * Optional pinned AdGuard Home release tag (`PCT_ADGUARD_VERSION`, e.g.
+     * `v0.107.65`). When unset, the managed supervisor fetches the latest stable
+     * release on first run and then leaves the installed binary in place (#96).
+     */
+    version: z.string().min(1).optional(),
   }),
 ]);
 
@@ -372,6 +384,8 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
       apiTokenFile: env.PCT_ADGUARD_API_TOKEN_FILE,
       bindAddr: env.PCT_ADGUARD_BIND_ADDR,
       adminPort: env.PCT_ADGUARD_ADMIN_PORT,
+      dataDir: env.PCT_ADGUARD_DATA_DIR,
+      version: env.PCT_ADGUARD_VERSION,
     },
   });
 
