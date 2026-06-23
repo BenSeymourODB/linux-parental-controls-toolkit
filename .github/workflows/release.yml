@@ -2,7 +2,9 @@ name: Release
 
 on:
   push:
-    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+" # stable: vMAJOR.MINOR.PATCH
+      - "v[0-9]+.[0-9]+.[0-9]+-*" # prerelease: vMAJOR.MINOR.PATCH-alpha.N etc.
 
 permissions:
   contents: write   # create GitHub Releases
@@ -52,30 +54,35 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/benseymourodb/linux-parental-controls-toolkit
+          # latest=auto: `latest` (and the {{major}}.{{minor}} alias) apply only to
+          # a stable release. A prerelease tag (vX.Y.Z-alpha.N) publishes the exact
+          # {{version}} only, so an alpha never moves `latest`.
+          flavor: |
+            latest=auto
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest
 
+      # metadata-action emits newline-separated `tags`/`labels`; feed them to
+      # build-push-action's multiline inputs (a single `docker buildx --tag`
+      # would collapse them into one malformed reference).
       - name: Build and push image
-        run: |
-          if [ -f server/Dockerfile ]; then
-            docker buildx build \
-              --push \
-              --cache-from type=gha \
-              --cache-to type=gha,mode=max \
-              --tag "${{ steps.meta.outputs.tags }}" \
-              --label "${{ steps.meta.outputs.labels }}" \
-              server/
-          else
-            echo "server/Dockerfile not yet present — skipping Docker publish"
-          fi
+        uses: docker/build-push-action@v6
+        with:
+          context: server
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       # Publish a GitHub Release; attach install-client.sh so the server can
       # serve it from /install-client.sh at the matching tagged version.
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          # Any prerelease tag (vX.Y.Z-<suffix>) is flagged as a GitHub pre-release.
+          prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
             client/install-client.sh
           generate_release_notes: true
