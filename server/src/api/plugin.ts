@@ -19,6 +19,7 @@ import { registerIntegrationRoutes } from "./integrations/index.js";
 import { registerMetaRoute } from "./meta.js";
 import { registerEffectiveRoutes, registerPolicyRoutes } from "./policy/index.js";
 import { registerSystemRoutes } from "./system/index.js";
+import { registerUsageRoutes } from "./usage/index.js";
 import { installApiConventions } from "./validation.js";
 
 /** Options the `/api` plugin needs from its host app. */
@@ -56,6 +57,10 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (scope, opt
   // Effective-policy preview (#143): GET /users/:userId/effective. Needs
   // `settings` for the server-default timezone of users with no `tz`.
   registerEffectiveRoutes(scope, opts.settings);
+  // Usage views (#62): admin-only read of per-budget burndown + the
+  // per-activity timeline, the data source for the Phase-5 chart components.
+  // Needs `settings` for the server-default timezone of users with no `tz`.
+  registerUsageRoutes(scope, opts.settings);
   // Client enrolment (#77): admin-minted token + the install script's enrol
   // exchange. `settings` carries the SSH-public-key path the enrol response returns.
   registerClientEnrolmentRoutes(scope, opts.settings);
