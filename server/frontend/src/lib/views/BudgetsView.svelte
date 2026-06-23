@@ -268,10 +268,15 @@
           <option value={option.value}>{option.label}</option>
         {/each}
       </select>
+      <!--
+        Text (not `type="number"`) so the binding stays a string: `bind:value`
+        on a number input coerces to a number, which breaks `newMinutes.trim()`
+        in `createDisabled` (and the string contract `minutesToSeconds` parses).
+        `inputmode="numeric"` still gives a numeric keypad.
+      -->
       <input
-        type="number"
-        min="0"
-        step="1"
+        type="text"
+        inputmode="numeric"
         placeholder="Minutes"
         bind:value={newMinutes}
         disabled={creating}
@@ -314,10 +319,10 @@
                   </select>
                 </td>
                 <td>
+                  <!-- Text for the same reason as the create field above. -->
                   <input
-                    type="number"
-                    min="0"
-                    step="1"
+                    type="text"
+                    inputmode="numeric"
                     bind:value={editMinutes}
                     aria-label="Edit allowance in minutes"
                   />

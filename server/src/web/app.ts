@@ -23,7 +23,10 @@ import {
   type AdGuardManagedSupervisor,
   type AdGuardService,
 } from "../transport/adguard/index.js";
-import { createPolicyPushTransport } from "../transport/policy-push/index.js";
+import {
+  createPolicyPushTransport,
+  type PolicyPushTransport,
+} from "../transport/policy-push/index.js";
 import { registerFrontend } from "./frontend.js";
 import { REQUEST_ID_HEADER, buildLoggerOptions, genRequestId, type LogStream } from "./logger.js";
 
@@ -99,6 +102,14 @@ export interface BuildAppOptions {
    * and never calls `bootstrap()`, so constructing the app spawns nothing.
    */
   adguardManaged?: AdGuardManagedSupervisor | null;
+  /**
+   * Inject the outbound {@link PolicyPushTransport} (#201/#257). When omitted,
+   * {@link buildApp} builds the live `timekpra`-over-SSH transport from settings
+   * (or the logging fallback when no SSH key exists yet). Tests inject one with
+   * a fake `adjustTimeToday` to exercise `POST /users/:userId/time-today`
+   * without SSH. An injected transport is left for its provider to dispose.
+   */
+  policyPush?: PolicyPushTransport;
 }
 
 /**
@@ -130,10 +141,14 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   // Outbound policy-push transport (#201): the live `timekpra`-over-SSH
   // dispatcher when the SSH key exists (#39), else the logging stub. It also
   // owns the offline-queue drainer + pooled SSH connections, torn down on close
-  // — before the db it reads from (when buildApp owns that db).
-  const policyPush = createPolicyPushTransport({ settings, db, log: app.log });
+  // — before the db it reads from (when buildApp owns that db). A test may
+  // inject one (e.g. with a fake `adjustTimeToday`); only the handle buildApp
+  // creates is disposed here, mirroring the `db` seam.
+  const policyPush =
+    options.policyPush ?? createPolicyPushTransport({ settings, db, log: app.log });
+  const ownsPolicyPush = options.policyPush === undefined;
   app.addHook("onClose", async () => {
-    policyPush.dispose();
+    if (ownsPolicyPush) policyPush.dispose();
     if (ownsDb) db.$client.close();
   });
 
@@ -206,7 +221,7 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   // within this prefix, leaving /, /healthz, /admin and /app untouched. Auth
   // (#52) is wired inside this scope and needs the settings (PCT_SECRET_KEY,
   // first-admin bootstrap) threaded through.
-  registerApi(app, settings, eventHub, policyPush.dispatcher);
+  registerApi(app, settings, eventHub, policyPush.dispatcher, policyPush.adjustTimeToday);
 
   // Serve the prerendered SvelteKit build at /admin and /app (#40). Skipped
   // (with a warning) when the build directory is absent, so /, /healthz, and

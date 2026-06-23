@@ -235,8 +235,8 @@ services:
     volumes:
       - pct_data:/data
     environment:
-      - PCT_BASE_URL=https://parentalcontrols.lan
-      - PCT_TIMEZONE=America/New_York
+      - PCT_SECRET_KEY=change-me-to-a-long-random-string # required: signs the session cookie
+      - PCT_DEFAULT_TZ=America/New_York # server-default timezone for budget rollover
       - PCT_ADGUARD_MODE=external
       - PCT_ADGUARD_URL=https://adguard.lan
       - PCT_ADGUARD_USERNAME=parental-controls
@@ -266,8 +266,8 @@ services:
     volumes:
       - pct_data:/data
     environment:
-      - PCT_BASE_URL=https://parentalcontrols.lan
-      - PCT_TIMEZONE=America/New_York
+      - PCT_SECRET_KEY=change-me-to-a-long-random-string # required: signs the session cookie
+      - PCT_DEFAULT_TZ=America/New_York # server-default timezone for budget rollover
       - PCT_ADGUARD_MODE=managed
 volumes:
   pct_data:
