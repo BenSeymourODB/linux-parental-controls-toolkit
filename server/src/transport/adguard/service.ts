@@ -80,7 +80,13 @@ export interface DnsStatus {
   readonly configured: boolean;
   /** Health as last observed (see {@link DnsHealth}). */
   readonly health: DnsHealth;
-  /** Base URL the dashboard targets, or `null` when no client is wired. */
+  /**
+   * Base URL the dashboard targets for this mode, or `null` when there is
+   * nothing to target. In `managed` mode this is the supervisor's local
+   * `adminEndpoint` once known — surfaced even before the instance is `running`
+   * (i.e. while `configured` is still false), so the admin UI can show where DNS
+   * rules will end up during bring-up.
+   */
   readonly baseUrl: string | null;
   /** ISO-8601 timestamp of the last preflight, or `null` if never run. */
   readonly checkedAt: string | null;
