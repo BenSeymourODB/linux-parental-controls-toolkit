@@ -48,6 +48,13 @@ export type {
 } from "../../../../src/api/policy/dtos.js";
 export type { AuditEntryResponse, AuditListResponse } from "../../../../src/api/audit/dtos.js";
 export type {
+  CreateIntegrationTokenRequest,
+  IntegrationTokenCreatedResponse,
+  IntegrationTokenSummaryResponse,
+  IntegrationTokenListResponse,
+} from "../../../../src/api/integrations/dtos.js";
+export type { IntegrationScope } from "../../../../src/integrations/scopes.js";
+export type {
   MintEnrolmentTokenRequest,
   EnrolmentTokenResponse,
 } from "../../../../src/api/clients/dtos.js";
