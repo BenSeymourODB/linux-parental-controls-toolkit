@@ -144,7 +144,7 @@ describe("GET /api/meta (via buildApp)", () => {
   it("is mounted and returns the meta DTO", async () => {
     const res = await app.inject({ method: "GET", url: "/api/meta" });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ name: "dashboard", apiVersion: 1 });
+    expect(res.json()).toEqual({ name: "dashboard", apiVersion: 1, eventProtocol: 1 });
   });
 
   it("serves the /api 404 envelope for unknown api routes", async () => {
