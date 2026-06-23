@@ -16,6 +16,13 @@
  * - **Rollover expiry.** A nudge whose `targetDate` has passed (in the user's
  *   effective timezone) is a no-op, so a stale adjustment never lands a day late.
  *
+ * Re-asserting the *absolute* target is the queue's "assert desired end-state"
+ * contract, not a delta — so the rare same-day crash-replay (window (b) above)
+ * re-issues `= T`, which can hand back minutes the user consumed since `T` was
+ * resolved. That is the accepted at-least-once trade-off (the alternative, an
+ * additive replay, double-applies); the rollover-expiry guard bounds it to the
+ * same day.
+ *
  * Read/parse failures of `--userinfo` reject with a plain `Error` (non-retriable)
  * so the drainer dead-letters the row rather than retrying a request it can't
  * satisfy; SSH unreachable/timeout from the injected client propagates with its
