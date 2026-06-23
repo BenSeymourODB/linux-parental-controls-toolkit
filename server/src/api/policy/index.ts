@@ -12,6 +12,16 @@ export {
   effectivePolicyResponseSchema,
   type EffectivePolicyResponse,
 } from "./effective.js";
+export { registerPreviewRoutes } from "./preview-routes.js";
+export {
+  policyPreviewRequestSchema,
+  policyPreviewResponseSchema,
+  policyPushChangeResponseSchema,
+  previewAffectedClientSchema,
+  type PolicyPreviewRequest,
+  type PolicyPreviewResponse,
+  type PreviewAffectedClient,
+} from "./preview-dtos.js";
 export {
   // Account/device core (#51)
   clientResponseSchema,
