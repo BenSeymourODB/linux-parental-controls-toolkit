@@ -130,26 +130,34 @@ trees skip cleanly (see issue #19).
 
 ## `release.yml` — Release and publish
 
-Triggered by pushing a semver tag (e.g. `git tag v1.2.0 && git push --tags`).
+Triggered by pushing a semver tag — a stable `vMAJOR.MINOR.PATCH` or a
+prerelease `vMAJOR.MINOR.PATCH-<suffix>` (e.g. `v1.2.0` or `v0.1.0-alpha.1`).
 
 ### Steps
 
 1. **Unit test gate** — runs the full unit suite. A failing test blocks the
    release; do not bypass this.
 2. **Docker build and push** — builds the server image and pushes it to
-   `ghcr.io/benseymourodb/linux-parental-controls-toolkit` with three tags:
-   `v1.2.0`, `v1.2`, and `latest`.
+   `ghcr.io/benseymourodb/linux-parental-controls-toolkit`. A **stable** tag
+   publishes three tags (`1.2.0`, `1.2`, and `latest`); a **prerelease** tag
+   publishes only the exact version (`0.1.0-alpha.1`) and does **not** move
+   `latest` or the `{{major}}.{{minor}}` alias (`flavor: latest=auto`).
 3. **GitHub Release** — creates a GitHub Release with auto-generated notes
-   and attaches `client/install-client.sh` as a release artifact. This means
-   a server running a tagged release can serve the matching install script
-   at `/install-client.sh`.
+   and attaches `client/install-client.sh` as a release artifact (so a server
+   running a tagged release can serve the matching install script at
+   `/install-client.sh`). A prerelease tag (any `-<suffix>`) is marked as a
+   GitHub **pre-release**.
 
 ### How to cut a release
 
 ```bash
 # Ensure main is clean and CI is green first.
-git tag v1.2.0
+git tag v1.2.0            # stable
 git push origin v1.2.0
+
+# or a prerelease (does not move `latest`):
+git tag v0.1.0-alpha.1
+git push origin v0.1.0-alpha.1
 ```
 
 The workflow does the rest. Do not push tags from feature branches.

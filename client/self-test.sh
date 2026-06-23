@@ -16,9 +16,11 @@
 #   2. the dashboard SSH key is authorized for pct-agent (and sshd is up)
 #   3. the pct-agent sudoers drop-in is scoped to exactly `timekpra`
 #   4. the Timekpr-nExT daemon is up and `timekpra` answers for each user
-#   5. aw-server is reachable on loopback and returns buckets
-#   6. e2guardian is active
-#   7. the dashboard enrolment record is present
+#   5. the Timekpr-nExT client indicator autostarts for each supervised user
+#      (the Alpha-1 warning UX — see docs/client-install.md)
+#   6. aw-server is reachable on loopback and returns buckets
+#   7. e2guardian is active
+#   8. the dashboard enrolment record is present
 #
 # This is the client-side complement to the admin "Clients" health page (#81),
 # which shows the same component states from the server's perspective.
@@ -73,6 +75,10 @@ PCT_SUDOERS_DIR="${PCT_SUDOERS_DIR:-/etc/sudoers.d}"
 PCT_SSHD_SERVICE="${PCT_SSHD_SERVICE:-ssh.service}"
 PCT_TIMEKPR_SERVICE="${PCT_TIMEKPR_SERVICE:-timekpr.service}"
 PCT_E2GUARDIAN_SERVICE="${PCT_E2GUARDIAN_SERVICE:-e2guardian.service}"
+
+# The per-user Timekpr-nExT client-indicator autostart filename (under
+# ~/.config/autostart), kept in step with install-baseline-tools.sh (#268).
+PCT_TIMEKPR_CLIENT_DESKTOP="${PCT_TIMEKPR_CLIENT_DESKTOP:-timekpr-client.desktop}"
 
 # aw-server loopback bind (kept in step with install-baseline-tools.sh).
 AW_HOST="${AW_HOST:-127.0.0.1}"
@@ -226,6 +232,42 @@ pct_selftest_timekpra_users() {
   done
 }
 
+# A supervised user's home directory per the passwd database (first match only).
+pct_selftest_user_home() {
+  "$PCT_GETENT" passwd "$1" 2>/dev/null | head -n1 | cut -d: -f6
+}
+
+# 6b. The Timekpr-nExT client indicator autostarts for each supervised user.
+#
+# In Alpha-1 this is the ONLY pre-cutoff warning a supervised user gets — the
+# richer pct-client-agent cadence/grace/per-app UX is Phase 8b — so a missing
+# or disabled indicator must fail the enrol loudly here rather than surface
+# later as a silent cold logout. Read-only: we check that the per-user autostart
+# entry install-baseline-tools.sh (#268) drops is present and not disabled.
+pct_selftest_timekpr_client_autostart() {
+  local user
+  for user in "$@"; do
+    local desc="Timekpr-nExT client indicator autostarts for '${user}'"
+    if pct_selftest_preview "$desc"; then
+      continue
+    fi
+    local home dest
+    home="$(pct_selftest_user_home "$user")"
+    [ -n "$home" ] || home="/home/${user}"
+    dest="${home}/.config/autostart/${PCT_TIMEKPR_CLIENT_DESKTOP}"
+    if [ ! -f "$dest" ]; then
+      pct_selftest_fail "$desc" "no autostart entry ${dest} (the time-left indicator won't appear; re-run the installer)"
+      continue
+    fi
+    if grep -qiE '^[[:space:]]*Hidden[[:space:]]*=[[:space:]]*true' "$dest" ||
+      grep -qiE '^[[:space:]]*X-GNOME-Autostart-enabled[[:space:]]*=[[:space:]]*false' "$dest"; then
+      pct_selftest_fail "$desc" "${dest} is present but disabled (Hidden=true / autostart disabled)"
+      continue
+    fi
+    pct_selftest_pass "$desc"
+  done
+}
+
 # 7. aw-server is reachable on loopback and returns buckets.
 pct_selftest_aw_server() {
   local desc="aw-server reachable on ${AW_HOST}:${AW_PORT}"
@@ -323,6 +365,7 @@ pct_self_test() {
   pct_selftest_sudoers
   pct_selftest_timekpr_daemon
   pct_selftest_timekpra_users "$@"
+  pct_selftest_timekpr_client_autostart "$@"
   pct_selftest_aw_server
   pct_selftest_e2guardian
   pct_selftest_enrolment
