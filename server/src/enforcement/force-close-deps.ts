@@ -20,10 +20,10 @@
  */
 import { performance } from "node:perf_hooks";
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 
 import type { ServerEvent } from "../events/taxonomy.js";
-import type { AuditOutcome } from "../policy/enums.js";
+import type { ActivityKind, AuditOutcome } from "../policy/enums.js";
 import type { PolicyDb } from "../policy/db.js";
 import { activities, activitiesToGroups, clients, usersOnClients } from "../policy/schema.js";
 import type { AuditSink } from "../transport/audit/index.js";
@@ -35,6 +35,7 @@ import {
 } from "../transport/ssh/errors.js";
 import {
   targetFromClient,
+  type ExecOptions,
   type ExecResult,
   type SshCredentials,
   type SshTarget,
@@ -51,8 +52,18 @@ export interface ForceCloseEventHub {
 
 /** The slice of the SSH facade the `pkill` fallback runs over. */
 export interface ForceClosePkillTransport {
-  exec(target: SshTarget, argv: readonly string[], options?: unknown): Promise<ExecResult>;
+  exec(target: SshTarget, argv: readonly string[], options?: ExecOptions): Promise<ExecResult>;
 }
+
+/**
+ * The activity kinds whose budget exhaustion is force-closed by killing a
+ * process: real apps and app *patterns*. Both accrue window consumption
+ * (`transport/activitywatch/normalise.ts` → `WINDOW_RESOLVABLE_KINDS`), so a
+ * daily budget on either can exhaust and produce an enforcement decision.
+ * Domain / domain-group activities are excluded — those are web-filter
+ * enforcement (Phase 6/7), not a process kill.
+ */
+const FORCE_CLOSABLE_KINDS: readonly ActivityKind[] = ["app", "app_group"];
 
 /** Construction options for {@link createForceCloseDeps}. */
 export interface CreateForceCloseDepsOptions {
@@ -120,11 +131,10 @@ function fromResult(result: ExecResult): PkillOutcome {
 }
 
 /**
- * Resolve a decision's `(scope, targetId)` to the **app** activities whose
- * processes can be force-closed. `activity` scope is the activity itself when
- * it is an app; `group` scope (an `activityGroups.id`) expands to its app
- * members. Domain activities are excluded — those are web-filter enforcement
- * (Phase 6/7), not a process kill.
+ * Resolve a decision's `(scope, targetId)` to the process-bearing activities
+ * whose apps can be force-closed (see {@link FORCE_CLOSABLE_KINDS}). `activity`
+ * scope is the activity itself when it is force-closable; `group` scope (an
+ * `activityGroups.id`) expands to its force-closable members.
  */
 function resolveActivities(
   db: PolicyDb,
@@ -140,14 +150,16 @@ function resolveActivities(
     return db
       .select(columns)
       .from(activities)
-      .where(and(eq(activities.id, targetId), eq(activities.kind, "app")))
+      .where(and(eq(activities.id, targetId), inArray(activities.kind, FORCE_CLOSABLE_KINDS)))
       .all();
   }
   return db
     .select(columns)
     .from(activitiesToGroups)
     .innerJoin(activities, eq(activitiesToGroups.activityId, activities.id))
-    .where(and(eq(activitiesToGroups.groupId, targetId), eq(activities.kind, "app")))
+    .where(
+      and(eq(activitiesToGroups.groupId, targetId), inArray(activities.kind, FORCE_CLOSABLE_KINDS)),
+    )
     .all();
 }
 

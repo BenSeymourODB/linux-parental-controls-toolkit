@@ -107,6 +107,18 @@ describe("createForceCloseDeps — resolveActivities", () => {
     ]);
   });
 
+  it("activity scope includes an app_group (a process-pattern) activity", () => {
+    const id = db
+      .insert(activities)
+      .values({ kind: "app_group", matcher: "*chromium*", matchType: "glob" })
+      .returning()
+      .get().id;
+    const { deps } = makeDeps();
+    expect(deps.resolveActivities("activity", id)).toEqual([
+      { activityId: id, matcher: "*chromium*", matchType: "glob" },
+    ]);
+  });
+
   it("excludes non-app (domain) activities — those are web-filter enforcement", () => {
     const id = db
       .insert(activities)
@@ -117,16 +129,16 @@ describe("createForceCloseDeps — resolveActivities", () => {
     expect(deps.resolveActivities("activity", id)).toEqual([]);
   });
 
-  it("group scope expands to the group's app members only", () => {
+  it("group scope expands to the group's force-closable (app / app_group) members only", () => {
     const groupId = db.insert(activityGroups).values({ name: "Games" }).returning().get().id;
     const steam = db
       .insert(activities)
       .values({ kind: "app", matcher: "steam" })
       .returning()
       .get().id;
-    const minecraft = db
+    const browsers = db
       .insert(activities)
-      .values({ kind: "app", matcher: "minecraft", matchType: "substring" })
+      .values({ kind: "app_group", matcher: "*chromium*", matchType: "glob" })
       .returning()
       .get().id;
     const site = db
@@ -137,7 +149,7 @@ describe("createForceCloseDeps — resolveActivities", () => {
     db.insert(activitiesToGroups)
       .values([
         { activityId: steam, groupId },
-        { activityId: minecraft, groupId },
+        { activityId: browsers, groupId },
         { activityId: site, groupId },
       ])
       .run();
@@ -147,7 +159,7 @@ describe("createForceCloseDeps — resolveActivities", () => {
     expect(resolved).toEqual(
       expect.arrayContaining([
         { activityId: steam, matcher: "steam", matchType: "exact" },
-        { activityId: minecraft, matcher: "minecraft", matchType: "substring" },
+        { activityId: browsers, matcher: "*chromium*", matchType: "glob" },
       ]),
     );
     expect(resolved).toHaveLength(2); // the domain member is excluded

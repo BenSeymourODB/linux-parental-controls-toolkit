@@ -102,6 +102,19 @@ describe("ForceCloseTrigger.enforce", () => {
     expect(forceCloseOverSsh).not.toHaveBeenCalled();
   });
 
+  it("treats any positive delivery count as reached — no pkill fallback", async () => {
+    // The hub returns the number of sockets the frame hit; a client may briefly
+    // hold more than one. Any count > 0 means the bridge got it, so we audit the
+    // event once and never fall back.
+    const { deps, recordEventAudit, forceCloseOverSsh } = makeDeps({
+      publishToClient: vi.fn(() => 2),
+    });
+    new ForceCloseTrigger(deps).enforce(5, [decision()]);
+    await flush();
+    expect(recordEventAudit).toHaveBeenCalledTimes(1);
+    expect(forceCloseOverSsh).not.toHaveBeenCalled();
+  });
+
   it("falls back to pkill when delivery reaches no live socket", async () => {
     const { deps, recordEventAudit, forceCloseOverSsh } = makeDeps({
       publishToClient: vi.fn(() => 0),

@@ -25,6 +25,21 @@
  * an empty pattern is rejected (it would match nothing useful and risks an
  * over-broad `-f ''`), surfaced as `undefined` for the caller to skip + log.
  *
+ * **The fallback is intentionally looser than the canonical matcher.** This is
+ * a best-effort, agent-unavailable path. It diverges from the telemetry matcher
+ * (`policy/activity-matcher.ts`) in two known ways, both bounded by the `-u`
+ * user scope so the blast radius is only the supervised account's processes:
+ * - *Glob/substring are unanchored over the full command line* (`-f`), whereas
+ *   the canonical glob is whole-string-anchored against the app name. `chrome`
+ *   here matches `chrome` anywhere in a process's cmdline, a strictly broader
+ *   kill than the budget counted against. Anchoring (`^…$`) is wrong for a
+ *   full cmdline (it would never match a real argv), so the fallback accepts the
+ *   looseness rather than miss the target.
+ * - *Matching is case-sensitive*, whereas ADR 0006 telemetry matching is
+ *   case-insensitive (`pkill` has no portable `-i`). A differently-cased
+ *   process name may slip the fallback; the preferred event-stream path (the
+ *   agent, which honours the canonical matcher) is unaffected.
+ *
  * License boundary: none touched — pure TypeScript producing an argv the SSH
  * facade execs as a subprocess (same boundary as the `timekpra` invocations).
  */
@@ -40,9 +55,9 @@ function escapeEre(literal: string): string {
 
 /**
  * Translate a shell-style glob to an ERE: `*` → `.*`, `?` → `.`, every other
- * character escaped to its literal. Unanchored, so it matches anywhere in the
- * `-f` command-line string (a process glob like `*chrome*` then behaves as a
- * substring match, which is the useful behaviour against a full cmdline).
+ * character escaped to its literal. Deliberately **unanchored** so it matches
+ * anywhere in the `-f` command-line string — see the module doc for why this
+ * fallback is looser than the canonical whole-string glob matcher.
  */
 function globToEre(glob: string): string {
   let out = "";
