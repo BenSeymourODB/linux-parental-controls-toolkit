@@ -11,6 +11,7 @@
 import { z } from "zod";
 
 import type { AnsibleVenvStatus } from "../../setup/ansible-venv.js";
+import type { AdGuardManagedStatus } from "../../transport/adguard/index.js";
 
 /** Lifecycle state of the first-run Ansible venv bootstrap. */
 export const ansibleVenvStateSchema = z.enum(["idle", "bootstrapping", "ready", "unavailable"]);
@@ -35,6 +36,70 @@ export function toAnsibleVenvStatusResponse(status: AnsibleVenvStatus): AnsibleV
     binaryPath: status.binaryPath,
     playbooksDir: status.playbooksDir,
     coreVersion: status.coreVersion,
+    checkedAt: status.checkedAt,
+    detail: status.detail,
+  };
+}
+
+/** Lifecycle state of the managed AdGuard Home process (#96). */
+export const adGuardManagedStateSchema = z.enum([
+  "idle",
+  "fetching",
+  "starting",
+  "running",
+  "stopped",
+  "failed",
+]);
+
+/**
+ * Response shape of `GET /api/system/adguard-managed`.
+ *
+ * `enabled` is `true` only when `PCT_ADGUARD_MODE=managed`; in every other mode
+ * there is no supervised process and the remaining fields are `null`. The
+ * non-null branch mirrors {@link AdGuardManagedStatus}, and
+ * {@link toAdGuardManagedStatusResponse} is the single conversion point, so the
+ * transport-side enum and this schema cannot drift silently.
+ */
+export const adGuardManagedStatusResponseSchema = z.object({
+  enabled: z.boolean(),
+  state: adGuardManagedStateSchema.nullable(),
+  binaryPath: z.string().nullable(),
+  version: z.string().nullable(),
+  adminEndpoint: z.string().nullable(),
+  restarts: z.number().nullable(),
+  checkedAt: z.string().nullable(),
+  detail: z.string().nullable(),
+});
+
+/** The inferred `GET /api/system/adguard-managed` response type, shared with the frontend. */
+export type AdGuardManagedStatusResponse = z.infer<typeof adGuardManagedStatusResponseSchema>;
+
+/**
+ * Map the managed-supervisor snapshot onto the wire contract. `null` (managed
+ * mode not enabled) collapses to `enabled: false` with null fields.
+ */
+export function toAdGuardManagedStatusResponse(
+  status: AdGuardManagedStatus | null,
+): AdGuardManagedStatusResponse {
+  if (status === null) {
+    return {
+      enabled: false,
+      state: null,
+      binaryPath: null,
+      version: null,
+      adminEndpoint: null,
+      restarts: null,
+      checkedAt: null,
+      detail: null,
+    };
+  }
+  return {
+    enabled: true,
+    state: status.state,
+    binaryPath: status.binaryPath,
+    version: status.version,
+    adminEndpoint: status.adminEndpoint,
+    restarts: status.restarts,
     checkedAt: status.checkedAt,
     detail: status.detail,
   };

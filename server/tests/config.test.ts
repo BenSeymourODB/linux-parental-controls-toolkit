@@ -216,13 +216,27 @@ describe("loadSettings", () => {
   });
 
   describe("managed mode", () => {
-    it("defaults bind address and admin port", () => {
+    it("defaults bind address, admin port, and data dir (version unset)", () => {
       const settings = loadSettings({ PCT_ADGUARD_MODE: "managed" });
 
       expect(settings.adguard).toEqual({
         mode: "managed",
         bindAddr: "0.0.0.0:53",
         adminPort: 3000,
+        dataDir: "/data/adguard",
+      });
+    });
+
+    it("honours an explicit data dir and pinned version", () => {
+      const settings = loadSettings({
+        PCT_ADGUARD_MODE: "managed",
+        PCT_ADGUARD_DATA_DIR: "/srv/adguard",
+        PCT_ADGUARD_VERSION: "v0.107.65",
+      });
+
+      expect(settings.adguard).toMatchObject({
+        dataDir: "/srv/adguard",
+        version: "v0.107.65",
       });
     });
 
