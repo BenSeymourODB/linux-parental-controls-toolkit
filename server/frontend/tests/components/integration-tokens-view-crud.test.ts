@@ -6,7 +6,7 @@
  * highest-value flows — list, empty state, mint-with-once-only-secret, revoke
  * (confirmed + declined), and the inline error surfaces.
  */
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/svelte";
+import { fireEvent, render, screen, within } from "@testing-library/svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
@@ -103,6 +103,41 @@ describe("IntegrationTokensView", () => {
     // The new token also appears as a row.
     const table = screen.getByRole("table");
     expect(within(table).getByText("home-assistant")).toBeInTheDocument();
+    // Shown exactly once: the appended row must not leak the secret, and the
+    // view never re-fetches the list to try to recover it.
+    expect(within(table).queryByText("PCT-secret-abcdef")).not.toBeInTheDocument();
+    expect(listIntegrationTokens).toHaveBeenCalledOnce();
+  });
+
+  it("copies the minted secret to the clipboard and clears it on dismiss", async () => {
+    listIntegrationTokens.mockResolvedValue([]);
+    createIntegrationToken.mockResolvedValue({
+      id: 8,
+      name: "calendar",
+      scopes: ["grants:write"],
+      secret: "PCT-secret-xyz",
+      createdAt: "2026-06-02T00:00:00.000Z",
+    });
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+
+    render(IntegrationTokensView);
+    await screen.findByText("No integration tokens yet. Mint one above.");
+
+    await fireEvent.input(screen.getByLabelText("New token name"), {
+      target: { value: "calendar" },
+    });
+    await fireEvent.click(screen.getByLabelText("Scope grants:write"));
+    await fireEvent.click(screen.getByRole("button", { name: "Mint token" }));
+    await screen.findByText("PCT-secret-xyz");
+
+    await fireEvent.click(screen.getByRole("button", { name: "Copy secret" }));
+    expect(writeText).toHaveBeenCalledWith("PCT-secret-xyz");
+    expect(await screen.findByRole("button", { name: "Copied!" })).toBeInTheDocument();
+
+    // Dismissing the one-time reveal removes the secret from the DOM for good.
+    await fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByText("PCT-secret-xyz")).not.toBeInTheDocument();
   });
 
   it("revokes a token after confirmation and shows the revoked badge", async () => {
