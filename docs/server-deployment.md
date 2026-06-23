@@ -112,13 +112,22 @@ idempotently:
    admin UI.
 3. **AdGuard Home bootstrap** — driven by `PCT_ADGUARD_MODE` (see
    "AdGuard Home deployment modes" below). In `managed` mode, the
-   first-time fetch downloads the latest stable release from
-   `github.com/AdguardTeam/AdGuardHome/releases`, verifies the
-   checksum, and writes it to `/data/adguard/AdGuardHome`; the
-   dashboard then supervises it as a child process. In `external` mode,
-   the dashboard skips the download entirely and validates that it can
-   reach the configured AdGuard Home instance's REST API. In `disabled`
-   mode (the default), neither happens.
+   first-time fetch downloads a release from
+   `github.com/AdguardTeam/AdGuardHome/releases` (the latest stable, or a
+   release pinned with `PCT_ADGUARD_VERSION`), verifies its SHA-256
+   against the release `checksums.txt`, and writes it to
+   `<PCT_ADGUARD_DATA_DIR>/AdGuardHome` (default `/data/adguard/`). A
+   minimal dashboard-owned seed `AdGuardHome.yaml` is written once (web/REST
+   UI bound to `127.0.0.1:<PCT_ADGUARD_ADMIN_PORT>`, DNS to
+   `PCT_ADGUARD_BIND_ADDR`) so it boots headless, then the dashboard
+   supervises it as a child process — restarting it with capped backoff on
+   an unexpected exit and stopping it gracefully on shutdown. Like the
+   Ansible bootstrap, this runs in the background after the HTTP listener is
+   up and never crashes the process: a failed fetch leaves managed DNS
+   disabled with the reason surfaced at `GET /api/system/adguard-managed`.
+   In `external` mode, the dashboard skips the download entirely and
+   validates that it can reach the configured AdGuard Home instance's REST
+   API. In `disabled` mode (the default), neither happens.
 4. **SSH key bootstrap** — if `/data/secrets/ssh/id_ed25519` is absent, the
    Node server generates an Ed25519 key pair **in-process on boot** (issue #39,
    via `node:crypto` — the runtime image ships no `ssh-keygen` binary, mirroring
@@ -162,8 +171,10 @@ Set via environment variables:
 
 # managed — dashboard hosts AdGuard Home
 PCT_ADGUARD_MODE=managed
-PCT_ADGUARD_BIND_ADDR=0.0.0.0:53   # what AdGuard listens on
-PCT_ADGUARD_ADMIN_PORT=3000        # AdGuard's own web UI; optional
+PCT_ADGUARD_BIND_ADDR=0.0.0.0:53   # what AdGuard's DNS server listens on
+PCT_ADGUARD_ADMIN_PORT=3000        # AdGuard's web/REST UI (bound to localhost)
+PCT_ADGUARD_DATA_DIR=/data/adguard # binary + seed config + work dir
+PCT_ADGUARD_VERSION=v0.107.65      # optional: pin a release; latest stable if unset
 
 # external — point at your existing instance
 PCT_ADGUARD_MODE=external

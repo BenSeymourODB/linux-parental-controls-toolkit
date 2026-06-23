@@ -157,6 +157,9 @@ export {
   ansibleVenvStateSchema,
   ansibleVenvStatusResponseSchema,
   type AnsibleVenvStatusResponse,
+  adGuardManagedStateSchema,
+  adGuardManagedStatusResponseSchema,
+  type AdGuardManagedStatusResponse,
 } from "./system/index.js";
 
 // Auth DTOs (#52). Re-exported here so the frontend imports the auth contract
