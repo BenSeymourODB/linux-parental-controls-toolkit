@@ -173,6 +173,28 @@ describe("SchedulesView recurrence summary (bitmask + clock decode)", () => {
     expect(within(item).getByText("Sun")).toBeInTheDocument();
   });
 
+  it("renders the intra-day window alone when no weekday mask is set", async () => {
+    // The days and the time window are independent parts of the summary: a rule
+    // with a window but no recurrenceDays should render just the clock range,
+    // with no weekday prefix and without falling back to "Always".
+    getScheduleOrder.mockResolvedValue(
+      orderView([
+        schedule({
+          id: 1,
+          recurrenceDays: null,
+          recurrenceStartMinute: 540,
+          recurrenceEndMinute: 1290,
+        }),
+      ]),
+    );
+    render(SchedulesView);
+    await selectUser("Alice");
+
+    const item = (await screen.findAllByRole("listitem"))[0]!;
+    expect(within(item).getByText(/^09:00–21:30$/)).toBeInTheDocument();
+    expect(within(item).queryByText("Always")).not.toBeInTheDocument();
+  });
+
   it("appends a half-open effective-date scope (start set, no end)", async () => {
     getScheduleOrder.mockResolvedValue(
       orderView([schedule({ id: 1, effectiveFrom: "2026-03-01T00:00:00.000Z" })]),
@@ -231,6 +253,17 @@ describe("SchedulesView target label per scope", () => {
 
     const item = (await screen.findAllByRole("listitem"))[0]!;
     expect(within(item).getByText("Activity 404")).toBeInTheDocument();
+  });
+
+  it("falls back to a group id label when the group isn't in the loaded list", async () => {
+    getScheduleOrder.mockResolvedValue(
+      orderView([schedule({ id: 1, targetKind: "group", targetId: 404 })]),
+    );
+    render(SchedulesView);
+    await selectUser("Alice");
+
+    const item = (await screen.findAllByRole("listitem"))[0]!;
+    expect(within(item).getByText("Group 404")).toBeInTheDocument();
   });
 });
 
