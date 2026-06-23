@@ -38,6 +38,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 
 import {
   recordClientAgentVersion,
+  setClientUpdateRequired,
   touchClientLastSeen,
   type ClientRow,
 } from "../policy/repository.js";
@@ -147,6 +148,12 @@ export async function registerEventStream(
 
           if (result.kind === "refuse") {
             socket.send(JSON.stringify(result.frame));
+            // Only "too old" means the client must update; a "server_too_old"
+            // (server behind) or "malformed_hello" (buggy/garbage opener) is not
+            // the client's version to fix (ADR 0007 §5).
+            if (result.reason === "client_too_old") {
+              setClientUpdateRequired(db, clientId, true);
+            }
             log.warn(
               { event: "event_stream_refused", clientId, reason: result.reason },
               "event-stream handshake refused",
@@ -160,6 +167,11 @@ export async function registerEventStream(
           socket.send(JSON.stringify(result.frame));
           if (hello !== null) {
             recordClientAgentVersion(db, clientId, hello.agentVersion, new Date());
+          }
+          // A compatible connect clears any stale update-required flag (the
+          // client has since been updated to an in-window protocol).
+          if (client.updateRequired) {
+            setClientUpdateRequired(db, clientId, false);
           }
           hub.register(clientId, socket);
           touchClientLastSeen(db, clientId, new Date());

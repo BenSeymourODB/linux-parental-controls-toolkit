@@ -218,4 +218,25 @@ describe("GET /api/events/stream — version handshake (#165)", () => {
     expect(refuse.error.code).toBe("incompatible_protocol");
     await vi.waitFor(() => expect(app.eventHub.isClientLive(clientId)).toBe(false));
   });
+
+  it("clears a stale update_required flag when the client reconnects compatibly", async () => {
+    harness = buildTestApp();
+    const { app, db } = harness;
+    const token = generateToken();
+    const clientId = enrolClientWithToken(harness, token);
+    // Simulate a client previously flagged as needing an update (set true by a
+    // prior out-of-window refusal).
+    repo.setClientUpdateRequired(db, clientId, true);
+    await app.listen({ port: 0, host: "127.0.0.1" });
+
+    const ws = connect(app, { authorization: `Bearer ${token}` });
+    const nextMessage = messageReader(ws);
+    await awaitOpen(ws);
+    ws.send(helloFrame());
+
+    const accept = JSON.parse(await nextMessage()) as { type: string };
+    expect(accept.type).toBe("accept");
+    // A compatible connect clears the stale flag.
+    await vi.waitFor(() => expect(repo.getClient(db, clientId)?.updateRequired).toBe(false));
+  });
 });

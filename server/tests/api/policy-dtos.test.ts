@@ -48,6 +48,7 @@ describe("policy DTO mappers", () => {
       agentVersion: null,
       componentVersions: null,
       versionsReportedAt: null,
+      updateRequired: false,
     };
     expect(toClientResponse(row)).toEqual({
       id: 2,
@@ -69,6 +70,7 @@ describe("policy DTO mappers", () => {
       agentVersion: null,
       componentVersions: null,
       versionsReportedAt: null,
+      updateRequired: false,
     };
     expect(toClientResponse(row).lastSeen).toBeNull();
   });

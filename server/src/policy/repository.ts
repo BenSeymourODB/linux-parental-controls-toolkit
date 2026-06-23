@@ -204,6 +204,17 @@ export function recordClientAgentVersion(
   db.update(clients).set({ agentVersion, versionsReportedAt: at }).where(eq(clients.id, id)).run();
 }
 
+/**
+ * Set or clear a client's `update_required` flag (ADR 0007 §5, #165): set when
+ * its event-stream `hello` is refused for being older than the supported
+ * protocol window, cleared when it next connects compatibly. A system-observed
+ * signal (not admin-editable), written directly like the other event-stream
+ * liveness columns. A no-op if no client with `id` exists.
+ */
+export function setClientUpdateRequired(db: PolicyDb, id: number, value: boolean): void {
+  db.update(clients).set({ updateRequired: value }).where(eq(clients.id, id)).run();
+}
+
 // --- User-on-client links --------------------------------------------------
 
 /** All links for a user, ascending by client id. */

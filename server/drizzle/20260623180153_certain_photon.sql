@@ -1,0 +1,1 @@
+ALTER TABLE `clients` ADD `update_required` integer DEFAULT false NOT NULL;
