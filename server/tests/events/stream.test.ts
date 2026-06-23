@@ -31,7 +31,13 @@ const openSockets: WebSocket[] = [];
 afterEach(async () => {
   for (const ws of openSockets.splice(0)) ws.terminate();
   if (harness !== undefined) {
-    await harness.close();
+    const h = harness;
+    // Drain server-side connections before closing the in-memory DB: each
+    // socket's close handler runs synchronously (unregister → touch last_seen),
+    // so observing connectionCount === 0 guarantees that DB write already
+    // completed — otherwise a late handler would hit a closed connection.
+    await vi.waitFor(() => expect(h.app.eventHub.connectionCount).toBe(0));
+    await h.close();
     harness = undefined;
   }
 });
@@ -217,6 +223,47 @@ describe("GET /api/events/stream — version handshake (#165)", () => {
     expect(refuse.type).toBe("refuse");
     expect(refuse.error.code).toBe("incompatible_protocol");
     await vi.waitFor(() => expect(app.eventHub.isClientLive(clientId)).toBe(false));
+  });
+
+  it("flags update_required when a client is refused for being too old", async () => {
+    // Server negotiates against protocol 3, so the window is {2, 3}; a hello at
+    // protocol 1 is older than the window → client_too_old → update_required.
+    harness = buildTestApp({ appOptions: { eventStream: { serverProtocol: 3 } } });
+    const { app, db } = harness;
+    const token = generateToken();
+    const clientId = enrolClientWithToken(harness, token);
+    await app.listen({ port: 0, host: "127.0.0.1" });
+
+    const ws = connect(app, { authorization: `Bearer ${token}` });
+    const nextMessage = messageReader(ws);
+    const closed = new Promise<number>((resolve) => ws.on("close", (code) => resolve(code)));
+    await awaitOpen(ws);
+    ws.send(helloFrame(1));
+
+    const refuse = JSON.parse(await nextMessage()) as { type: string; error: { code: string } };
+    expect(refuse.type).toBe("refuse");
+    expect(refuse.error.code).toBe("incompatible_protocol");
+    expect(await closed).toBe(1008);
+    await vi.waitFor(() => expect(repo.getClient(db, clientId)?.updateRequired).toBe(true));
+    expect(app.eventHub.isClientLive(clientId)).toBe(false);
+  });
+
+  it("refuses a client that never sends a hello before the timeout", async () => {
+    harness = buildTestApp({ appOptions: { eventStream: { helloTimeoutMs: 60 } } });
+    const { app } = harness;
+    const token = generateToken();
+    const clientId = enrolClientWithToken(harness, token);
+    await app.listen({ port: 0, host: "127.0.0.1" });
+
+    const ws = connect(app, { authorization: `Bearer ${token}` });
+    const nextMessage = messageReader(ws);
+    const closed = new Promise<number>((resolve) => ws.on("close", (code) => resolve(code)));
+    await awaitOpen(ws);
+    // Send no hello; the server refuses once helloTimeoutMs elapses.
+    const refuse = JSON.parse(await nextMessage()) as { type: string };
+    expect(refuse.type).toBe("refuse");
+    expect(await closed).toBe(1008);
+    expect(app.eventHub.isClientLive(clientId)).toBe(false);
   });
 
   it("clears a stale update_required flag when the client reconnects compatibly", async () => {

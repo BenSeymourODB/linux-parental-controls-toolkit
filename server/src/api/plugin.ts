@@ -10,7 +10,7 @@ import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 
 import { registerAuth } from "../auth/index.js";
 import type { Settings } from "../config.js";
-import { registerEventStream, type EventHub } from "../events/index.js";
+import { registerEventStream, type EventHub, type EventStreamOptions } from "../events/index.js";
 import type { TimeTodayAdjuster } from "../transport/policy-push/index.js";
 import type { PolicyPushStub } from "../transport/stub.js";
 import { registerAuditRoutes } from "./audit/index.js";
@@ -51,6 +51,12 @@ export interface ApiPluginOptions {
    * `503 transport_unavailable`.
    */
   timeToday?: TimeTodayAdjuster;
+  /**
+   * Tuning/test seam for the event-stream handshake (heartbeat interval, hello
+   * timeout, negotiated server protocol). Omitted in production, where the
+   * route uses its defaults.
+   */
+  eventStream?: EventStreamOptions;
 }
 
 /**
@@ -87,7 +93,7 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (scope, opt
   // Event stream (#100): GET /api/events/stream WebSocket, per-client bearer
   // auth. Registered against the shared event hub so producers publish onto
   // the same registry. Async because it registers @fastify/websocket.
-  await registerEventStream(scope, opts.eventHub);
+  await registerEventStream(scope, opts.eventHub, opts.eventStream ?? {});
   // Client health/status (#81): the read-only Clients-page reads. The live SSH
   // prober is injected once the SSH-key bootstrap (#39) plumbs credentials;
   // until then the routes degrade to `unknown` reachability/components while
@@ -117,6 +123,7 @@ export function registerApi(
   eventHub: EventHub,
   policyPush?: PolicyPushStub,
   timeToday?: TimeTodayAdjuster,
+  eventStream?: EventStreamOptions,
 ): void {
   app.register(apiPlugin, {
     prefix: "/api",
@@ -126,5 +133,6 @@ export function registerApi(
     // `undefined` is not assignable to the optional `policyPush?` field.
     ...(policyPush !== undefined ? { policyPush } : {}),
     ...(timeToday !== undefined ? { timeToday } : {}),
+    ...(eventStream !== undefined ? { eventStream } : {}),
   });
 }

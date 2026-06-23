@@ -45,7 +45,7 @@ import {
 import { authenticateEventClient } from "./auth.js";
 import type { EventHub } from "./hub.js";
 import { DEFAULT_HEARTBEAT_INTERVAL_MS, startHeartbeat } from "./heartbeat.js";
-import { negotiate, parseHello } from "./protocol.js";
+import { EVENT_PROTOCOL, negotiate, parseHello } from "./protocol.js";
 
 /** WebSocket close code for a refused/abandoned handshake (RFC 6455 "policy violation"). */
 const HANDSHAKE_CLOSE_CODE = 1008;
@@ -81,6 +81,13 @@ export interface EventStreamOptions {
   heartbeatIntervalMs?: number;
   /** How long to wait for the opening `hello` before refusing. Defaults to 10s. */
   helloTimeoutMs?: number;
+  /**
+   * The server's event-protocol version to negotiate against. Defaults to
+   * {@link EVENT_PROTOCOL}; overridable so a test can exercise the N-1 window's
+   * refusal branches (which, at the shipped `EVENT_PROTOCOL`, no valid client
+   * `hello` can reach).
+   */
+  serverProtocol?: number;
 }
 
 /**
@@ -96,6 +103,7 @@ export async function registerEventStream(
 ): Promise<void> {
   const heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
   const helloTimeoutMs = options.helloTimeoutMs ?? DEFAULT_HELLO_TIMEOUT_MS;
+  const serverProtocol = options.serverProtocol ?? EVENT_PROTOCOL;
 
   await scope.register(async (events) => {
     await events.register(fastifyWebsocket);
@@ -124,11 +132,19 @@ export async function registerEventStream(
         const db = request.server.db;
         const log = request.log;
 
+        // The handshake settles exactly once: whichever of the opening `hello`
+        // message or the hello-timeout fires first wins, and the other becomes a
+        // no-op. This keeps the timer/listener pair leak- and double-send-free
+        // regardless of ws delivery ordering.
+        let settled = false;
+
         // Wait for the opening hello before registering/heart-beating. A silent
         // client is refused once the timeout fires (the heartbeat that would
         // otherwise reap it only starts after accept).
         const helloTimer = setTimeout(() => {
-          const refusal = negotiate(null);
+          if (settled) return;
+          settled = true;
+          const refusal = negotiate(null, serverProtocol);
           socket.send(JSON.stringify(refusal.frame));
           log.warn(
             { event: "event_stream_refused", clientId, reason: "hello_timeout" },
@@ -142,9 +158,11 @@ export async function registerEventStream(
         socket.on("close", () => clearTimeout(helloTimer));
 
         socket.once("message", (data: unknown) => {
+          if (settled) return;
+          settled = true;
           clearTimeout(helloTimer);
           const hello = parseHello(String(data));
-          const result = negotiate(hello);
+          const result = negotiate(hello, serverProtocol);
 
           if (result.kind === "refuse") {
             socket.send(JSON.stringify(result.frame));
@@ -164,17 +182,31 @@ export async function registerEventStream(
 
           // Accepted. `hello` is non-null here (negotiate refuses a null hello);
           // the guard satisfies the type system without a non-null assertion.
+          // Persist the connect bookkeeping *before* sending `accept` or
+          // registering, so a write failure (e.g. the row was deleted between
+          // auth and handshake) closes cleanly rather than leaving the client
+          // believing it is connected to a server that never registered it.
+          try {
+            if (hello !== null) {
+              recordClientAgentVersion(db, clientId, hello.agentVersion, new Date());
+            }
+            // A compatible connect clears any stale update-required flag (the
+            // client has since been updated to an in-window protocol).
+            if (client.updateRequired) {
+              setClientUpdateRequired(db, clientId, false);
+            }
+            touchClientLastSeen(db, clientId, new Date());
+          } catch (err) {
+            log.error(
+              { event: "event_stream_error", clientId, err },
+              "failed to record event-stream connect state; closing",
+            );
+            socket.close(1011, "connect bookkeeping failed");
+            return;
+          }
+
           socket.send(JSON.stringify(result.frame));
-          if (hello !== null) {
-            recordClientAgentVersion(db, clientId, hello.agentVersion, new Date());
-          }
-          // A compatible connect clears any stale update-required flag (the
-          // client has since been updated to an in-window protocol).
-          if (client.updateRequired) {
-            setClientUpdateRequired(db, clientId, false);
-          }
           hub.register(clientId, socket);
-          touchClientLastSeen(db, clientId, new Date());
           log.info(
             { event: "event_stream_open", clientId, eventProtocol: result.frame.eventProtocol },
             "client event stream opened",
