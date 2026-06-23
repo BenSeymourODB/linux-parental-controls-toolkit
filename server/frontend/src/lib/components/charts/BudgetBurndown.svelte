@@ -52,7 +52,11 @@
   const VIEW_H = 40;
 
   // The remaining-budget polyline + "now" marker, in the SVG's viewBox units.
-  // `null` when there is no overall budget to burn down.
+  // `null` when there is no overall budget to burn down. The curve is built from
+  // the raw timeline intervals (not the API's scalar `consumedSeconds`) because
+  // it needs the *step shape* over the window — when time was burned, not just
+  // the total. The scalar still drives the textual summary, and the two agree by
+  // construction (identical half-open clamp, same window).
   let curve = $derived.by(() => {
     const data = burndown;
     const samples = timeline?.samples ?? [];
