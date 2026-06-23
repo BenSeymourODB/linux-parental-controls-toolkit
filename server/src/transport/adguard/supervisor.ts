@@ -271,25 +271,36 @@ export class AdGuardManagedSupervisor {
 
   /** Spawn the child and wire its exit/error handlers. */
   #spawnChild(): void {
+    // A stop() that lands while bootstrap() was still awaiting the first-run
+    // download (state `fetching`, no child yet) must not spawn an unsupervised
+    // process the already-returned stop() can never reap.
+    if (this.#stopping) return;
+
     this.#settle("starting", null, "starting AdGuard Home");
     const args = ["--no-check-update", "--config", this.#configPath, "--work-dir", this.#workDir];
     const child = this.#deps.spawn(this.#binaryPath, args);
     this.#child = child;
     this.#startedAt = this.#deps.now().getTime();
 
-    child.onError((err) => this.#onSpawnError(err));
-    child.onExit((code, signal) => this.#onExit(code, signal));
+    // Capture `child` so a stale event from a previous process is ignored. Node
+    // emits BOTH `error` and `exit` for a failed spawn; whichever fires first
+    // nulls `#child`, so the second sees `#child !== child` and is a no-op —
+    // preventing a spawn failure from also triggering a restart.
+    child.onError((err) => this.#onSpawnError(child, err));
+    child.onExit((code, signal) => this.#onExit(child, code, signal));
 
     this.#settle("running", null, `AdGuard Home running (pid ${String(child.pid ?? "unknown")})`);
   }
 
-  #onSpawnError(err: Error): void {
+  #onSpawnError(child: ManagedProcess, err: Error): void {
+    if (this.#child !== child) return;
     this.#child = null;
     this.#releaseExitWaiters();
     this.#settle("failed", err.message, `AdGuard Home failed to start: ${err.message}`, "error");
   }
 
-  #onExit(code: number | null, signal: NodeJS.Signals | null): void {
+  #onExit(child: ManagedProcess, code: number | null, signal: NodeJS.Signals | null): void {
+    if (this.#child !== child) return;
     this.#child = null;
     this.#releaseExitWaiters();
 

@@ -204,6 +204,7 @@ describe("acquireAdGuardHome", () => {
       acquireAdGuardHome({ dataDir: DATA_DIR, version: VERSION }, { fetch, ...deps }),
     ).rejects.toBeInstanceOf(AdGuardChecksumError);
     expect(files.has(BINARY_PATH)).toBe(false);
+    expect(files.has(SENTINEL_PATH)).toBe(false); // nothing persisted on mismatch
   });
 
   it("throws when checksums.txt has no entry for the asset", async () => {

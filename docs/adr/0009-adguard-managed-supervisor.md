@@ -66,9 +66,14 @@ child process is the simplest correct answer.
 
 - The dashboard image must ship nothing AdGuard-related; the binary lives only
   in the data volume, fetched at runtime. `license-guard` stays green.
-- AdGuard Home's own auto-update is left enabled at the binary level by intent
-  for an unpinned install; a pinned `PCT_ADGUARD_VERSION` reconciles on a
-  sentinel mismatch (mirroring the Ansible-core pin).
+- The managed instance is run with `--no-check-update`: the dashboard, not
+  AdGuard Home, owns the binary's version, so its self-updater is disabled to
+  keep the on-disk binary in step with the version sentinel. Updates are
+  dashboard-driven — set or raise `PCT_ADGUARD_VERSION` and the binary is
+  re-fetched on the next boot's sentinel mismatch (mirroring the Ansible-core
+  pin). An unpinned install fetches the latest release on first run and then
+  stays on it until a pin is set; "always track latest" is intentionally not a
+  silent background auto-update.
 - The **live REST wiring** — feeding the running instance into
   `AdGuardService.getClient()` and polling its health — is deferred to a tracked
   follow-up that #97 builds on; this ADR/PR delivers the fetch + supervision

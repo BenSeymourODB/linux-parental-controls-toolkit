@@ -126,6 +126,25 @@ describe("AdGuardManagedSupervisor.bootstrap", () => {
     expect(sup.status.state).toBe("failed");
     expect(sup.status.detail).toContain("ENOENT");
   });
+
+  it("ignores the exit Node emits after a spawn error (no restart)", async () => {
+    const { spawn, procs } = fakeSpawn();
+    const sup = createAdGuardManagedSupervisor(CONFIG, {
+      acquire: okAcquire,
+      writeSeedConfig: () => true,
+      spawn,
+      delay: () => Promise.resolve(),
+    });
+
+    await sup.bootstrap();
+    // Node emits `error` then `exit` for a failed spawn; the exit must be a no-op.
+    only(procs, 0).triggerError(new Error("ENOENT"));
+    only(procs, 0).triggerExit(null, null);
+    await flush();
+
+    expect(sup.status.state).toBe("failed");
+    expect(procs).toHaveLength(1); // no restart spawned
+  });
 });
 
 describe("AdGuardManagedSupervisor restart-on-exit", () => {
@@ -270,6 +289,31 @@ describe("AdGuardManagedSupervisor.stop", () => {
     await flush();
 
     expect(procs).toHaveLength(1); // no restart spawned
+    expect(sup.status.state).toBe("stopped");
+  });
+
+  it("does not spawn a child if stop() lands during the fetch phase", async () => {
+    const { spawn, procs } = fakeSpawn();
+    let resolveAcquire: (result: AcquireResult) => void = () => undefined;
+    const sup = createAdGuardManagedSupervisor(CONFIG, {
+      acquire: () =>
+        new Promise<AcquireResult>((resolve) => {
+          resolveAcquire = resolve;
+        }),
+      writeSeedConfig: () => true,
+      spawn,
+    });
+
+    const booting = sup.bootstrap(); // suspends awaiting acquire (state: fetching)
+    await sup.stop(); // no child yet → stopped, and #stopping latched
+    resolveAcquire({
+      binaryPath: "/data/adguard/AdGuardHome",
+      version: "v0.107.65",
+      fetched: true,
+    });
+    await booting;
+
+    expect(procs).toHaveLength(0); // the post-fetch spawn was suppressed
     expect(sup.status.state).toBe("stopped");
   });
 });
