@@ -3,8 +3,8 @@
   filter group (pct-filtergroup.conf.j2). One domain per line; e2guardian blocks
   the domain and its subdomains. Managed by #90 — do not hand-edit.
 -#}
-# Managed by pct e2guardian-filtering.yml (#90) for user '{{ item.linuxUsername }}'
-# (uid={{ item.linuxUid }}, filter group {{ item.filterGroup }}). Do not hand-edit.
+# Managed by pct e2guardian-filtering.yml (#90) for user '{{ item.osUsername }}'
+# (ref={{ item.osUserRef }}, filter group {{ item.filterGroup }}). Do not hand-edit.
 {% for site in item.bannedSites %}
 {{ site }}
 {% endfor %}

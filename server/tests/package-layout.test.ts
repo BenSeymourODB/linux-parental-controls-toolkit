@@ -12,6 +12,7 @@ const modules = [
   ["../src/web/index.js", "web"],
   ["../src/api/index.js", "api"],
   ["../src/policy/index.js", "policy"],
+  ["../src/enforcement/index.js", "enforcement"],
   ["../src/events/index.js", "events"],
   ["../src/integrations/index.js", "integrations"],
   ["../src/transport/index.js", "transport"],

@@ -33,7 +33,7 @@ import type { PolicyDb } from "../../policy/db.js";
 import type { ScheduleRow } from "../../policy/repository.js";
 import { redactArgv, type AuditEntry, type AuditSink } from "../audit/index.js";
 
-import type { AnsibleHost, AnsibleRunner, AnsibleRunResult, JsonObject } from "./index.js";
+import type { AnsibleHost, AnsibleRunner, AnsibleRunResult, ExtraVarValue } from "./index.js";
 import { AnsibleError, AnsiblePlaybookFailedError, AnsibleUnreachableError } from "./errors.js";
 
 /** The playbook the runner invokes (resolved under `<ansibleDir>/playbooks/`). */
@@ -57,10 +57,15 @@ const MAX_AUDIT_ERROR_CHARS = 1000;
 
 /** A single supervised user's resolved filter group on a client. */
 export const e2guardianUserFilterSchema = z.object({
-  /** The user's Linux login name on the client. */
-  linuxUsername: z.string().min(1),
-  /** The user's numeric Linux UID — the key the iptables `--uid-owner` match uses. */
-  linuxUid: z.number().int().nonnegative(),
+  /** The user's local login name on the client (`users_on_clients.os_username`). */
+  osUsername: z.string().min(1),
+  /**
+   * The user's OS account reference (`users_on_clients.os_user_ref`) — a uid on
+   * Linux, a SID on Windows (#230). e2guardian/iptables filtering is Linux-only,
+   * so on a managed client this is the numeric uid the iptables `--uid-owner`
+   * match keys on.
+   */
+  osUserRef: z.string().min(1),
   /** e2guardian filter-group number (>= 2; group 1 is the permissive baseline). */
   filterGroup: z.number().int().min(FIRST_MANAGED_FILTER_GROUP),
   /** TCP port this user's filter group listens on; the iptables redirect target. */
@@ -142,9 +147,15 @@ function resolveBannedSites(db: PolicyDb, userId: number): string[] {
  * domain deny gets a managed filter group; users with nothing to block are
  * omitted entirely (their traffic stays on the permissive baseline, so we add
  * neither a group nor an iptables redirect for them). Group numbers and listen
- * ports are assigned deterministically in linux-UID order, so re-running
- * against unchanged policy produces an identical plan — the playbook is
- * idempotent.
+ * ports are assigned deterministically in `listClientLinks` order (ascending
+ * user id), so re-running against unchanged policy produces an identical plan —
+ * the playbook is idempotent.
+ *
+ * Listen ports count up from `proxyPort + 1`. With the 8080 default there is
+ * ample headroom, but a deployment overriding `proxyPort` near the top of the
+ * range with many supervised users could push a `listenPort` past 65535, where
+ * `e2guardianUserFilterSchema.parse` rejects the plan rather than emitting an
+ * invalid port.
  */
 export function buildE2guardianPlan(
   db: PolicyDb,
@@ -160,8 +171,8 @@ export function buildE2guardianPlan(
     if (bannedSites.length === 0) continue;
     const index = users.length;
     users.push({
-      linuxUsername: link.linuxUsername,
-      linuxUid: link.linuxUid,
+      osUsername: link.osUsername,
+      osUserRef: link.osUserRef,
       filterGroup: FIRST_MANAGED_FILTER_GROUP + index,
       listenPort: proxyPort + 1 + index,
       bannedSites,
@@ -172,14 +183,14 @@ export function buildE2guardianPlan(
 }
 
 /** Shape the plan into the nested `--extra-vars` object the playbook reads. */
-function planToExtraVars(plan: E2guardianPlan): JsonObject {
+function planToExtraVars(plan: E2guardianPlan): Record<string, ExtraVarValue> {
   return {
     e2guardian: {
       proxyPort: plan.proxyPort,
       redirectPorts: [...plan.redirectPorts],
       users: plan.users.map((user) => ({
-        linuxUsername: user.linuxUsername,
-        linuxUid: user.linuxUid,
+        osUsername: user.osUsername,
+        osUserRef: user.osUserRef,
         filterGroup: user.filterGroup,
         listenPort: user.listenPort,
         bannedSites: [...user.bannedSites],
@@ -223,6 +234,8 @@ export async function pushE2guardianFiltering(
   const plan = e2guardianPlanSchema.parse(options.plan);
 
   const command = redactArgv(["ansible-playbook", E2GUARDIAN_PLAYBOOK, "--limit", host.hostname]);
+  // `AnsibleHost` carries no SSH port today (the runner uses the inventory
+  // default, 22); revisit this literal if custom client SSH ports ever land.
   const target = { host: host.hostname, port: 22, username: host.sshUser };
   const startedAt = now();
 

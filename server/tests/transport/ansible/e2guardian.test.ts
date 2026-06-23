@@ -36,16 +36,19 @@ import type {
 import type { AuditEntry, AuditSink } from "../../../src/transport/audit/index.js";
 import { testDb, type TestDb } from "../../helpers/db.js";
 
-/** Link a fresh supervised user to `clientId` and return their id. */
+/**
+ * Link a fresh supervised user to `clientId` and return their id. `uid` is the
+ * Linux uid; it is stored as the string `os_user_ref` the link model uses (#230).
+ */
 function addLinkedUser(
   db: TestDb,
   clientId: number,
   displayName: string,
-  linuxUsername: string,
-  linuxUid: number,
+  osUsername: string,
+  uid: number,
 ): number {
   const userId = createUser(db, { displayName }).id;
-  upsertLink(db, userId, clientId, { linuxUsername, linuxUid });
+  upsertLink(db, userId, clientId, { osUsername, osUserRef: String(uid) });
   return userId;
 }
 
@@ -69,8 +72,8 @@ describe("buildE2guardianPlan", () => {
     expect(plan.redirectPorts).toEqual([80, 443]);
     expect(plan.users).toEqual([
       {
-        linuxUsername: "alice",
-        linuxUid: 1001,
+        osUsername: "alice",
+        osUserRef: "1001",
         filterGroup: 2,
         listenPort: DEFAULT_PROXY_PORT + 1,
         bannedSites: ["youtube.com"],
@@ -168,10 +171,10 @@ describe("buildE2guardianPlan", () => {
     db.$client.close();
   });
 
-  it("omits users with nothing to block and assigns groups/ports in UID order", () => {
+  it("omits users with nothing to block and assigns groups/ports in listClientLinks (user-id) order", () => {
     const db = testDb();
     const clientId = createClient(db, { hostname: "mint-01", sshUser: "pct-agent" }).id;
-    // bob has a higher UID but is added first; carol has nothing to block.
+    // bob is created first (lowest user id), carol next (nothing to block), alice last.
     const bob = addLinkedUser(db, clientId, "Bob", "bob", 1002);
     addLinkedUser(db, clientId, "Carol", "carol", 1003);
     const alice = addLinkedUser(db, clientId, "Alice", "alice", 1001);
@@ -183,8 +186,8 @@ describe("buildE2guardianPlan", () => {
 
     const plan = buildE2guardianPlan(db, clientId);
 
-    // alice (uid 1001) sorts before bob (uid 1002); carol omitted.
-    expect(plan.users.map((u) => u.linuxUsername)).toEqual(["alice", "bob"]);
+    // listClientLinks orders by user id, so bob (created first) precedes alice; carol omitted.
+    expect(plan.users.map((u) => u.osUsername)).toEqual(["bob", "alice"]);
     expect(plan.users.map((u) => u.filterGroup)).toEqual([2, 3]);
     expect(plan.users.map((u) => u.listenPort)).toEqual([8081, 8082]);
     db.$client.close();
@@ -219,8 +222,8 @@ const SAMPLE_PLAN: E2guardianPlan = {
   redirectPorts: [80, 443],
   users: [
     {
-      linuxUsername: "alice",
-      linuxUid: 1001,
+      osUsername: "alice",
+      osUserRef: "1001",
       filterGroup: 2,
       listenPort: 8081,
       bannedSites: ["youtube.com"],
@@ -273,8 +276,8 @@ describe("pushE2guardianFiltering", () => {
         redirectPorts: [80, 443],
         users: [
           {
-            linuxUsername: "alice",
-            linuxUid: 1001,
+            osUsername: "alice",
+            osUserRef: "1001",
             filterGroup: 2,
             listenPort: 8081,
             bannedSites: ["youtube.com"],

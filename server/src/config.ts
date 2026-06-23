@@ -20,6 +20,24 @@ import { isValidCronPattern } from "./transport/activitywatch/telemetry.js";
 const LOG_LEVELS = ["trace", "debug", "info", "warn", "error", "fatal", "silent"] as const;
 
 /**
+ * A bare playbook file name — letters, digits, `.`, `_`, `-`, no path
+ * separators — matching the Ansible runner's own `assertSafePlaybookName`
+ * guard (`transport/ansible/index.ts`). Validating the re-apply playbook list
+ * here fails a typo fast at startup; the runner re-checks defensively at run
+ * time.
+ */
+const PLAYBOOK_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
+
+/** Split a comma-separated `PCT_REAPPLY_PLAYBOOKS` value into trimmed names. */
+function splitPlaybookList(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  return value
+    .split(",")
+    .map((name) => name.trim())
+    .filter((name) => name.length > 0);
+}
+
+/**
  * Normalize a `DATABASE_URL` value to a bare filesystem path.
  *
  * `DATABASE_URL` is accepted in two interchangeable forms: a bare path
@@ -126,6 +144,28 @@ const settingsSchema = z
      */
     ansibleDir: z.string().min(1).default("/data/ansible"),
     /**
+     * Pinned `ansible-core` version installed into the first-run venv
+     * (`PCT_ANSIBLE_CORE_VERSION`). The boot-time bootstrap (#39) runs
+     * `pip install ansible-core==<version>` and records it in a sentinel under
+     * the venv so an image upgrade that bumps this default reconciles the venv
+     * (`docs/server-deployment.md` → "Upgrade path"). A bare version string so
+     * the install is reproducible; validated here so a typo fails fast.
+     */
+    ansibleCoreVersion: z
+      .string()
+      .regex(/^[0-9][0-9A-Za-z.-]*$/, {
+        message: "must be a bare version like 2.18.1",
+      })
+      .default("2.18.1"),
+    /**
+     * Read-only, in-image source directory the first-run bootstrap (#39) syncs
+     * playbooks from into `<ansibleDir>/playbooks/` (`PCT_ANSIBLE_PLAYBOOK_SRC`).
+     * Defaults to the path the image is expected to ship them at. A missing
+     * source is a logged no-op (the venv still bootstraps), so the dashboard
+     * starts cleanly before the playbooks are packaged into the image.
+     */
+    ansiblePlaybookSourceDir: z.string().min(1).default("/app/ansible/playbooks"),
+    /**
      * Path to the dashboard's SSH **public** key (`PCT_SSH_PUBLIC_KEY_PATH`).
      * The client-enrolment response (#77) returns this so the client can
      * authorize the dashboard in `pct-agent`'s `authorized_keys`. The key pair
@@ -135,6 +175,15 @@ const settingsSchema = z
      * layout (`docs/server-deployment.md` → "Volume layout").
      */
     sshPublicKeyPath: z.string().min(1).default("/data/secrets/ssh/id_ed25519.pub"),
+    /**
+     * Path to the dashboard's SSH **private** key (`PCT_SSH_PRIVATE_KEY_PATH`).
+     * The key pair is generated server-side on first run (#39, the Phase-4
+     * step) if absent; the `transport/ssh` facade authenticates to clients with
+     * it. Defaults to the documented `/data/secrets/ssh` layout, paired with
+     * {@link settingsSchema}'s `sshPublicKeyPath` (`docs/server-deployment.md`
+     * → "Volume layout").
+     */
+    sshPrivateKeyPath: z.string().min(1).default("/data/secrets/ssh/id_ed25519"),
     /**
      * Phase-5 telemetry pull (#86): the croner schedule and per-pass
      * concurrency for opening SSH port-forwards to each client's `aw-server`.
@@ -155,6 +204,87 @@ const settingsSchema = z
        * (`PCT_TELEMETRY_PULL_CONCURRENCY`). Defaults to 4.
        */
       pullConcurrency: z.coerce.number().int().positive().default(4),
+    }),
+    /**
+     * Phase-6 periodic re-apply / tamper-reversion scheduler (#93): the croner
+     * cadence and the ordered list of playbooks re-run against the fleet to
+     * revert local config drift. Consumed by the activation wiring once the
+     * first-run venv (#39) and the playbooks (#90/#91/#92) land — like the
+     * `telemetry` block above, it is parsed-and-ready ahead of that wiring.
+     */
+    reapply: z.object({
+      /**
+       * croner pattern for the re-apply pass (`PCT_REAPPLY_CRON`). Validated
+       * here so a typo fails fast. Defaults to hourly — drift reversion is not
+       * latency-critical.
+       */
+      cron: z
+        .string()
+        .min(1)
+        .default("0 * * * *")
+        .refine(isValidCronPattern, { message: "must be a valid cron pattern (e.g. 0 * * * *)" }),
+      /**
+       * Comma-separated playbook names to re-apply (`PCT_REAPPLY_PLAYBOOKS`,
+       * e.g. `e2guardian.yml,activitywatch.yml`). Defaults to empty — every
+       * pass is a no-op until the Phase-6 playbooks exist.
+       */
+      playbooks: z.preprocess(
+        splitPlaybookList,
+        z
+          .array(
+            z.string().regex(PLAYBOOK_NAME_PATTERN, {
+              message: "must be a bare playbook file name (letters, digits, '.', '_', '-')",
+            }),
+          )
+          .default([]),
+      ),
+    }),
+    /**
+     * Automatic pre-migration policy-store snapshot (#166). Before the
+     * in-process migrator runs on boot (`policy/db.ts`), an existing
+     * `policy.sqlite` with pending migrations is snapshotted via `VACUUM INTO`
+     * so a regretted upgrade is recoverable — the automatic counterpart to the
+     * manual `scripts/pct-data-backup.sh` (#120). A fresh DB (nothing yet to
+     * protect) is skipped regardless.
+     */
+    preMigrationBackup: z.object({
+      /**
+       * Master switch (`PCT_PRE_MIGRATION_BACKUP`). Defaults on; an operator who
+       * snapshots `/data` externally (e.g. dataset snapshots) can disable it.
+       */
+      enabled: z.stringbool().default(true),
+      /**
+       * Where snapshots are written (`PCT_PRE_MIGRATION_BACKUP_DIR`). Optional;
+       * when unset, `createDb` derives `<dirname(DATABASE_URL)>/backups` (i.e.
+       * the documented `/data/backups`).
+       */
+      dir: z.string().min(1).optional(),
+      /**
+       * How many snapshots to retain (`PCT_PRE_MIGRATION_BACKUP_RETAIN`); older
+       * ones are pruned after each new snapshot. Defaults to 5.
+       */
+      retain: z.coerce.number().int().positive().default(5),
+    }),
+    /**
+     * Phase-3 client health probe (#198): how the `GET /api/clients/health`
+     * list walk bounds its live SSH fan-out. Parsed-and-ready ahead of the
+     * prober wiring (#39) — like the `telemetry`/`reapply` blocks above — so the
+     * page can't take ~N×`readyTimeout` once a fleet of offline hosts is probed.
+     */
+    clientHealth: z.object({
+      /**
+       * Max clients probed concurrently per list pass
+       * (`PCT_CLIENT_HEALTH_PROBE_CONCURRENCY`). Mirrors
+       * `telemetry.pullConcurrency`; defaults to 4.
+       */
+      probeConcurrency: z.coerce.number().int().positive().default(4),
+      /**
+       * Per-list probe deadline in ms (`PCT_CLIENT_HEALTH_PROBE_DEADLINE_MS`): a
+       * client that hasn't answered by then is reported un-probed so one wedged
+       * host can't stall the page. `0` disables it. Defaults to 15000 (≈1.5× the
+       * SSH `readyTimeout`).
+       */
+      probeDeadlineMs: z.coerce.number().int().nonnegative().default(15_000),
     }),
     adguard: adguardSchema,
   })
@@ -213,10 +343,26 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
     adminUsername: env.PCT_ADMIN_USERNAME,
     adminPassword: env.PCT_ADMIN_PASSWORD,
     ansibleDir: env.PCT_ANSIBLE_DIR,
+    ansibleCoreVersion: env.PCT_ANSIBLE_CORE_VERSION,
+    ansiblePlaybookSourceDir: env.PCT_ANSIBLE_PLAYBOOK_SRC,
     sshPublicKeyPath: env.PCT_SSH_PUBLIC_KEY_PATH,
+    sshPrivateKeyPath: env.PCT_SSH_PRIVATE_KEY_PATH,
     telemetry: {
       pullCron: env.PCT_TELEMETRY_PULL_CRON,
       pullConcurrency: env.PCT_TELEMETRY_PULL_CONCURRENCY,
+    },
+    reapply: {
+      cron: env.PCT_REAPPLY_CRON,
+      playbooks: env.PCT_REAPPLY_PLAYBOOKS,
+    },
+    preMigrationBackup: {
+      enabled: env.PCT_PRE_MIGRATION_BACKUP,
+      dir: env.PCT_PRE_MIGRATION_BACKUP_DIR,
+      retain: env.PCT_PRE_MIGRATION_BACKUP_RETAIN,
+    },
+    clientHealth: {
+      probeConcurrency: env.PCT_CLIENT_HEALTH_PROBE_CONCURRENCY,
+      probeDeadlineMs: env.PCT_CLIENT_HEALTH_PROBE_DEADLINE_MS,
     },
     adguard: {
       mode: env.PCT_ADGUARD_MODE ?? "disabled",

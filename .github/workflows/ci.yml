@@ -101,10 +101,24 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Build SvelteKit frontend (/admin + /app)
+      - name: Install server deps (for the shared /api type check)
+        # `npm run check` (svelte-check) type-checks the frontend's type-only
+        # imports of the inferred zod DTOs from server/src (CLAUDE.md →
+        # "Validation / DTOs"; #53), resolving the server graph's bare imports
+        # (zod, drizzle-orm) from server/node_modules. So the server package
+        # must be installed for the *check*. The production build (`npm run
+        # build` = `vite build`) erases the type-only imports and needs neither
+        # the server source nor its deps — which is why the Docker image's
+        # frontend stage builds standalone.
+        run: |
+          if [ -f server/package.json ]; then
+            cd server && npm ci
+          fi
+
+      - name: Build + check + test the SvelteKit frontend (/admin + /app)
         run: |
           if [ -f server/frontend/package.json ]; then
-            cd server/frontend && npm ci && npm run build
+            cd server/frontend && npm ci && npm run check && npm test && npm run build
           else
             echo "Frontend not yet scaffolded — skipping"
           fi
@@ -115,22 +129,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: ShellCheck (client scripts)
+      - name: ShellCheck (client + scripts)
         run: |
-          if compgen -G "client/**/*.sh" > /dev/null 2>&1 || compgen -G "client/*.sh" > /dev/null 2>&1; then
-            find client/ -name "*.sh" -print0 | xargs -0 shellcheck
+          mapfile -t sh_files < <(find client/ scripts/ -name "*.sh" 2>/dev/null)
+          if [ "${#sh_files[@]}" -gt 0 ]; then
+            shellcheck "${sh_files[@]}"
           else
-            echo "No shell scripts in client/ yet — skipping ShellCheck"
+            echo "No shell scripts yet — skipping ShellCheck"
           fi
 
   client-tests:
-    name: Client shell tests (bats)
+    name: Shell tests (bats)
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install bats
-        run: sudo apt-get update && sudo apt-get install -y bats
+      - name: Install bats + sqlite3
+        run: sudo apt-get update && sudo apt-get install -y bats sqlite3
 
       - name: bats (client/tests)
         run: |
@@ -138,6 +153,14 @@ jobs:
             bats client/tests/
           else
             echo "No client bats tests yet — skipping"
+          fi
+
+      - name: bats (scripts/tests)
+        run: |
+          if compgen -G "scripts/tests/*.bats" > /dev/null 2>&1; then
+            bats scripts/tests/
+          else
+            echo "No scripts bats tests yet — skipping"
           fi
 
   ansible-lint:

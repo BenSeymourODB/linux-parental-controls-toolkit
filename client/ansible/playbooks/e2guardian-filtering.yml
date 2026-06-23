@@ -51,13 +51,13 @@
     - name: Render each supervised user's banned-site list
       ansible.builtin.template:
         src: "{{ playbook_dir }}/templates/pct-bannedsites.j2"
-        dest: "{{ pct_e2g_managed_dir }}/{{ item.linuxUsername }}.bannedsites"
+        dest: "{{ pct_e2g_managed_dir }}/{{ item.osUsername }}.bannedsites"
         owner: root
         group: root
         mode: "0644"
       loop: "{{ e2guardian.users }}"
       loop_control:
-        label: "{{ item.linuxUsername }} ({{ item.bannedSites | length }} site(s))"
+        label: "{{ item.osUsername }} ({{ item.bannedSites | length }} site(s))"
       notify: Reload e2guardian
 
     - name: Render each supervised user's filter group config
@@ -69,7 +69,7 @@
         mode: "0644"
       loop: "{{ e2guardian.users }}"
       loop_control:
-        label: "{{ item.linuxUsername }} -> group {{ item.filterGroup }}"
+        label: "{{ item.osUsername }} -> group {{ item.filterGroup }}"
       notify: Reload e2guardian
 
     - name: Render the managed listen-port block for e2guardian.conf
@@ -95,15 +95,15 @@
         chain: OUTPUT
         protocol: tcp
         match: owner
-        uid_owner: "{{ item.0.linuxUid }}"
+        uid_owner: "{{ item.0.osUserRef }}"
         destination_port: "{{ item.1 }}"
         jump: REDIRECT
         to_ports: "{{ item.0.listenPort }}"
-        comment: "pct e2guardian {{ item.0.linuxUsername }} dport {{ item.1 }} (#90)"
+        comment: "pct e2guardian {{ item.0.osUsername }} dport {{ item.1 }} (#90)"
         state: present
       loop: "{{ e2guardian.users | product(e2guardian.redirectPorts) | list }}"
       loop_control:
-        label: "{{ item.0.linuxUsername }} :{{ item.1 }} -> {{ item.0.listenPort }}"
+        label: "{{ item.0.osUsername }} :{{ item.1 }} -> {{ item.0.listenPort }}"
       notify: Persist iptables rules
 
   handlers:
@@ -113,6 +113,9 @@
         state: reloaded
 
     - name: Persist iptables rules
+      # Persistence side-effect, not a config change of its own — it only fires
+      # when an iptables task above already reported changed, so reporting it as
+      # unchanged keeps the run summary honest.
       ansible.builtin.command:
         cmd: netfilter-persistent save
-      changed_when: true
+      changed_when: false

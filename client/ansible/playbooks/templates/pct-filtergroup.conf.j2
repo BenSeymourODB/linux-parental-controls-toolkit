@@ -5,10 +5,10 @@
   number + listen port deterministically. Managed by #90 — do not hand-edit.
 -#}
 # Managed by pct e2guardian-filtering.yml (#90).
-# Filter group {{ item.filterGroup }} for supervised user '{{ item.linuxUsername }}'
-# (uid={{ item.linuxUid }}); traffic arrives on listen port {{ item.listenPort }}.
-groupname = 'pct-{{ item.linuxUsername }}'
+# Filter group {{ item.filterGroup }} for supervised user '{{ item.osUsername }}'
+# (ref={{ item.osUserRef }}); traffic arrives on listen port {{ item.listenPort }}.
+groupname = 'pct-{{ item.osUsername }}'
 groupmode = 1
 naughtynesslimit = 9999
 reportinglevel = 0
-.Include<{{ "/etc/e2guardian/pct.d/" ~ item.linuxUsername ~ ".bannedsites" }}>
+.Include<{{ "/etc/e2guardian/pct.d/" ~ item.osUsername ~ ".bannedsites" }}>

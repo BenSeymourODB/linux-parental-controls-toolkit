@@ -58,6 +58,7 @@ container.
 ├── adguard/                    # populated on first run if enabled
 │   ├── AdGuardHome             # binary fetched from upstream releases
 │   └── conf/
+├── backups/                    # automatic pre-migration snapshots (#166)
 └── logs/
 ```
 
@@ -86,15 +87,29 @@ idempotently:
    idempotent — it tracks applied migrations in its own journal — so the
    entrypoint itself runs no migration step, and the runtime and migrations
    always open the same `DATABASE_URL` file with no double-migration hazard
-   (issues #49, #39).
-2. **Ansible bootstrap** — if `/data/ansible/venv` is missing, create it
-   and `pip install ansible-core` (downloaded from PyPI at runtime, not
-   from the image). Sync `playbooks/` from the image. The directory root is
+   (issues #49, #39). **Before** applying any *pending* migration to an existing
+   store, the server first takes an automatic pre-migration snapshot of
+   `policy.sqlite` (issue #166) — see "Backup and restore" → "Automatic
+   pre-migration snapshot" below — so a regretted upgrade is recoverable; a
+   fresh or already-up-to-date database is skipped.
+2. **Ansible bootstrap** — the Node server ensures the venv **in-process on
+   boot** (issue #39), mirroring the in-process migrator and SSH keygen above:
+   if `<PCT_ANSIBLE_DIR>/venv/bin/ansible-playbook` is missing it creates the
+   venv and `pip install ansible-core==<PCT_ANSIBLE_CORE_VERSION>` (downloaded
+   from PyPI at runtime, not bundled in the image), then records the version in
+   a sentinel inside the venv so an image upgrade that bumps the pin reconciles
+   it (see "Upgrade path"). It also syncs `playbooks/` from the image's
+   read-only copy (`PCT_ANSIBLE_PLAYBOOK_SRC`) — a missing source is a logged
+   no-op. `python3`/`pip`/`ansible-playbook` are all driven **as subprocesses**,
+   never linked in-process (`docs/licensing-analysis.md`); the image ships only
+   a stock `python3-venv` for this, no Ansible binary. The directory root is
    `PCT_ANSIBLE_DIR` (default `/data/ansible`); the Phase-6 runner
-   (`transport/ansible`) execs `ansible-playbook` from
-   `<PCT_ANSIBLE_DIR>/venv/bin/` against playbooks in
-   `<PCT_ANSIBLE_DIR>/playbooks/` — always as a subprocess, never linked
-   in-process (`docs/licensing-analysis.md`).
+   (`transport/ansible`) execs `ansible-playbook` from `<PCT_ANSIBLE_DIR>/venv/
+   bin/` against playbooks in `<PCT_ANSIBLE_DIR>/playbooks/`. The bootstrap runs
+   in the background after the HTTP listener is up (a slow `pip install` does not
+   delay startup) and never crashes the process: a network-less first run leaves
+   Ansible disabled with the reason surfaced at `GET /api/system/ansible` for the
+   admin UI.
 3. **AdGuard Home bootstrap** — driven by `PCT_ADGUARD_MODE` (see
    "AdGuard Home deployment modes" below). In `managed` mode, the
    first-time fetch downloads the latest stable release from
@@ -104,16 +119,21 @@ idempotently:
    the dashboard skips the download entirely and validates that it can
    reach the configured AdGuard Home instance's REST API. In `disabled`
    mode (the default), neither happens.
-4. **SSH key bootstrap** — if `/data/secrets/ssh/id_ed25519` is absent,
-   generate one. The public key is shown in the dashboard's "Add client"
-   flow for the admin to install on each new client (or, more commonly,
-   for the client install script to fetch via a one-time enrolment token).
-   Its path is configurable via `PCT_SSH_PUBLIC_KEY_PATH` (default
-   `/data/secrets/ssh/id_ed25519.pub`); the client-enrolment response
-   (`POST /api/clients/enrol`, #77) returns that public key so the client can
-   authorize the dashboard. Until this Phase-4 keygen step lands the file is
-   absent and the enrol response carries `sshPublicKey: null` — enrolment still
-   succeeds, the client just isn't handed a key to authorize yet.
+4. **SSH key bootstrap** — if `/data/secrets/ssh/id_ed25519` is absent, the
+   Node server generates an Ed25519 key pair **in-process on boot** (issue #39,
+   via `node:crypto` — the runtime image ships no `ssh-keygen` binary, mirroring
+   the in-process migrator above). The private key is written `0600` at
+   `PCT_SSH_PRIVATE_KEY_PATH` (default `/data/secrets/ssh/id_ed25519`) and the
+   public key `0644` at `PCT_SSH_PUBLIC_KEY_PATH` (default
+   `/data/secrets/ssh/id_ed25519.pub`). The step is idempotent — an existing key
+   is **never** regenerated, so clients that already authorized it keep working.
+   The public key is shown in the dashboard's "Add client" flow for the admin to
+   install on each new client (or, more commonly, for the client install script
+   to fetch via a one-time enrolment token): the client-enrolment response
+   (`POST /api/clients/enrol`, #77) returns it so the client can authorize the
+   dashboard. If key generation fails (e.g. an unwritable data volume) the
+   dashboard still starts and the enrol response carries `sshPublicKey: null`
+   until the problem is fixed.
 5. Start the Node server on `0.0.0.0:8000` (default).
 
 If any of the optional downloads fail (no network, etc.), the dashboard
@@ -245,7 +265,12 @@ volumes:
 For LAN-only access, exposing port 8000 directly is fine. For external
 access, terminate TLS at a reverse proxy (TrueNAS's built-in or a
 separate Nginx Proxy Manager / Caddy instance) and put the dashboard
-behind authentication.
+behind authentication. See
+[`reverse-proxy-tls.md`](reverse-proxy-tls.md) for a full guide —
+copy-pasteable Caddy / nginx / Traefik configs, how to proxy the
+`/api/events/stream` WebSocket, the connectivity model (the proxy fronts
+the HTTP surface only; SSH to clients stays LAN-side), and the
+application-layer caveats behind a proxy.
 
 The reverse proxy is also where volumetric/DoS protection belongs — the
 dashboard does not rate-limit by request volume. It does apply a small
@@ -307,15 +332,97 @@ limiting.
 
 ## Backup and restore
 
-The entire deployable state lives under `/data`. A backup is a snapshot
-or `tar` of that volume. TrueNAS SCALE's dataset snapshots handle this
-natively for the volume that backs `pct_data`. Restoration is restoring
-the snapshot and starting the container; no other state is held inside
-the image.
+The entire deployable state lives under `/data`, and most of it is
+**regenerated on first run** (see "First-run setup"): the Ansible venv is
+`pip`-installed, the playbooks are synced from the image, and the AdGuard Home
+binary is refetched from upstream. A useful backup therefore captures only the
+**non-regenerable** state, and must capture the policy store *consistently* — a
+hot `cp` of a live SQLite file can grab a torn page or miss an un-checkpointed
+WAL and restore to corruption.
+
+`scripts/pct-data-backup.sh` does both. It takes a transactionally consistent
+snapshot of `policy.sqlite` via SQLite's online backup (`sqlite3 … ".backup"`,
+safe even while the dashboard is running) and packs the non-regenerable state
+into one owner-only `tar.gz`:
+
+| Path | In a backup? | Why |
+|---|---|---|
+| `policy.sqlite` | ✅ consistent snapshot | the canonical policy store |
+| `secrets/` | ✅ verbatim (perms preserved) | SSH key + API keys; losing the SSH key means re-authorizing every client |
+| `adguard/conf/` | ✅ if present | managed-mode config the dashboard owns |
+| `ansible/inventory.yml` | ✅ if present | the dashboard's inventory |
+| `ansible/venv/`, `ansible/playbooks/` | ❌ | reinstalled / synced on first run |
+| `adguard/AdGuardHome` (binary) | ❌ | refetched from upstream on first run |
+| `logs/` | ❌ | runtime logs, not state |
+
+```bash
+# Back up the running deployment's volume (archive defaults to ./pct-data-backup-<UTC>.tar.gz):
+scripts/pct-data-backup.sh backup --data-dir /data --output /backups/pct-$(date -u +%F).tar.gz
+
+# Restore — stop the dashboard first so nothing is writing /data, then:
+docker compose stop dashboard
+scripts/pct-data-backup.sh restore --data-dir /data --force /backups/pct-2026-06-19.tar.gz
+docker compose start dashboard   # first-run setup re-creates the venv / AdGuard binary
+```
+
+Restore refuses a non-empty `--data-dir` without `--force` so it can't clobber a
+live deployment by accident. With `--force` it **replaces** the in-scope paths
+(`policy.sqlite` and its WAL/SHM sidecars, `secrets/`, `adguard/conf/`,
+`ansible/inventory.yml`) wholesale rather than merging onto whatever was there —
+so a restore reproduces exactly the backed-up state and never resurrects a
+rotated key or replays a stale WAL — while leaving the regenerable siblings (the
+Ansible venv, the AdGuard binary) untouched. It then re-runs `PRAGMA
+integrity_check` on the restored database. The host needs `sqlite3` and `tar` on
+its `PATH`.
+
+If your storage does volume-level snapshots (e.g. TrueNAS SCALE dataset
+snapshots of `pct_data`), those remain a valid coarse backup of the whole
+volume — but take them with the container stopped, since they copy
+`policy.sqlite` at the file level rather than through the SQLite backup API.
+
+### Automatic pre-migration snapshot
+
+`scripts/pct-data-backup.sh` is the *manual* path. The dashboard also takes an
+**automatic** snapshot at the one moment a backup matters most and is easiest to
+forget — a server upgrade that ships new schema migrations (issue #166).
+
+On boot, **before** the in-process migrator (see "First-run setup" step 1)
+applies any *pending* migration to an already-migrated `policy.sqlite`, the
+server snapshots it with SQLite's `VACUUM INTO` (a transactionally consistent,
+standalone copy — never a hot file copy) to
+`/data/backups/pre-migrate-<UTC>.sqlite`. A fresh database — or one already at
+the current schema — is skipped: there is nothing to lose. The last
+`PCT_PRE_MIGRATION_BACKUP_RETAIN` snapshots (default 5) are kept; older ones are
+pruned.
+
+If a migration then fails, the server **does not start serving on a
+half-migrated database** — it logs the failure and exits — and the snapshot is
+left in place. To recover, stop the container, restore the named snapshot over
+`policy.sqlite`, and start the **prior** image tag:
+
+```bash
+docker compose stop dashboard
+# Restore a specific pre-migration snapshot as the policy store:
+cp /data/backups/pre-migrate-20260620T091500123Z.sqlite /data/policy.sqlite
+rm -f /data/policy.sqlite-wal /data/policy.sqlite-shm   # drop stale sidecars
+# Pin docker-compose back to the previous image tag, then:
+docker compose start dashboard
+```
+
+The behaviour is controlled by `PCT_PRE_MIGRATION_BACKUP` (default `true`),
+`PCT_PRE_MIGRATION_BACKUP_DIR` (default `/data/backups`), and
+`PCT_PRE_MIGRATION_BACKUP_RETAIN` (default `5`). Snapshotting is best-effort: if
+it cannot write (e.g. an unwritable `/data/backups`) the server logs the error
+loudly and still migrates — the migrator's own failure remains the boot health
+gate — so disable it only if you snapshot `/data` externally.
 
 ## Upgrade path
 
 `docker pull` a newer image tag and restart. The server applies any new
-migrations in-process on boot (see "First-run setup" step 1). The Ansible venv inside
+migrations in-process on boot (see "First-run setup" step 1) — taking an
+automatic pre-migration snapshot first (see "Backup and restore" → "Automatic
+pre-migration snapshot"), so a regretted upgrade is recoverable. If a migration
+fails, the server exits rather than serving a half-migrated database; restore the
+snapshot and start the previous tag. The Ansible venv inside
 `/data/ansible/venv` is pinned per image release; upgrades reconcile it
 on first start under the new tag.

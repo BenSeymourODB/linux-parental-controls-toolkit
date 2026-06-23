@@ -12,6 +12,6 @@
 # Managed by pct e2guardian-filtering.yml (#90). Generated — do not hand-edit.
 # Base permissive proxy (filter group 1) listens on {{ e2guardian.proxyPort }}.
 {% for user in e2guardian.users %}
-# group {{ user.filterGroup }} ({{ user.linuxUsername }}, uid={{ user.linuxUid }}) <- listen port {{ user.listenPort }}
+# group {{ user.filterGroup }} ({{ user.osUsername }}, ref={{ user.osUserRef }}) <- listen port {{ user.listenPort }}
 filterports = {{ user.listenPort }}
 {% endfor %}
