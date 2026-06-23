@@ -102,6 +102,15 @@ export {
   groupExceptionResponseSchema,
   type CreateGroupExceptionRequest,
   type GroupExceptionResponse,
+  // "Add time today" same-day adjustment (#257)
+  adjustTimeTodaySchema,
+  timeTodayResponseSchema,
+  clientAdjustmentResultSchema,
+  toTimeLeftCommand,
+  TIME_TODAY_MAX_SECONDS,
+  type AdjustTimeTodayRequest,
+  type TimeTodayResponse,
+  type ClientAdjustmentResultDto,
 } from "./policy/index.js";
 
 // Client-enrolment DTOs (#77): the admin token-mint + install-script enrol

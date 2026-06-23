@@ -60,6 +60,19 @@ pct-agent ALL=(root) NOPASSWD: /usr/bin/timekpra
 EOF
   chmod 440 "${SUDOERS_DIR}/pct-agent"
 
+  # Timekpr-nExT client-indicator autostart entry (#268). The getent stub
+  # resolves every supervised user's home to STUB_AGENT_HOME, so the per-user
+  # autostart check finds it here.
+  mkdir -p "${STUB_AGENT_HOME}/.config/autostart"
+  cat >"${STUB_AGENT_HOME}/.config/autostart/timekpr-client.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Timekpr-nExT Client
+Exec=timekprc --indicator
+Hidden=false
+X-GNOME-Autostart-enabled=true
+EOF
+
   STATE_DIR="${TMP}/state"
   mkdir -p "$STATE_DIR"
   cat >"${STATE_DIR}/pct-client.env" <<'EOF'
@@ -105,6 +118,7 @@ run_selftest() { run env bash "$SCRIPT" "$@"; }
   [[ "$output" == *"[ok] pct-agent service account exists"* ]]
   [[ "$output" == *"[ok] dashboard SSH key authorized for pct-agent"* ]]
   [[ "$output" == *"[ok] timekpra reports status for 'alice'"* ]]
+  [[ "$output" == *"[ok] Timekpr-nExT client indicator autostarts for 'alice'"* ]]
   [[ "$output" == *"[ok] aw-server reachable on 127.0.0.1:5600"* ]]
   [[ "$output" == *"[ok] client enrolled with the dashboard"* ]]
 }
@@ -190,6 +204,23 @@ run_selftest() { run env bash "$SCRIPT" "$@"; }
   STUB_TIMEKPRA_FAIL=1 run_selftest --supervised-user alice
   [ "$status" -eq 1 ]
   [[ "$output" == *"[error] timekpra reports status for 'alice'"* ]]
+}
+
+@test "missing timekpr client indicator autostart -> failure" {
+  rm -f "${STUB_AGENT_HOME}/.config/autostart/timekpr-client.desktop"
+  run_selftest --supervised-user alice
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"[error] Timekpr-nExT client indicator autostarts for 'alice'"* ]]
+  [[ "$output" == *"the time-left indicator won't appear"* ]]
+}
+
+@test "disabled (Hidden=true) timekpr client indicator autostart -> failure" {
+  printf '[Desktop Entry]\nExec=timekprc --indicator\nHidden=true\n' \
+    >"${STUB_AGENT_HOME}/.config/autostart/timekpr-client.desktop"
+  run_selftest --supervised-user alice
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"[error] Timekpr-nExT client indicator autostarts for 'alice'"* ]]
+  [[ "$output" == *"present but disabled"* ]]
 }
 
 @test "aw-server unreachable -> failure" {
