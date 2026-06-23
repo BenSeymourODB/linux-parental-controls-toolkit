@@ -188,6 +188,22 @@ export function recordClientLastSeen(db: PolicyDb, id: number, at: Date): Client
   return db.update(clients).set({ lastSeen: at }).where(eq(clients.id, id)).returning().get();
 }
 
+/**
+ * Refresh a client's reported `agent_version` + `versions_reported_at` from the
+ * value the bridge sends in its event-stream `hello` (#165/#101 heartbeat,
+ * ADR 0007). `agent_version` / `versions_reported_at` are system-observed
+ * inventory columns (#164), not admin-editable, so this writes them directly
+ * rather than going through {@link updateClient}. A no-op if no such client.
+ */
+export function recordClientAgentVersion(
+  db: PolicyDb,
+  id: number,
+  agentVersion: string,
+  at: Date,
+): void {
+  db.update(clients).set({ agentVersion, versionsReportedAt: at }).where(eq(clients.id, id)).run();
+}
+
 // --- User-on-client links --------------------------------------------------
 
 /** All links for a user, ascending by client id. */
