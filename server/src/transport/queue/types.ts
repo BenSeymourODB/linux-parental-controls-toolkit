@@ -35,12 +35,21 @@ export interface NewQueuedAction {
 
 /**
  * The action content an {@link ActionExecutor} performs — the target client and
- * the replay payload, without the queue's own bookkeeping (id / status /
- * attempts / timestamps). Structurally this is exactly {@link NewQueuedAction},
- * so the optimistic-push and the later replay paths hand the executor the same
- * shape whether or not a row has been persisted yet.
+ * the replay payload, without the queue's own bookkeeping (status / attempts /
+ * timestamps). Structurally a superset of {@link NewQueuedAction}, so the
+ * optimistic-push and the later replay paths hand the executor the same shape.
+ *
+ * `id` is the persisted row id: present when {@link import("./drainer.js").drainClient}
+ * builds the action from a stored row, and **absent** on the optimistic
+ * pre-persist push (the row doesn't exist yet). A *deferred-resolve* executor —
+ * one that resolves part of its target on first reconnect and must persist that
+ * resolution so a replay is idempotent — uses `id` to update its own row (see
+ * {@link import("./repository.js").updateActionPayload}).
  */
-export type QueuedAction = Pick<QueuedActionRow, "clientId" | "coalesceKey" | "kind" | "payload">;
+export type QueuedAction = Pick<
+  QueuedActionRow,
+  "clientId" | "coalesceKey" | "kind" | "payload"
+> & { readonly id?: number };
 
 /**
  * Performs the real remote action for one queued item. Resolves on success;
