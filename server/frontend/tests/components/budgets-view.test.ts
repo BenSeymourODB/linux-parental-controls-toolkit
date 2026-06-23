@@ -167,6 +167,21 @@ describe("BudgetsView", () => {
     });
   });
 
+  it("keeps create disabled for a non-numeric minutes value", async () => {
+    render(BudgetsView);
+    await screen.findByText("No budgets yet. Add one above.");
+
+    await fireEvent.change(screen.getByLabelText("Budget user"), { target: { value: "1" } });
+    // Non-numeric text can reach the field (it is `type=text` after the
+    // number-coercion fix); `minutesToSeconds` returns null → create stays gated.
+    await fireEvent.input(screen.getByLabelText("Allowance in minutes"), {
+      target: { value: "abc" },
+    });
+
+    expect(screen.getByRole("button", { name: "Add budget" })).toBeDisabled();
+    expect(createBudget).not.toHaveBeenCalled();
+  });
+
   it("requires a target before an activity-scoped budget can be created", async () => {
     render(BudgetsView);
     await screen.findByText("No budgets yet. Add one above.");

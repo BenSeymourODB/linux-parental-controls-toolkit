@@ -63,6 +63,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("ClientHealthView health list + queue", () => {
@@ -236,7 +237,9 @@ describe("ClientHealthView enrol flow", () => {
       expiresAt: "2026-06-23T12:00:00.000Z",
     });
     const writeText = vi.fn().mockResolvedValue(undefined);
-    Object.assign(navigator, { clipboard: { writeText } });
+    // `vi.stubGlobal` so `afterEach`'s `unstubAllGlobals` restores the original
+    // `navigator` — a bare `Object.assign` would leak the stub into later tests.
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
 
     render(ClientHealthView);
     await screen.findByRole("heading", { name: "Enrol a new client" });

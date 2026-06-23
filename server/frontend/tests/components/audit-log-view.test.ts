@@ -101,6 +101,20 @@ describe("AuditLogView", () => {
     );
   });
 
+  it("omits an invalid client-id filter from the query", async () => {
+    render(AuditLogView);
+    await screen.findByRole("table");
+
+    // Non-numeric / non-positive text can now reach the field (it is `type=text`
+    // since the number-coercion fix); `clientIdFilter()` must drop it, not query.
+    await fireEvent.input(screen.getByLabelText("Filter by client id"), {
+      target: { value: "-3" },
+    });
+    await fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+    await waitFor(() => expect(listAudit).toHaveBeenLastCalledWith({}));
+  });
+
   it("omits a blank client-id filter from the query", async () => {
     render(AuditLogView);
     await screen.findByRole("table");
