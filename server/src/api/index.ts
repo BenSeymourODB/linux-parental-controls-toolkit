@@ -151,6 +151,26 @@ export {
   type ListAuditQuery,
 } from "./audit/index.js";
 
+// Usage-views DTOs (#62): the read-only contract for the admin burndown chart
+// and per-activity timeline. Schemas live in `./usage/dtos.ts` next to the route.
+export {
+  budgetBurndownRowSchema,
+  burndownQuerySchema,
+  burndownResponseSchema,
+  timelineActivitySchema,
+  timelineQuerySchema,
+  timelineResponseSchema,
+  timelineSampleSchema,
+  usageParamsSchema,
+  type BudgetBurndownRow,
+  type BurndownQuery,
+  type BurndownResponse,
+  type TimelineActivity,
+  type TimelineQuery,
+  type TimelineResponse,
+  type TimelineSample,
+} from "./usage/index.js";
+
 // DNS-status DTO (#95): the read-only contract surfacing the active AdGuard mode
 // and its health. Schema lives in `./dns/dtos.ts` next to the route.
 export {

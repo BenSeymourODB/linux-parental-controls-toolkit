@@ -25,6 +25,7 @@ import {
   registerTimeTodayRoutes,
 } from "./policy/index.js";
 import { registerSystemRoutes } from "./system/index.js";
+import { registerUsageRoutes } from "./usage/index.js";
 import { installApiConventions } from "./validation.js";
 
 /** Options the `/api` plugin needs from its host app. */
@@ -73,6 +74,10 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (scope, opt
   // Effective-policy preview (#143): GET /users/:userId/effective. Needs
   // `settings` for the server-default timezone of users with no `tz`.
   registerEffectiveRoutes(scope, opts.settings);
+  // Usage views (#62): admin-only read of per-budget burndown + the
+  // per-activity timeline, the data source for the Phase-5 chart components.
+  // Needs `settings` for the server-default timezone of users with no `tz`.
+  registerUsageRoutes(scope, opts.settings);
   // Save-and-push preview (#64): POST /users/:userId/policy-preview — the
   // side-effect-free "what will change on each client" diff before a save.
   registerPreviewRoutes(scope, opts.settings);

@@ -61,6 +61,13 @@ export type {
   QueuedActionSummary,
 } from "../../../../src/api/clients/health-dtos.js";
 export type {
+  BurndownResponse,
+  BudgetBurndownRow,
+  TimelineResponse,
+  TimelineActivity,
+  TimelineSample,
+} from "../../../../src/api/usage/dtos.js";
+export type {
   ActivityKind,
   MatchType,
   Scope,
