@@ -73,7 +73,12 @@ describe("AdGuardService — disabled mode", () => {
 
 describe("AdGuardService — managed mode", () => {
   it("routes the mode only, deferring the instance to the supervisor (#96)", async () => {
-    const svc = createAdGuardService({ mode: "managed", bindAddr: "0.0.0.0:53", adminPort: 3000 });
+    const svc = createAdGuardService({
+      mode: "managed",
+      bindAddr: "0.0.0.0:53",
+      adminPort: 3000,
+      dataDir: "/data/adguard",
+    });
     expect(svc.mode).toBe("managed");
     expect(svc.status).toMatchObject({
       mode: "managed",

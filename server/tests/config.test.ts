@@ -24,6 +24,35 @@ describe("loadSettings", () => {
     expect(settings.telemetry).toEqual({ pullCron: "*/5 * * * *", pullConcurrency: 4 });
     expect(settings.reapply).toEqual({ cron: "0 * * * *", playbooks: [] });
     expect(settings.clientHealth).toEqual({ probeConcurrency: 4, probeDeadlineMs: 15000 });
+    expect(settings.preMigrationBackup).toEqual({ enabled: true, retain: 5 });
+  });
+
+  describe("pre-migration backup (#166)", () => {
+    it("defaults to enabled with retain 5 and no explicit dir", () => {
+      const { preMigrationBackup } = loadSettings({});
+      expect(preMigrationBackup).toEqual({ enabled: true, retain: 5 });
+      expect(preMigrationBackup.dir).toBeUndefined();
+    });
+
+    it("honours explicit overrides", () => {
+      const { preMigrationBackup } = loadSettings({
+        PCT_PRE_MIGRATION_BACKUP: "false",
+        PCT_PRE_MIGRATION_BACKUP_DIR: "/srv/backups",
+        PCT_PRE_MIGRATION_BACKUP_RETAIN: "3",
+      });
+      expect(preMigrationBackup).toEqual({ enabled: false, dir: "/srv/backups", retain: 3 });
+    });
+
+    it("rejects a non-positive retain count", () => {
+      expect(() => loadSettings({ PCT_PRE_MIGRATION_BACKUP_RETAIN: "0" })).toThrow(SettingsError);
+      expect(() => loadSettings({ PCT_PRE_MIGRATION_BACKUP_RETAIN: "-1" })).toThrow(SettingsError);
+    });
+
+    it("rejects a non-numeric retain count", () => {
+      expect(() => loadSettings({ PCT_PRE_MIGRATION_BACKUP_RETAIN: "lots" })).toThrow(
+        SettingsError,
+      );
+    });
   });
 
   it("honours an explicit PCT_ANSIBLE_DIR", () => {
@@ -187,13 +216,27 @@ describe("loadSettings", () => {
   });
 
   describe("managed mode", () => {
-    it("defaults bind address and admin port", () => {
+    it("defaults bind address, admin port, and data dir (version unset)", () => {
       const settings = loadSettings({ PCT_ADGUARD_MODE: "managed" });
 
       expect(settings.adguard).toEqual({
         mode: "managed",
         bindAddr: "0.0.0.0:53",
         adminPort: 3000,
+        dataDir: "/data/adguard",
+      });
+    });
+
+    it("honours an explicit data dir and pinned version", () => {
+      const settings = loadSettings({
+        PCT_ADGUARD_MODE: "managed",
+        PCT_ADGUARD_DATA_DIR: "/srv/adguard",
+        PCT_ADGUARD_VERSION: "v0.107.65",
+      });
+
+      expect(settings.adguard).toMatchObject({
+        dataDir: "/srv/adguard",
+        version: "v0.107.65",
       });
     });
 

@@ -140,9 +140,15 @@
   {/if}
 
   <form class="filters" onsubmit={applyFilters}>
+    <!--
+      Text (not `type="number"`) so the binding stays a string: `bind:value`
+      on a number input coerces to a number, which breaks the `.trim()` parse
+      in `clientIdFilter()` and silently drops the filter. `inputmode="numeric"`
+      still gives a numeric keypad; `clientIdFilter()` validates the value.
+    -->
     <input
-      type="number"
-      min="1"
+      type="text"
+      inputmode="numeric"
       placeholder="Client id (all)"
       bind:value={clientIdInput}
       aria-label="Filter by client id"

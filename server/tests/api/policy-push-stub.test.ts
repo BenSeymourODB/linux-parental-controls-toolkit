@@ -353,7 +353,12 @@ describe("stub transport push on policy change (#54)", () => {
     await auth({
       method: "PUT",
       url: `/api/users/${userId}/notification-policy`,
-      payload: { enabled: false, soundProfile: "prominent", graceSeconds: 0 },
+      payload: {
+        enabled: false,
+        soundProfile: "prominent",
+        graceSeconds: 0,
+        cadenceOverrides: { homework: { suppressSub5: true } },
+      },
     });
 
     const pushed = pushLines("notification.upserted");
@@ -362,7 +367,14 @@ describe("stub transport push on policy change (#54)", () => {
       clientId,
       userId,
       reason: "notification.upserted",
-      detail: { enabled: false, soundProfile: "prominent", graceSeconds: 0 },
+      // The full effective policy is carried so the cached client copy isn't
+      // missing the cadence override the user just changed (#100/#103).
+      detail: {
+        enabled: false,
+        soundProfile: "prominent",
+        graceSeconds: 0,
+        cadenceOverrides: { homework: { suppressSub5: true } },
+      },
     });
   });
 

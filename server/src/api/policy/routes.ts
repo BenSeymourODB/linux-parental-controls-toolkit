@@ -1362,6 +1362,10 @@ export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushSt
             enabled: row.enabled,
             soundProfile: row.soundProfile,
             graceSeconds: row.graceSeconds,
+            // The full effective policy is pushed "with the rest of policy" and
+            // cached client-side (#100/#103), so carry the cadence overrides the
+            // upsert just persisted — `null` means the built-in cadence.
+            cadenceOverrides: row.cadenceOverridesJson ?? null,
           },
         ),
       );
