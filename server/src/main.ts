@@ -12,6 +12,7 @@
  */
 import { loadSettings } from "./config.js";
 import { ensureServerSshKeyPair } from "./setup/ssh-keys.js";
+import { startAdGuardHealthPoll } from "./transport/adguard/index.js";
 import { buildApp } from "./web/app.js";
 
 const HOST = "0.0.0.0";
@@ -75,6 +76,10 @@ async function main(): Promise<void> {
   // on shutdown by the onClose hook in buildApp.
   if (app.adguardManaged !== null) {
     void app.adguardManaged.bootstrap(app.log);
+    // Poll the supervised instance's health on a cadence (#283) so a crash/
+    // restart surfaces at GET /api/dns. Wired here (not in buildApp) so building
+    // the app starts no timer; buildApp's onClose hook stops it on shutdown.
+    app.adguardHealthPoll = startAdGuardHealthPoll({ service: app.adguard, log: app.log });
   }
 }
 
