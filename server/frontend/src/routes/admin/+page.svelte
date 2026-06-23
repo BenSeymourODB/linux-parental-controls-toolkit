@@ -22,6 +22,7 @@
   import LoginForm from "$lib/components/LoginForm.svelte";
   import DashboardView from "$lib/views/DashboardView.svelte";
   import UsersView from "$lib/views/UsersView.svelte";
+  import UserGroupsView from "$lib/views/UserGroupsView.svelte";
   import ClientsView from "$lib/views/ClientsView.svelte";
   import ClientHealthView from "$lib/views/ClientHealthView.svelte";
   import ActivitiesView from "$lib/views/ActivitiesView.svelte";
@@ -43,6 +44,7 @@
   const navItems: NavItem[] = [
     { id: "dashboard", label: "Dashboard" },
     { id: "users", label: "Users" },
+    { id: "user-groups", label: "User Groups" },
     { id: "clients", label: "Clients" },
     { id: "client-health", label: "Client Health" },
     { id: "links", label: "User ↔ Client links" },
@@ -123,6 +125,8 @@
   >
     {#if activeView === "users"}
       <UsersView />
+    {:else if activeView === "user-groups"}
+      <UserGroupsView />
     {:else if activeView === "clients"}
       <ClientsView />
     {:else if activeView === "client-health"}
