@@ -11,6 +11,7 @@ import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import { registerAuth } from "../auth/index.js";
 import type { Settings } from "../config.js";
 import { registerEventStream, type EventHub } from "../events/index.js";
+import type { TimeTodayAdjuster } from "../transport/policy-push/index.js";
 import type { PolicyPushStub } from "../transport/stub.js";
 import { registerAuditRoutes } from "./audit/index.js";
 import { registerClientEnrolmentRoutes, registerClientHealthRoutes } from "./clients/index.js";
@@ -21,6 +22,7 @@ import {
   registerEffectiveRoutes,
   registerPolicyRoutes,
   registerPreviewRoutes,
+  registerTimeTodayRoutes,
 } from "./policy/index.js";
 import { registerSystemRoutes } from "./system/index.js";
 import { installApiConventions } from "./validation.js";
@@ -41,6 +43,13 @@ export interface ApiPluginOptions {
    * back to the logging stub (#54).
    */
   policyPush?: PolicyPushStub;
+  /**
+   * The awaitable "Add time today" adjuster (#257), present only when the live
+   * transport is wired (SSH key exists). Absent in tests / before the SSH-key
+   * bootstrap (#39), where `POST /users/:userId/time-today` returns a
+   * `503 transport_unavailable`.
+   */
+  timeToday?: TimeTodayAdjuster;
 }
 
 /**
@@ -57,6 +66,10 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (scope, opt
   // The live SSH dispatcher (#201) is injected from buildApp; absent it, the
   // routes log the intended push (the Phase-2 stub) instead of dispatching.
   registerPolicyRoutes(scope, opts.policyPush);
+  // "Add time today" same-day lever (#257): POST /users/:userId/time-today.
+  // The live `timekpra`-over-SSH adjuster is injected from buildApp; absent it,
+  // the route reports the transport as unavailable (503).
+  registerTimeTodayRoutes(scope, opts.timeToday);
   // Effective-policy preview (#143): GET /users/:userId/effective. Needs
   // `settings` for the server-default timezone of users with no `tz`.
   registerEffectiveRoutes(scope, opts.settings);
@@ -98,6 +111,7 @@ export function registerApi(
   settings: Settings,
   eventHub: EventHub,
   policyPush?: PolicyPushStub,
+  timeToday?: TimeTodayAdjuster,
 ): void {
   app.register(apiPlugin, {
     prefix: "/api",
@@ -106,5 +120,6 @@ export function registerApi(
     // Spread only when present: under exactOptionalPropertyTypes an explicit
     // `undefined` is not assignable to the optional `policyPush?` field.
     ...(policyPush !== undefined ? { policyPush } : {}),
+    ...(timeToday !== undefined ? { timeToday } : {}),
   });
 }

@@ -17,6 +17,7 @@
  * - `--setallowedhours USER (DAY|ALL) 'H;H[mm-mm];!H;…'`
  * - `--settimelimits USER 's;s;…'`  (per allowed weekday)
  * - `--settimelimitweek USER s` / `--settimelimitmonth USER s`
+ * - `--settimeleft USER (+|-|=) s`  (adjust/set today's remaining time)
  * - `--setplaytimeenabled USER (true|false)`
  * - `--setplaytimelimitoverride USER (true|false)`
  * - `--setplaytimeunaccountedintervalsenabled USER (true|false)`
@@ -39,6 +40,20 @@ import { TimekprArgumentError } from "./errors.js";
 
 /** An ISO-8601 weekday number: `1` = Monday … `7` = Sunday. */
 export type IsoWeekday = 1 | 2 | 3 | 4 | 5 | 6 | 7;
+
+/**
+ * The operation of a `timekpra --settimeleft` command:
+ * - `"+"` add seconds to today's remaining time,
+ * - `"-"` subtract seconds from today's remaining time,
+ * - `"="` set today's remaining time to exactly the given seconds.
+ *
+ * Verified against the upstream `timekpra` admin CLI
+ * (`--settimeleft USER (+|-|=) SECONDS`).
+ */
+export type TimeLeftOperation = "+" | "-" | "=";
+
+/** The accepted {@link TimeLeftOperation} literals, for validation/iteration. */
+export const TIME_LEFT_OPERATIONS: readonly TimeLeftOperation[] = ["+", "-", "="];
 
 /** Sentinel for "every day" in {@link buildSetAllowedHours}'s day position. */
 export const ALL_DAYS = "ALL";
@@ -270,6 +285,30 @@ export function buildSetTimeLimitMonth(username: string, seconds: number): strin
   assertUsername(username);
   assertSeconds(seconds, "monthly time limit");
   return ["--settimelimitmonth", username, String(seconds)];
+}
+
+/**
+ * `--settimeleft USER (+|-|=) s` — adjust or set the user's **remaining time
+ * for today**, without touching the standing daily limit (`--settimelimits`).
+ *
+ * Unlike the limit setters this is a same-day, ephemeral nudge: `+`/`-` are an
+ * additive delta against the day's accounting and `=` sets it outright. The
+ * caller maps a signed request (e.g. "+30 minutes") to a non-negative second
+ * count plus an operation, so `seconds` is always a non-negative integer here.
+ */
+export function buildSetTimeLeft(
+  username: string,
+  operation: TimeLeftOperation,
+  seconds: number,
+): string[] {
+  assertUsername(username);
+  if (!TIME_LEFT_OPERATIONS.includes(operation)) {
+    throw new TimekprArgumentError(
+      `timekpra: settimeleft operation must be one of '+', '-', '=', got ${JSON.stringify(operation)}`,
+    );
+  }
+  assertSeconds(seconds, "time-left adjustment");
+  return ["--settimeleft", username, operation, String(seconds)];
 }
 
 /** `--setplaytimeenabled USER (true|false)` — master PlayTime switch. */

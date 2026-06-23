@@ -4,6 +4,7 @@
  * top-level `api/` barrel so the contract is imported from one place.
  */
 export { registerPolicyRoutes } from "./routes.js";
+export { registerTimeTodayRoutes } from "./time-today.js";
 export {
   registerEffectiveRoutes,
   activeRuleResponseSchema,
@@ -99,4 +100,13 @@ export {
   groupExceptionResponseSchema,
   type CreateGroupExceptionRequest,
   type GroupExceptionResponse,
+  // "Add time today" same-day adjustment (#257)
+  adjustTimeTodaySchema,
+  timeTodayResponseSchema,
+  clientAdjustmentResultSchema,
+  toTimeLeftCommand,
+  TIME_TODAY_MAX_SECONDS,
+  type AdjustTimeTodayRequest,
+  type TimeTodayResponse,
+  type ClientAdjustmentResultDto,
 } from "./dtos.js";

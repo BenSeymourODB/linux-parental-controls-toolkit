@@ -21,7 +21,11 @@ import { z } from "zod";
 /** Cookie name for the admin session. */
 export const SESSION_COOKIE = "pct_session";
 
-/** How long a session is valid, in seconds (7 days). */
+/**
+ * How long a session is valid, in seconds (7 days). A week balances not
+ * nagging the single household admin to re-authenticate during ordinary use
+ * against bounding how long a leaked/stale cookie stays usable.
+ */
 export const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 /** The signed session payload. `sub` is the admin username; `iat` is epoch seconds. */

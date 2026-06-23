@@ -44,4 +44,5 @@ export {
   type BootstrapSshTransport,
   type CreatePolicyPushTransportOptions,
   type PolicyPushTransport,
+  type TimeTodayAdjuster,
 } from "./bootstrap.js";
