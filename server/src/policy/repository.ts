@@ -984,6 +984,34 @@ export function deleteGroupSchedule(db: PolicyDb, id: number): boolean {
   );
 }
 
+/**
+ * Atomically reorder a group's schedules to match `orderedIds` — the group
+ * counterpart of {@link reorderUserSchedules} (#270), the persistence step
+ * behind the group drag-to-reorder editor. `orderedIds` must be a permutation
+ * of exactly that group's schedule ids; {@link reorder} validates this and
+ * throws {@link import("./schedule-precedence.js").ReorderMismatchError} before
+ * any write, so a stale or garbled request can never partially apply or drop a
+ * rule's position. The dense `0..n-1` ordinals are written in a single
+ * transaction; the rows are then re-read in the new evaluation order.
+ */
+export function reorderGroupSchedules(
+  db: PolicyDb,
+  groupId: number,
+  orderedIds: readonly number[],
+): GroupScheduleRow[] {
+  // Validate the permutation and compute dense ordinals up front (may throw).
+  const reordered = reorder(listGroupSchedules(db, groupId), orderedIds);
+  db.transaction((tx) => {
+    for (const rule of reordered) {
+      tx.update(groupSchedules)
+        .set({ ordinal: rule.ordinal })
+        .where(eq(groupSchedules.id, rule.id))
+        .run();
+    }
+  });
+  return listGroupSchedules(db, groupId);
+}
+
 // --- Group exceptions (#182) -----------------------------------------------
 // Group-targeted one-off overrides, keyed by `user_group_id` (ADR 0007).
 
