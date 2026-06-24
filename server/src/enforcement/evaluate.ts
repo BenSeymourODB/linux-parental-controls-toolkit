@@ -36,7 +36,12 @@ import { groupSecondsInWindow, usageByActivityInWindow } from "../policy/usage.j
 
 import { decideEnforcement, type EnforcementOutcome } from "./decision.js";
 
-/** The schema default for `notification_policies.grace_seconds` (used when no row). */
+/**
+ * The schema default for `notification_policies.grace_seconds`, applied when a
+ * user has no notification-policy row. One minute gives the supervised user a
+ * short, predictable window to wrap up after the warning before enforcement
+ * acts, without materially extending the budget.
+ */
 const DEFAULT_GRACE_SECONDS = 60;
 
 /** Inputs to {@link evaluateUserEnforcement}. */

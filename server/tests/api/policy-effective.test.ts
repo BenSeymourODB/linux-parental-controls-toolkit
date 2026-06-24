@@ -174,6 +174,52 @@ describe("GET /api/users/:userId/effective", () => {
     });
   });
 
+  it("resolves a default-grantedAt grant by wall clock, not a fixed date (time-bomb guard, #254)", async () => {
+    const userId = await createUser("Alice"); // tz null → server default UTC
+    harness.db
+      .insert(budgets)
+      .values({ userId, scope: "overall", targetId: null, window: "daily", secondsAllowed: 7200 })
+      .run();
+    // A grant that relies on the `grantedAt` DB default (insertion time = now) —
+    // exactly the fixture shape that made #254's composing test a time-bomb.
+    // This guard asserts the resolver's behaviour against *relative* dates
+    // (today / a day well in the past) rather than a hardcoded one, so it pins
+    // the wall-clock semantics without ever maturing into a time-bomb itself:
+    // the canonical example of the safe pattern for date-windowed fixtures.
+    harness.db
+      .insert(grants)
+      .values({
+        userId,
+        scope: "overall",
+        targetId: null,
+        secondsGranted: 1800,
+        // grantedAt omitted on purpose → defaults to unixepoch() (now).
+        expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
+        source: "admin",
+      })
+      .run();
+
+    const utcDate = (d: Date): string => d.toISOString().slice(0, 10);
+
+    // Today (UTC): the just-inserted grant is live, so it composes (+1800).
+    const today = await auth({
+      method: "GET",
+      url: `/api/users/${userId}/effective?date=${utcDate(new Date())}`,
+    });
+    expect(today.statusCode).toBe(200);
+    expect(today.json().overallSeconds).toBe(9000);
+
+    // A day well in the past: a grant created *now* cannot apply retroactively,
+    // so the resolver (correctly) drops it and only the 7200 baseline remains.
+    const past = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const pastRes = await auth({
+      method: "GET",
+      url: `/api/users/${userId}/effective?date=${utcDate(past)}`,
+    });
+    expect(pastRes.statusCode).toBe(200);
+    expect(pastRes.json().overallSeconds).toBe(7200);
+  });
+
   it("inherits a group schedule, with the user's own rule taking precedence (#182)", async () => {
     const userId = await createUser("Alice"); // tz null → UTC
     const group = harness.db

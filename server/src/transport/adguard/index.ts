@@ -33,6 +33,24 @@ export {
   type PreflightLogger,
 } from "./service.js";
 export {
+  AdGuardManagedSupervisor,
+  createAdGuardManagedSupervisor,
+  type AdGuardManagedConfig,
+  type AdGuardManagedDeps,
+  type AdGuardManagedLogger,
+  type AdGuardManagedState,
+  type AdGuardManagedStatus,
+  type ManagedProcess,
+  type SpawnManaged,
+} from "./supervisor.js";
+export {
+  acquireAdGuardHome,
+  AdGuardChecksumError,
+  AdGuardDownloadError,
+  type AcquireConfig,
+  type AcquireResult,
+} from "./acquire.js";
+export {
   adGuardClientSchema,
   adGuardClientsResponseSchema,
   adGuardFilteringStatusSchema,
