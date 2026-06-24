@@ -32,6 +32,7 @@
   import SchedulesView from "$lib/views/SchedulesView.svelte";
   import ExceptionsView from "$lib/views/ExceptionsView.svelte";
   import LinksView from "$lib/views/LinksView.svelte";
+  import IntegrationTokensView from "$lib/views/IntegrationTokensView.svelte";
   import AuditLogView from "$lib/views/AuditLogView.svelte";
 
   // `null` while the initial session probe (and, if authenticated, the setup
@@ -103,6 +104,7 @@
     { id: "budgets", label: "Budgets" },
     { id: "schedules", label: "Schedules" },
     { id: "exceptions", label: "Exceptions" },
+    { id: "integrations", label: "Integrations" },
     { id: "audit", label: "Audit log" },
   ];
   let activeView = $state<string>("dashboard");
@@ -212,6 +214,8 @@
       <SchedulesView />
     {:else if activeView === "exceptions"}
       <ExceptionsView />
+    {:else if activeView === "integrations"}
+      <IntegrationTokensView />
     {:else if activeView === "audit"}
       <AuditLogView />
     {:else}

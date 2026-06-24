@@ -45,7 +45,12 @@ export { buildInventory, INVENTORY_GROUP, type AnsibleHost } from "./inventory.j
  */
 const UNREACHABLE_BIT = 4;
 
-/** Generous cap so a verbose playbook run is not truncated mid-capture. */
+/**
+ * Cap on captured stdout/stderr (10 MiB). Generous enough that a verbose
+ * playbook run is not truncated mid-capture, while bounding memory so a runaway
+ * run can't exhaust it (`execFile` rejects with
+ * `ERR_CHILD_PROCESS_STDIO_MAXBUFFER` past this — see {@link classifyFailure}).
+ */
 const DEFAULT_MAX_BUFFER = 10 * 1024 * 1024;
 
 /**
@@ -68,6 +73,20 @@ export interface AnsibleRunnerOptions {
   maxBuffer?: number;
 }
 
+/**
+ * A JSON-serialisable value accepted as an `--extra-vars` entry. Widened from
+ * the original scalar-only shape so a structured plan (e.g. the per-UID
+ * e2guardian / AppArmor plans, #90/#92) can be passed whole — the runner
+ * already `JSON.stringify`s the object, so only the type needed broadening.
+ */
+export type ExtraVarValue =
+  | string
+  | number
+  | boolean
+  | null
+  | readonly ExtraVarValue[]
+  | { readonly [key: string]: ExtraVarValue };
+
 /** Arguments for a single {@link AnsibleRunner.runPlaybook} invocation. */
 export interface RunPlaybookOptions {
   /** Playbook file name within `<ansibleDir>/playbooks/`. */
@@ -75,7 +94,7 @@ export interface RunPlaybookOptions {
   /** Target clients; rendered into a per-run dynamic inventory. */
   hosts: readonly AnsibleHost[];
   /** Optional `--extra-vars`, passed to Ansible as a single JSON object. */
-  extraVars?: Record<string, string | number | boolean>;
+  extraVars?: Record<string, ExtraVarValue>;
   /** Optional `--limit` host pattern to narrow the run within the inventory. */
   limit?: string;
 }

@@ -6,18 +6,21 @@
   calls go through the typed `$lib/api/links` wrappers; errors are surfaced
   inline.
 
-  A link maps a policy `User` to a Linux account (`linuxUsername` + `linuxUid`)
+  A link maps a policy `User` to an OS account (`osUsername` + `osUserRef`)
   on a specific `Client` — the mapping enforcement needs to drive `timekpra`
-  and read ActivityWatch for the right OS account. The `PUT` is idempotent, so
-  the same form both creates and updates a link.
+  and read ActivityWatch for the right OS account. `osUserRef` is the OS-neutral
+  account reference (#230): a uid on Linux, a SID on Windows. The `PUT` is
+  idempotent, so the same form both creates and updates a link.
 -->
 <script lang="ts">
   import { onMount } from "svelte";
   import { ApiError } from "$lib/api/client.js";
   import type { ClientResponse, LinkResponse, UserResponse } from "$lib/api/contract.js";
+  import type { TimeTodayResponse } from "$lib/api/contract.js";
   import { listUsers } from "$lib/api/users.js";
   import { listClients } from "$lib/api/clients.js";
   import { listUserLinks, upsertLink, deleteLink } from "$lib/api/links.js";
+  import { adjustTimeToday } from "$lib/api/time-today.js";
 
   let users = $state<UserResponse[]>([]);
   let clients = $state<ClientResponse[]>([]);
@@ -31,9 +34,16 @@
 
   // Create/update form.
   let formClientId = $state<number | null>(null);
-  let formUsername = $state("");
-  let formUid = $state("");
+  let formOsUsername = $state("");
+  let formOsUserRef = $state("");
   let submitting = $state(false);
+
+  // "Add time today" lever (#257): a same-day remaining-time nudge applied to
+  // every client this user is linked to. Not a Grant — see the caveat in the UI.
+  let adjusting = $state(false);
+  let adjustError = $state<string | null>(null);
+  let adjustResult = $state<TimeTodayResponse | null>(null);
+  let customMinutes = $state("");
 
   onMount(load);
 
@@ -58,14 +68,22 @@
     clients.filter((c) => !links.some((l) => l.clientId === c.id)),
   );
 
-  /** Parse the UID field to a non-negative integer, or `null` if invalid. */
-  function parseUid(value: string): number | null {
-    const uid = Number(value);
-    return Number.isInteger(uid) && uid >= 0 ? uid : null;
+  /**
+   * Whether the OS-user-ref field is a valid account reference (#230): a
+   * non-empty token matching the same `[A-Za-z0-9._:-]` charset the `/api`
+   * `upsertLink` DTO enforces (a uid on Linux, a SID on Windows). Mirrors the
+   * server rule so the form gives early feedback; the server stays the
+   * authority.
+   */
+  function osUserRefValid(value: string): boolean {
+    return /^[A-Za-z0-9._:-]+$/.test(value.trim());
   }
 
   async function onSelectUser(): Promise<void> {
     resetForm();
+    adjustResult = null;
+    adjustError = null;
+    customMinutes = "";
     if (selectedUserId === null) {
       links = [];
       return;
@@ -84,29 +102,28 @@
 
   function resetForm(): void {
     formClientId = null;
-    formUsername = "";
-    formUid = "";
+    formOsUsername = "";
+    formOsUserRef = "";
   }
 
   let submitDisabled = $derived(
     submitting ||
       formClientId === null ||
-      formUsername.trim() === "" ||
-      parseUid(formUid) === null,
+      formOsUsername.trim() === "" ||
+      !osUserRefValid(formOsUserRef),
   );
 
   async function handleSubmit(event: SubmitEvent): Promise<void> {
     event.preventDefault();
-    const uid = parseUid(formUid);
-    if (selectedUserId === null || formClientId === null || uid === null) {
+    if (selectedUserId === null || formClientId === null || !osUserRefValid(formOsUserRef)) {
       return;
     }
     submitting = true;
     error = null;
     try {
       const saved = await upsertLink(selectedUserId, formClientId, {
-        linuxUsername: formUsername.trim(),
-        linuxUid: uid,
+        osUsername: formOsUsername.trim(),
+        osUserRef: formOsUserRef.trim(),
       });
       // `PUT` is upsert: replace an existing link to this client, else append.
       const existing = links.some((l) => l.clientId === saved.clientId);
@@ -124,8 +141,8 @@
   /** Load a link's values into the form so the upsert updates it. */
   function startEdit(link: LinkResponse): void {
     formClientId = link.clientId;
-    formUsername = link.linuxUsername;
-    formUid = String(link.linuxUid);
+    formOsUsername = link.osUsername;
+    formOsUserRef = link.osUserRef;
     error = null;
   }
 
@@ -145,6 +162,41 @@
     }
   }
 
+  /**
+   * Apply a same-day time adjustment (in minutes) to every client this user is
+   * linked to. A positive value adds time, a negative value takes it back; the
+   * server records the `--settimeleft` command in the audit log. Online-only —
+   * the result lists each client's applied/unreachable/failed outcome.
+   */
+  async function addTimeToday(minutes: number): Promise<void> {
+    if (selectedUserId === null || minutes === 0 || !Number.isFinite(minutes)) {
+      return;
+    }
+    adjusting = true;
+    adjustError = null;
+    adjustResult = null;
+    try {
+      adjustResult = await adjustTimeToday(selectedUserId, {
+        deltaSeconds: Math.round(minutes * 60),
+      });
+    } catch (err) {
+      adjustError = messageOf(err);
+    } finally {
+      adjusting = false;
+    }
+  }
+
+  /** Apply the custom-minutes field, then clear it. */
+  async function addCustomMinutes(): Promise<void> {
+    const minutes = Number(customMinutes);
+    if (!Number.isFinite(minutes) || minutes === 0) {
+      adjustError = "Enter a non-zero number of minutes";
+      return;
+    }
+    await addTimeToday(minutes);
+    customMinutes = "";
+  }
+
   /** Render any thrown value as a UI-safe message. */
   function messageOf(err: unknown): string {
     if (err instanceof ApiError) {
@@ -158,8 +210,9 @@
   <header class="head">
     <h1>User ↔ Client links</h1>
     <p class="hint">
-      Map a supervised user to their Linux account (username + UID) on each
-      client. Enforcement uses this mapping to target the right OS account.
+      Map a supervised user to their OS account (username + account reference —
+      a UID on Linux) on each client. Enforcement uses this mapping to target
+      the right OS account.
     </p>
   </header>
 
@@ -201,21 +254,20 @@
           </select>
           <input
             type="text"
-            placeholder="Linux username"
-            bind:value={formUsername}
+            placeholder="OS username"
+            bind:value={formOsUsername}
             disabled={submitting}
             required
-            aria-label="Linux username"
+            aria-label="OS username"
           />
           <input
-            type="number"
-            min="0"
-            step="1"
+            type="text"
+            inputmode="numeric"
             placeholder="UID"
-            bind:value={formUid}
+            bind:value={formOsUserRef}
             disabled={submitting}
             required
-            aria-label="Linux UID"
+            aria-label="OS user reference (UID on Linux)"
           />
           <button type="submit" disabled={submitDisabled}>
             {submitting ? "Saving…" : "Save link"}
@@ -231,8 +283,8 @@
             <thead>
               <tr>
                 <th>Client</th>
-                <th>Linux username</th>
-                <th>UID</th>
+                <th>OS username</th>
+                <th>User ref</th>
                 <th class="actions-col">Actions</th>
               </tr>
             </thead>
@@ -240,8 +292,8 @@
               {#each links as link (link.clientId)}
                 <tr>
                   <td>{clientName(link.clientId)}</td>
-                  <td><code>{link.linuxUsername}</code></td>
-                  <td class="muted">{link.linuxUid}</td>
+                  <td><code>{link.osUsername}</code></td>
+                  <td class="muted">{link.osUserRef}</td>
                   <td class="actions">
                     <button class="ghost" onclick={() => startEdit(link)}>Edit</button>
                     <button class="danger" onclick={() => handleDelete(link)}>Delete</button>
@@ -250,6 +302,66 @@
               {/each}
             </tbody>
           </table>
+
+          <section class="add-time" aria-label="Add time today">
+            <h2>Add time today</h2>
+            <p class="caveat">
+              A one-off adjustment to this user's <strong>remaining time
+              today</strong> on every linked client — it does not change their
+              standing daily limit and is forgotten at the next daily rollover.
+              This is <strong>not</strong> a logged reward grant (that's coming
+              later); the change takes effect on the client when it's online.
+            </p>
+            <div class="add-time-controls">
+              <button
+                class="grant"
+                disabled={adjusting}
+                onclick={() => addTimeToday(15)}
+              >
+                +15 min
+              </button>
+              <button
+                class="grant"
+                disabled={adjusting}
+                onclick={() => addTimeToday(30)}
+              >
+                +30 min
+              </button>
+              <span class="custom">
+                <input
+                  type="number"
+                  inputmode="numeric"
+                  step="1"
+                  placeholder="minutes (± )"
+                  bind:value={customMinutes}
+                  disabled={adjusting}
+                  aria-label="Custom minutes (negative to remove time)"
+                />
+                <button class="ghost" disabled={adjusting} onclick={addCustomMinutes}>
+                  {adjusting ? "Applying…" : "Apply"}
+                </button>
+              </span>
+            </div>
+
+            {#if adjustError}
+              <p class="error" role="alert">{adjustError}</p>
+            {/if}
+
+            {#if adjustResult}
+              <ul class="results" aria-label="Adjustment results">
+                {#each adjustResult.results as r (r.clientId)}
+                  <li class={`result result-${r.status}`}>
+                    <span class="result-client">{clientName(r.clientId)}</span>
+                    <span class="result-status">{r.status}</span>
+                    {#if r.error}<span class="result-error">{r.error}</span>{/if}
+                  </li>
+                {/each}
+                {#if adjustResult.results.length === 0}
+                  <li class="muted">No linked clients were affected.</li>
+                {/if}
+              </ul>
+            {/if}
+          </section>
         {/if}
       {/if}
     {/if}
@@ -357,6 +469,73 @@
     background: #dc2626;
   }
   .muted {
+    color: #6b7280;
+  }
+  .add-time {
+    margin-top: 1.5rem;
+    padding: 1rem;
+    border: 1px solid #e5e7eb;
+    border-radius: 0.5rem;
+    background: #f9fafb;
+  }
+  .add-time h2 {
+    margin: 0 0 0.4rem;
+    font-size: 1rem;
+  }
+  .caveat {
+    margin: 0 0 0.75rem;
+    color: #6b7280;
+    font-size: 0.85rem;
+    max-width: 40rem;
+  }
+  .add-time-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+  .custom {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .custom input {
+    width: 9rem;
+    padding: 0.4rem 0.5rem;
+    border: 1px solid #d1d5db;
+    border-radius: 0.4rem;
+  }
+  button.grant {
+    background: #047857;
+  }
+  .results {
+    list-style: none;
+    margin: 0.75rem 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+  .result {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+  }
+  .result-status {
+    font-weight: 600;
+    text-transform: capitalize;
+  }
+  .result-applied .result-status {
+    color: #047857;
+  }
+  .result-unreachable .result-status {
+    color: #b45309;
+  }
+  .result-failed .result-status {
+    color: #b91c1c;
+  }
+  .result-error {
     color: #6b7280;
   }
   .error {

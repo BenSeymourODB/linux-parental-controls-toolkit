@@ -85,6 +85,9 @@ describe("createPolicyPushTransport", () => {
       lines.find((l) => l.msg?.toString().includes("SSH private key not found")),
     ).toBeDefined();
     expect(lines.find((l) => l.msg === PUSH_STUB_MESSAGE)).toBeDefined();
+    // The "Add time today" adjuster (#257) is absent in the fallback, so the
+    // admin route can report the transport as unavailable rather than no-op.
+    expect(transport.adjustTimeToday).toBeUndefined();
     // dispose is callable and harmless on the fallback.
     expect(() => transport.dispose()).not.toThrow();
   });
@@ -92,7 +95,7 @@ describe("createPolicyPushTransport", () => {
   it("assembles a live, audited dispatch when credentials and an SSH transport are present", async () => {
     const userId = createUser(db, { displayName: "Alice", tz: "UTC" }).id;
     const clientId = createClient(db, { hostname: "mint-01", sshUser: "pct-agent" }).id;
-    upsertLink(db, userId, clientId, { linuxUsername: "alice", linuxUid: 1001 });
+    upsertLink(db, userId, clientId, { osUsername: "alice", osUserRef: "1001" });
     createBudget(db, { userId, scope: "overall", window: "daily", secondsAllowed: 7200 });
 
     const ssh = fakeSsh();
@@ -122,6 +125,47 @@ describe("createPolicyPushTransport", () => {
 
     transport.dispose();
     expect(ssh.disposed).toBe(1);
+  });
+
+  it("exposes an audited 'Add time today' adjuster in live mode (#257)", async () => {
+    const userId = createUser(db, { displayName: "Alice", tz: "UTC" }).id;
+    const clientId = createClient(db, { hostname: "mint-01", sshUser: "pct-agent" }).id;
+    upsertLink(db, userId, clientId, { osUsername: "alice", osUserRef: "1001" });
+
+    const ssh = fakeSsh();
+    const transport = createPolicyPushTransport({
+      settings,
+      db,
+      log,
+      loadCredentials: () => ({ privateKey: "FAKE-KEY" }),
+      sshTransport: ssh,
+    });
+
+    const adjust = transport.adjustTimeToday;
+    expect(adjust).toBeDefined();
+    if (adjust === undefined) throw new Error("expected a live adjuster");
+    const result = await adjust({ userId, operation: "+", seconds: 1800 });
+
+    expect(result.results).toEqual([{ clientId, osUsername: "alice", status: "applied" }]);
+    // The adjustment reaches the fake SSH transport as real `--settimeleft` argv.
+    expect(
+      ssh.checked.some(
+        (argv) => argv.includes("--settimeleft") && argv.includes("+") && argv.includes("1800"),
+      ),
+    ).toBe(true);
+    // ...and it is audited with admin attribution + the time.adjusted reason.
+    const entries = listAuditEntries(db, { limit: 50 });
+    expect(
+      entries.some(
+        (e) =>
+          e.clientId === clientId &&
+          e.userId === userId &&
+          e.actor === "admin" &&
+          e.reason === "time.adjusted",
+      ),
+    ).toBe(true);
+
+    transport.dispose();
   });
 });
 

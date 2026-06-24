@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import type { Scope, ScheduleAction } from "../../src/policy/enums.js";
 import {
   byOrdinal,
+  effectiveRuleIds,
   findShadowedRules,
   nextOrdinal,
   reorder,
@@ -352,5 +353,52 @@ describe("findShadowedRules", () => {
   it("returns no findings for an empty or single-rule set", () => {
     expect(findShadowedRules([])).toStrictEqual([]);
     expect(findShadowedRules([rule({ id: 1 })])).toStrictEqual([]);
+  });
+});
+
+describe("effectiveRuleIds", () => {
+  /** Sort so set-membership assertions don't depend on insertion order. */
+  const sorted = (ids: number[]) => [...ids].sort((a, b) => a - b);
+
+  it("picks the first active rule per distinct target", () => {
+    const rules = [
+      rule({ id: 1, ordinal: 0, targetKind: "activity", targetId: 5, action: "deny" }),
+      rule({ id: 2, ordinal: 1, targetKind: "activity", targetId: 6, action: "deny" }),
+      rule({ id: 3, ordinal: 2, targetKind: "activity", targetId: 5, action: "allow" }),
+    ];
+    // Each target's first always-on rule wins; the later activity:5 rule does not.
+    expect(sorted(effectiveRuleIds(rules, () => true))).toStrictEqual([1, 2]);
+  });
+
+  it("never reports a rule a broader overall rule shadows (consistent with findShadowedRules)", () => {
+    const rules = [
+      rule({ id: 1, ordinal: 0, targetKind: "overall", action: "allow" }),
+      rule({ id: 2, ordinal: 1, targetKind: "activity", targetId: 5, action: "deny" }),
+    ];
+    // The overall rule covers the activity target too, so it wins everywhere.
+    expect(effectiveRuleIds(rules, () => true)).toStrictEqual([1]);
+    // And the activity rule is exactly the one findShadowedRules flags.
+    expect(findShadowedRules(rules)).toStrictEqual([{ shadowedId: 2, shadowedById: 1 }]);
+  });
+
+  it("skips a target whose covering rules are all inactive right now", () => {
+    const rules = [
+      rule({ id: 1, ordinal: 0, targetKind: "activity", targetId: 5, ...WEEKDAY_AFTERNOON }),
+      rule({ id: 2, ordinal: 1, targetKind: "activity", targetId: 6 }), // always-on
+    ];
+    // Only id 2's window is active now → only it is in effect.
+    expect(effectiveRuleIds(rules, activeIds(2))).toStrictEqual([2]);
+  });
+
+  it("falls through to a lower-precedence active rule when the first is inactive", () => {
+    const rules = [
+      rule({ id: 1, ordinal: 0, targetKind: "overall", ...WEEKDAY_AFTERNOON }),
+      rule({ id: 2, ordinal: 1, targetKind: "overall" }), // always-on
+    ];
+    expect(effectiveRuleIds(rules, activeIds(2))).toStrictEqual([2]);
+  });
+
+  it("returns nothing for an empty rule set", () => {
+    expect(effectiveRuleIds([], () => true)).toStrictEqual([]);
   });
 });

@@ -93,6 +93,11 @@ export {
   type ExceptionResponse,
   type CreateExceptionRequest,
   type UpdateExceptionRequest,
+  // Notification policy (#104)
+  notificationPolicyResponseSchema,
+  upsertNotificationPolicySchema,
+  type NotificationPolicyResponse,
+  type UpsertNotificationPolicyRequest,
   // Group-targeted schedules + exceptions (#182)
   createGroupScheduleSchema,
   groupScheduleResponseSchema,
@@ -102,6 +107,15 @@ export {
   groupExceptionResponseSchema,
   type CreateGroupExceptionRequest,
   type GroupExceptionResponse,
+  // "Add time today" same-day adjustment (#257)
+  adjustTimeTodaySchema,
+  timeTodayResponseSchema,
+  clientAdjustmentResultSchema,
+  toTimeLeftCommand,
+  TIME_TODAY_MAX_SECONDS,
+  type AdjustTimeTodayRequest,
+  type TimeTodayResponse,
+  type ClientAdjustmentResultDto,
 } from "./policy/index.js";
 
 // Client-enrolment DTOs (#77): the admin token-mint + install-script enrol
@@ -142,6 +156,26 @@ export {
   type ListAuditQuery,
 } from "./audit/index.js";
 
+// Usage-views DTOs (#62): the read-only contract for the admin burndown chart
+// and per-activity timeline. Schemas live in `./usage/dtos.ts` next to the route.
+export {
+  budgetBurndownRowSchema,
+  burndownQuerySchema,
+  burndownResponseSchema,
+  timelineActivitySchema,
+  timelineQuerySchema,
+  timelineResponseSchema,
+  timelineSampleSchema,
+  usageParamsSchema,
+  type BudgetBurndownRow,
+  type BurndownQuery,
+  type BurndownResponse,
+  type TimelineActivity,
+  type TimelineQuery,
+  type TimelineResponse,
+  type TimelineSample,
+} from "./usage/index.js";
+
 // DNS-status DTO (#95): the read-only contract surfacing the active AdGuard mode
 // and its health. Schema lives in `./dns/dtos.ts` next to the route.
 export {
@@ -157,6 +191,9 @@ export {
   ansibleVenvStateSchema,
   ansibleVenvStatusResponseSchema,
   type AnsibleVenvStatusResponse,
+  adGuardManagedStateSchema,
+  adGuardManagedStatusResponseSchema,
+  type AdGuardManagedStatusResponse,
 } from "./system/index.js";
 
 // Auth DTOs (#52). Re-exported here so the frontend imports the auth contract

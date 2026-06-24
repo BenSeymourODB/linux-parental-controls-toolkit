@@ -35,10 +35,17 @@ export const WEEKDAY_MASK_MIN = 1;
 /** Largest valid weekday mask: all seven ISO weekdays set (`0b1111111`). */
 export const WEEKDAY_MASK_MAX = 127;
 
+/**
+ * Minutes in a full day — the single source for the `1440` that recurs across
+ * the policy layer (the exclusive end of the intra-day window space). Named
+ * once here and imported elsewhere so the magic number is not redefined.
+ */
+export const MINUTES_PER_DAY = 1440;
+
 /** Earliest local minute-of-day a window may reference (00:00). */
 export const MINUTE_OF_DAY_MIN = 0;
 /** Latest local minute-of-day a window may reference (24:00, the exclusive end). */
-export const MINUTE_OF_DAY_MAX = 1440;
+export const MINUTE_OF_DAY_MAX = MINUTES_PER_DAY;
 
 /**
  * A 7-bit ISO-weekday mask (`1..127`). Bit *i* set ⇒ active on ISO weekday

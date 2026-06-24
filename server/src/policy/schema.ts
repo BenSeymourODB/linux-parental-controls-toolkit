@@ -38,8 +38,16 @@ import {
   matchTypeValues,
   scheduleActionValues,
   scopeValues,
+  soundProfileValues,
   transportQueueStatusValues,
 } from "./enums.js";
+import {
+  DEFAULT_GRACE_SECONDS,
+  DEFAULT_NOTIFICATION_ENABLED,
+  DEFAULT_SOUND_PROFILE,
+  GRACE_SECONDS_MAX,
+  GRACE_SECONDS_MIN,
+} from "./notification.js";
 import {
   MINUTE_OF_DAY_MAX,
   MINUTE_OF_DAY_MIN,
@@ -146,9 +154,9 @@ export const clients = sqliteTable(
  * {@link integrationTokens}, only the SHA-256 `token_hash` is stored — never
  * the plaintext.
  *
- * `supervised_users` is a JSON array of `{ userId, linuxUsername }` the admin
- * bound at mint time (the policy user ↔ Linux account mapping); the client
- * supplies each user's `linuxUid` at enrol time. Single-use is enforced by
+ * `supervised_users` is a JSON array of `{ userId, osUsername }` the admin
+ * bound at mint time (the policy user ↔ OS account mapping); the client
+ * supplies each user's `osUserRef` at enrol time. Single-use is enforced by
  * `consumed_at` (set when redeemed, with `consumed_client_id` pointing at the
  * client it created); expiry by `expires_at`. The token is never edited
  * in-place beyond being marked consumed.
@@ -160,7 +168,7 @@ export const enrolmentTokens = sqliteTable(
     tokenHash: text("token_hash").notNull(),
     hostname: text("hostname"),
     supervisedUsers: text("supervised_users", { mode: "json" })
-      .$type<{ userId: number; linuxUsername: string }[]>()
+      .$type<{ userId: number; osUsername: string }[]>()
       .notNull(),
     expiresAt: integer("expires_at", { mode: "timestamp" }).notNull(),
     createdAt: timestampNow("created_at"),
@@ -173,9 +181,17 @@ export const enrolmentTokens = sqliteTable(
 );
 
 /**
- * Maps a {@link users} row to its local Linux account on a {@link clients}
- * box. Composite-keyed: a user appears at most once per client, and a Linux
- * UID maps to at most one user on a given client.
+ * Maps a {@link users} row to its local OS account on a {@link clients}
+ * box. Composite-keyed: a user appears at most once per client, and an OS
+ * account reference maps to at most one user on a given client.
+ *
+ * The columns are OS-neutral (#230, `docs/windows-client-support.md` →
+ * "Modularity tweaks to make cheaply now", item 2): `os_username` is the local
+ * login name, `os_user_ref` is the account reference — a **uid on Linux, a SID
+ * on Windows** — so it is `TEXT`, holding the Linux uid as a decimal string
+ * today. Neutralised now while every consumer is first-party; renaming the
+ * published `/api/*` field after the PWA and the calendar integrator bind to it
+ * would be a breaking-contract change.
  */
 export const usersOnClients = sqliteTable(
   "users_on_clients",
@@ -186,13 +202,13 @@ export const usersOnClients = sqliteTable(
     clientId: integer("client_id")
       .notNull()
       .references(() => clients.id, { onDelete: "cascade" }),
-    linuxUsername: text("linux_username").notNull(),
-    linuxUid: integer("linux_uid").notNull(),
+    osUsername: text("os_username").notNull(),
+    osUserRef: text("os_user_ref").notNull(),
   },
   (table) => [
     primaryKey({ columns: [table.userId, table.clientId] }),
     index("users_on_clients_client_idx").on(table.clientId),
-    uniqueIndex("users_on_clients_client_uid_unique").on(table.clientId, table.linuxUid),
+    uniqueIndex("users_on_clients_client_user_ref_unique").on(table.clientId, table.osUserRef),
   ],
 );
 
@@ -638,10 +654,19 @@ export const adminCredentials = sqliteTable(
 );
 
 /**
- * Per-user knobs for the client-side notification experience (Phase 8b).
- * 1:1 with {@link users} (the `user_id` is the primary key).
- * `cadence_overrides_json` is an optional JSON blob of warning-cadence
- * overrides; NULL means "use the built-in 15/5/1-minute cadence".
+ * Per-user knobs for the client-side notification experience (#104, Phase 8b).
+ * 1:1 with {@link users} (the `user_id` is the primary key). The values and
+ * their defaults come from `docs/client-notifications.md` → "Configuration
+ * knobs" (the authoritative source); the shared bounds/defaults live in
+ * {@link ./notification.ts} so the storage `CHECK` and the API DTOs read one
+ * source.
+ *
+ * - `enabled` — master switch, default `true`.
+ * - `sound_profile` — `off` / `subtle` / `prominent` ({@link soundProfileValues}),
+ *   default `subtle`; a `CHECK` pins it to the enum the DTO validates against.
+ * - `grace_seconds` — 0–60, default 15 (0 disables the grace countdown).
+ * - `cadence_overrides_json` — optional JSON blob of warning-cadence overrides;
+ *   NULL means "use the built-in 15/5/1-minute cadence".
  */
 export const notificationPolicies = sqliteTable(
   "notification_policies",
@@ -649,14 +674,29 @@ export const notificationPolicies = sqliteTable(
     userId: integer("user_id")
       .primaryKey()
       .references(() => users.id, { onDelete: "cascade" }),
-    enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
-    soundProfile: text("sound_profile").notNull().default("default"),
-    graceSeconds: integer("grace_seconds").notNull().default(60),
+    enabled: integer("enabled", { mode: "boolean" })
+      .notNull()
+      .default(DEFAULT_NOTIFICATION_ENABLED),
+    soundProfile: text("sound_profile", { enum: soundProfileValues })
+      .notNull()
+      .default(DEFAULT_SOUND_PROFILE),
+    graceSeconds: integer("grace_seconds").notNull().default(DEFAULT_GRACE_SECONDS),
     cadenceOverridesJson: text("cadence_overrides_json", { mode: "json" }).$type<
       Record<string, unknown>
     >(),
   },
-  (table) => [check("notification_policies_grace_check", sql`${table.graceSeconds} >= 0`)],
+  (table) => [
+    check(
+      "notification_policies_sound_profile_check",
+      oneOf(table.soundProfile, soundProfileValues),
+    ),
+    // Grace period is a whole number of seconds in [0, 60] (ADR knobs: 0
+    // disables the countdown, 60 is the documented ceiling).
+    check(
+      "notification_policies_grace_check",
+      sql`${table.graceSeconds} between ${sql.raw(String(GRACE_SECONDS_MIN))} and ${sql.raw(String(GRACE_SECONDS_MAX))}`,
+    ),
+  ],
 );
 
 /**

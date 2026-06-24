@@ -42,11 +42,24 @@ export type {
   ScheduleResponse,
   CreateScheduleRequest,
   UpdateScheduleRequest,
+  ReorderSchedulesRequest,
+  ShadowFindingDto,
+  ScheduleOrderView,
   ExceptionResponse,
   CreateExceptionRequest,
   UpdateExceptionRequest,
+  AdjustTimeTodayRequest,
+  TimeTodayResponse,
+  ClientAdjustmentResultDto,
 } from "../../../../src/api/policy/dtos.js";
 export type { AuditEntryResponse, AuditListResponse } from "../../../../src/api/audit/dtos.js";
+export type {
+  CreateIntegrationTokenRequest,
+  IntegrationTokenCreatedResponse,
+  IntegrationTokenSummaryResponse,
+  IntegrationTokenListResponse,
+} from "../../../../src/api/integrations/dtos.js";
+export type { IntegrationScope } from "../../../../src/integrations/scopes.js";
 export type {
   MintEnrolmentTokenRequest,
   EnrolmentTokenResponse,
@@ -57,6 +70,13 @@ export type {
   ClientQueueDto,
   QueuedActionSummary,
 } from "../../../../src/api/clients/health-dtos.js";
+export type {
+  BurndownResponse,
+  BudgetBurndownRow,
+  TimelineResponse,
+  TimelineActivity,
+  TimelineSample,
+} from "../../../../src/api/usage/dtos.js";
 export type {
   ActivityKind,
   MatchType,
