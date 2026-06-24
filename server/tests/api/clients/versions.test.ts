@@ -43,7 +43,7 @@ describe("enrolClientSchema version fields (#164)", () => {
   const base = {
     hostname: "mint-01",
     sshUser: "pct-agent",
-    supervisedUsers: [{ linuxUsername: "alice", linuxUid: 1000 }],
+    supervisedUsers: [{ osUsername: "alice", osUserRef: "1000" }],
   };
 
   it("treats agentVersion and componentVersions as optional", () => {

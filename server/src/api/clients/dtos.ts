@@ -16,10 +16,25 @@ export const MAX_ENROLMENT_TTL_SECONDS = 24 * 60 * 60;
 /** Default enrolment-token lifetime when the admin doesn't specify one: 1h. */
 export const DEFAULT_ENROLMENT_TTL_SECONDS = 60 * 60;
 
-/** A Linux login name (mirrors the link DTO in `../policy/dtos.ts`). */
-const linuxUsernameSchema = z.string().trim().min(1).max(32);
-/** A Linux UID; 0 (root) is representable even if policy would never use it. */
-const linuxUidSchema = z.number().int().min(0);
+/** A local OS login name (mirrors the link DTO in `../policy/dtos.ts`). */
+const osUsernameSchema = z.string().trim().min(1).max(32);
+/**
+ * An OS account reference — a uid on Linux, a SID on Windows (#230). A string
+ * so the published contract is stable across platforms; the charset (like
+ * {@link versionStringSchema}) forbids `"`/`\`/control chars so a value can
+ * never break the install script's hand-rolled JSON encoder. On Linux this
+ * carries the numeric uid as a decimal string (`"0"` for root is permitted at
+ * the type level even if policy would never map a supervised user to it).
+ */
+const osUserRefSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(64)
+  .regex(
+    /^[A-Za-z0-9._:-]+$/,
+    "must be an OS account reference (a uid on Linux, a SID on Windows)",
+  );
 /** A hostname (RFC-1035 max length); also mirrors the client DTO. */
 const hostnameSchema = z.string().trim().min(1).max(253);
 /** An SSH login name for the `pct-agent` principal. */
@@ -58,19 +73,19 @@ export const componentVersionsSchema = z
 
 export type ComponentVersionsDto = z.infer<typeof componentVersionsSchema>;
 
-/** Reject a list whose `linuxUsername`s are not all distinct. */
-function distinctUsernames(list: { linuxUsername: string }[]): boolean {
-  return new Set(list.map((entry) => entry.linuxUsername)).size === list.length;
+/** Reject a list whose `osUsername`s are not all distinct. */
+function distinctUsernames(list: { osUsername: string }[]): boolean {
+  return new Set(list.map((entry) => entry.osUsername)).size === list.length;
 }
 
-const distinctUsernamesMessage = { message: "linuxUsername values must be distinct" };
+const distinctUsernamesMessage = { message: "osUsername values must be distinct" };
 
 // --- Mint (admin-guarded) --------------------------------------------------
 
 export const mintEnrolmentTokenSchema = z.object({
-  /** The policy-user ↔ Linux-account mapping this client will carry. */
+  /** The policy-user ↔ OS-account mapping this client will carry. */
   supervisedUsers: z
-    .array(z.object({ userId: positiveIdSchema, linuxUsername: linuxUsernameSchema }))
+    .array(z.object({ userId: positiveIdSchema, osUsername: osUsernameSchema }))
     .min(1)
     .refine(distinctUsernames, distinctUsernamesMessage),
   /** Token lifetime; defaults to {@link DEFAULT_ENROLMENT_TTL_SECONDS}. */
@@ -99,9 +114,9 @@ export type EnrolmentTokenResponse = z.infer<typeof enrolmentTokenResponseSchema
 export const enrolClientSchema = z.object({
   hostname: hostnameSchema,
   sshUser: sshUserSchema,
-  /** Each supervised user's resolved Linux account on this box. */
+  /** Each supervised user's resolved OS account on this box. */
   supervisedUsers: z
-    .array(z.object({ linuxUsername: linuxUsernameSchema, linuxUid: linuxUidSchema }))
+    .array(z.object({ osUsername: osUsernameSchema, osUserRef: osUserRefSchema }))
     .min(1)
     .refine(distinctUsernames, distinctUsernamesMessage),
   /** The `pct-client` agent `.deb` version this box installed (#164). Optional. */
@@ -121,8 +136,8 @@ export const enrolResponseSchema = z.object({
   supervisedUsers: z.array(
     z.object({
       userId: z.number().int(),
-      linuxUsername: z.string(),
-      linuxUid: z.number().int(),
+      osUsername: z.string(),
+      osUserRef: z.string(),
     }),
   ),
   /** The agent version the server recorded, or `null` if none was reported (#164). */

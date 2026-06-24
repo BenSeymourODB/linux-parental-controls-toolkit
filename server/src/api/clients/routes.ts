@@ -20,6 +20,7 @@
  */
 import type { FastifyInstance } from "fastify";
 
+import { parseBearer } from "../../auth/bearer.js";
 import { FixedWindowRateLimiter } from "../../auth/rate-limit.js";
 import type { Settings } from "../../config.js";
 import { ApiError } from "../errors.js";
@@ -42,17 +43,6 @@ import { enrolClient, mintEnrolmentToken } from "./service.js";
 export const ENROL_RATE_LIMIT_MAX_ATTEMPTS = 10;
 /** Window for {@link ENROL_RATE_LIMIT_MAX_ATTEMPTS}; matches the login window. */
 export const ENROL_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
-
-/**
- * Extract the token from an `Authorization: Bearer <token>` header, or `null`
- * if the header is missing or not a non-empty bearer credential.
- */
-export function parseBearer(header: string | undefined): string | null {
-  if (header === undefined) return null;
-  const match = /^Bearer (.+)$/.exec(header.trim());
-  const token = match?.[1]?.trim();
-  return token !== undefined && token.length > 0 ? token : null;
-}
 
 /**
  * Register the enrolment routes on an already-`/api`-prefixed scope. Call after

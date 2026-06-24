@@ -29,3 +29,4 @@ export {
   type PortForwardOptions,
 } from "./facade.js";
 export { shellQuoteCommand } from "./shell-quote.js";
+export { loadSshCredentials } from "./credentials.js";

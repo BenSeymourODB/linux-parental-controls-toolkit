@@ -18,6 +18,7 @@ import {
   buildSetPlayTimeLimitOverride,
   buildSetPlayTimeUnaccountedIntervalsEnabled,
   buildSetPlayTimeLimits,
+  buildSetTimeLeft,
   buildSetTimeLimits,
   buildSetTimeLimitMonth,
   buildSetTimeLimitWeek,
@@ -165,6 +166,37 @@ describe("session-limit builders", () => {
   ])("rejects a %s second value", (_label, seconds) => {
     expect(() => buildSetTimeLimitWeek(USER, seconds)).toThrow(/non-negative integer/);
     expect(() => buildSetTimeLimits(USER, [seconds])).toThrow(/non-negative integer/);
+  });
+});
+
+describe("buildSetTimeLeft", () => {
+  it("builds an additive (+) adjustment for today", () => {
+    expect(buildSetTimeLeft(USER, "+", 1800)).toEqual(["--settimeleft", "alice", "+", "1800"]);
+  });
+
+  it("builds a subtractive (-) adjustment for today", () => {
+    expect(buildSetTimeLeft(USER, "-", 600)).toEqual(["--settimeleft", "alice", "-", "600"]);
+  });
+
+  it("builds an absolute (=) set for today", () => {
+    expect(buildSetTimeLeft(USER, "=", 0)).toEqual(["--settimeleft", "alice", "=", "0"]);
+  });
+
+  it("rejects an unknown operation", () => {
+    // @ts-expect-error — exercising the runtime guard against an off-grammar op
+    expect(() => buildSetTimeLeft(USER, "*", 60)).toThrow(/operation must be one of/);
+  });
+
+  it.each([
+    ["negative", -1],
+    ["fractional", 1.5],
+    ["NaN", Number.NaN],
+  ])("rejects a %s second value", (_label, seconds) => {
+    expect(() => buildSetTimeLeft(USER, "+", seconds)).toThrow(/non-negative integer/);
+  });
+
+  it("rejects an invalid username before formatting", () => {
+    expect(() => buildSetTimeLeft("a b", "+", 60)).toThrow(TimekprArgumentError);
   });
 });
 

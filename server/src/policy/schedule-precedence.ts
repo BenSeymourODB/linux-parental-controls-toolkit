@@ -67,7 +67,7 @@ export type RuleActivePredicate = (rule: ScheduleRule) => boolean;
  * a stable, reproducible precedence. Returns a new array; the input is not
  * mutated.
  */
-export function byOrdinal(rules: readonly ScheduleRule[]): ScheduleRule[] {
+export function byOrdinal<T extends ScheduleRule>(rules: readonly T[]): T[] {
   return [...rules].sort((a, b) => a.ordinal - b.ordinal || a.id - b.id);
 }
 
@@ -77,10 +77,10 @@ export function byOrdinal(rules: readonly ScheduleRule[]): ScheduleRule[] {
  * caller decides what "no rule applies" means for its surface (typically a
  * baseline allow), rather than this module baking in a default action.
  */
-export function resolveEffectiveRule(
-  rules: readonly ScheduleRule[],
+export function resolveEffectiveRule<T extends ScheduleRule>(
+  rules: readonly T[],
   isActive: RuleActivePredicate,
-): ScheduleRule | undefined {
+): T | undefined {
   return byOrdinal(rules).find((rule) => isActive(rule));
 }
 
@@ -225,4 +225,40 @@ export function findShadowedRules(rules: readonly ScheduleRule[]): ShadowFinding
     }
   }
   return findings;
+}
+
+/**
+ * The ids of the rules in effect **right now** — the input to the editor's "in
+ * effect now" badge. For each distinct target the rules address, the winner is
+ * the first active rule (by {@link byOrdinal}) among the rules that *cover* that
+ * target, using the same coverage relation as {@link findShadowedRules}: an
+ * `overall` rule covers every target, and an identical `target_kind`+`target_id`
+ * covers itself. Resolving coverage the same way is what keeps the two views
+ * consistent: provided `isActive` agrees on rules with identical windows (which
+ * the real resolver does — `findShadowedRules` only flags a `sameWindow` pair,
+ * so the shadower is active in exactly the instants the shadowed rule is), a
+ * rule a broader rule shadows can never also appear here, because that broader
+ * rule wins for its target too. Group membership is **not** resolved (see
+ * {@link findShadowedRules}).
+ *
+ * `isActive` decides whether a rule's window is active at the caller's instant
+ * (see {@link RuleActivePredicate}); a target whose covering rules are all
+ * inactive contributes no id. Each id appears at most once.
+ */
+export function effectiveRuleIds(
+  rules: readonly ScheduleRule[],
+  isActive: RuleActivePredicate,
+): number[] {
+  const ordered = byOrdinal(rules);
+  const winners = new Set<number>();
+  const seenTargets = new Set<string>();
+  for (const rule of ordered) {
+    const key = `${rule.targetKind}:${rule.targetId ?? "overall"}`;
+    if (seenTargets.has(key)) continue;
+    seenTargets.add(key);
+    const covering = ordered.filter((candidate) => targetSupersetOf(candidate, rule));
+    const winner = resolveEffectiveRule(covering, isActive);
+    if (winner !== undefined) winners.add(winner.id);
+  }
+  return [...winners];
 }

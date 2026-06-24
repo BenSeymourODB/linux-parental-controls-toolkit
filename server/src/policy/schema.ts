@@ -39,8 +39,16 @@ import {
   platformValues,
   scheduleActionValues,
   scopeValues,
+  soundProfileValues,
   transportQueueStatusValues,
 } from "./enums.js";
+import {
+  DEFAULT_GRACE_SECONDS,
+  DEFAULT_NOTIFICATION_ENABLED,
+  DEFAULT_SOUND_PROFILE,
+  GRACE_SECONDS_MAX,
+  GRACE_SECONDS_MIN,
+} from "./notification.js";
 import {
   MINUTE_OF_DAY_MAX,
   MINUTE_OF_DAY_MIN,
@@ -154,9 +162,9 @@ export const clients = sqliteTable(
  * {@link integrationTokens}, only the SHA-256 `token_hash` is stored — never
  * the plaintext.
  *
- * `supervised_users` is a JSON array of `{ userId, linuxUsername }` the admin
- * bound at mint time (the policy user ↔ Linux account mapping); the client
- * supplies each user's `linuxUid` at enrol time. Single-use is enforced by
+ * `supervised_users` is a JSON array of `{ userId, osUsername }` the admin
+ * bound at mint time (the policy user ↔ OS account mapping); the client
+ * supplies each user's `osUserRef` at enrol time. Single-use is enforced by
  * `consumed_at` (set when redeemed, with `consumed_client_id` pointing at the
  * client it created); expiry by `expires_at`. The token is never edited
  * in-place beyond being marked consumed.
@@ -168,7 +176,7 @@ export const enrolmentTokens = sqliteTable(
     tokenHash: text("token_hash").notNull(),
     hostname: text("hostname"),
     supervisedUsers: text("supervised_users", { mode: "json" })
-      .$type<{ userId: number; linuxUsername: string }[]>()
+      .$type<{ userId: number; osUsername: string }[]>()
       .notNull(),
     expiresAt: integer("expires_at", { mode: "timestamp" }).notNull(),
     createdAt: timestampNow("created_at"),
@@ -181,9 +189,17 @@ export const enrolmentTokens = sqliteTable(
 );
 
 /**
- * Maps a {@link users} row to its local Linux account on a {@link clients}
- * box. Composite-keyed: a user appears at most once per client, and a Linux
- * UID maps to at most one user on a given client.
+ * Maps a {@link users} row to its local OS account on a {@link clients}
+ * box. Composite-keyed: a user appears at most once per client, and an OS
+ * account reference maps to at most one user on a given client.
+ *
+ * The columns are OS-neutral (#230, `docs/windows-client-support.md` →
+ * "Modularity tweaks to make cheaply now", item 2): `os_username` is the local
+ * login name, `os_user_ref` is the account reference — a **uid on Linux, a SID
+ * on Windows** — so it is `TEXT`, holding the Linux uid as a decimal string
+ * today. Neutralised now while every consumer is first-party; renaming the
+ * published `/api/*` field after the PWA and the calendar integrator bind to it
+ * would be a breaking-contract change.
  */
 export const usersOnClients = sqliteTable(
   "users_on_clients",
@@ -194,13 +210,13 @@ export const usersOnClients = sqliteTable(
     clientId: integer("client_id")
       .notNull()
       .references(() => clients.id, { onDelete: "cascade" }),
-    linuxUsername: text("linux_username").notNull(),
-    linuxUid: integer("linux_uid").notNull(),
+    osUsername: text("os_username").notNull(),
+    osUserRef: text("os_user_ref").notNull(),
   },
   (table) => [
     primaryKey({ columns: [table.userId, table.clientId] }),
     index("users_on_clients_client_idx").on(table.clientId),
-    uniqueIndex("users_on_clients_client_uid_unique").on(table.clientId, table.linuxUid),
+    uniqueIndex("users_on_clients_client_user_ref_unique").on(table.clientId, table.osUserRef),
   ],
 );
 
@@ -429,6 +445,99 @@ export const exceptions = sqliteTable(
 );
 
 /**
+ * A recurring allow/deny/extend rule defined **once for a {@link userGroups
+ * group}** and inherited by every member (#182, `docs/adr/0007-group-targeted-policy-rules.md`).
+ * Column-for-column the same rule shape as {@link schedules} — including the
+ * reserved recurrence + date-scoping window (ADR 0005) and the polymorphic
+ * `target_id` (see the file header) — but keyed by `user_group_id` instead of
+ * `user_id`, and with its own per-group `ordinal` (first-match-wins within the
+ * group, ADR 0004).
+ *
+ * Kept in a separate table rather than relaxing `schedules.user_id` to nullable
+ * (ADR 0007 §"Why B over A"): the user-keyed table and its wire contract stay
+ * untouched. The two tables converge at resolution, not in storage — a member's
+ * own rules and these inherited rules are merged into one precedence-ordered
+ * list by `policy/group-resolution.ts`, both satisfying the owner-agnostic
+ * `ScheduleRule` interface, so there is no duplicated precedence logic.
+ */
+export const groupSchedules = sqliteTable(
+  "group_schedules",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    userGroupId: integer("user_group_id")
+      .notNull()
+      .references(() => userGroups.id, { onDelete: "cascade" }),
+    targetKind: text("target_kind", { enum: scopeValues }).notNull(),
+    targetId: integer("target_id"),
+    recurrenceDays: integer("recurrence_days"),
+    recurrenceStartMinute: integer("recurrence_start_minute"),
+    recurrenceEndMinute: integer("recurrence_end_minute"),
+    effectiveFrom: integer("effective_from", { mode: "timestamp" }),
+    effectiveTo: integer("effective_to", { mode: "timestamp" }),
+    action: text("action", { enum: scheduleActionValues }).notNull(),
+    ordinal: integer("ordinal").notNull().default(0),
+  },
+  (table) => [
+    index("group_schedules_group_ordinal_idx").on(table.userGroupId, table.ordinal),
+    check("group_schedules_target_kind_check", oneOf(table.targetKind, scopeValues)),
+    check("group_schedules_action_check", oneOf(table.action, scheduleActionValues)),
+    check(
+      "group_schedules_target_coherence_check",
+      targetCoherence(table.targetKind, table.targetId),
+    ),
+    check(
+      "group_schedules_recurrence_days_check",
+      sql`${table.recurrenceDays} is null or (${table.recurrenceDays} between ${sql.raw(String(WEEKDAY_MASK_MIN))} and ${sql.raw(String(WEEKDAY_MASK_MAX))})`,
+    ),
+    check(
+      "group_schedules_recurrence_minutes_check",
+      sql`(${table.recurrenceStartMinute} is null) = (${table.recurrenceEndMinute} is null) and (${table.recurrenceStartMinute} is null or (${table.recurrenceStartMinute} >= ${sql.raw(String(MINUTE_OF_DAY_MIN))} and ${table.recurrenceEndMinute} <= ${sql.raw(String(MINUTE_OF_DAY_MAX))} and ${table.recurrenceStartMinute} < ${table.recurrenceEndMinute}))`,
+    ),
+    check(
+      "group_schedules_effective_window_check",
+      sql`${table.effectiveFrom} is null or ${table.effectiveTo} is null or ${table.effectiveFrom} < ${table.effectiveTo}`,
+    ),
+  ],
+);
+
+/**
+ * A one-off, expiring override defined **once for a {@link userGroups group}**
+ * and inherited by every member (#182, ADR 0007). The {@link exceptions} shape
+ * keyed by `user_group_id` instead of `user_id`: active during
+ * `[effective_from ?? created_at, expires_at)` (ADR 0005 §2), the
+ * `(user_group_id, expires_at)` index serving the active-override lookup.
+ */
+export const groupExceptions = sqliteTable(
+  "group_exceptions",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    userGroupId: integer("user_group_id")
+      .notNull()
+      .references(() => userGroups.id, { onDelete: "cascade" }),
+    targetKind: text("target_kind", { enum: scopeValues }).notNull(),
+    targetId: integer("target_id"),
+    action: text("action", { enum: scheduleActionValues }).notNull(),
+    reason: text("reason"),
+    effectiveFrom: integer("effective_from", { mode: "timestamp" }),
+    expiresAt: integer("expires_at", { mode: "timestamp" }).notNull(),
+    createdAt: timestampNow("created_at"),
+  },
+  (table) => [
+    index("group_exceptions_group_expires_idx").on(table.userGroupId, table.expiresAt),
+    check("group_exceptions_target_kind_check", oneOf(table.targetKind, scopeValues)),
+    check("group_exceptions_action_check", oneOf(table.action, scheduleActionValues)),
+    check(
+      "group_exceptions_target_coherence_check",
+      targetCoherence(table.targetKind, table.targetId),
+    ),
+    check(
+      "group_exceptions_effective_window_check",
+      sql`${table.effectiveFrom} is null or ${table.effectiveFrom} < ${table.expiresAt}`,
+    ),
+  ],
+);
+
+/**
  * A normalised usage interval pulled from ActivityWatch. Both `started_at`
  * and `ended_at` are UTC. Burndown views read these per user over a time
  * window, optionally narrowed to one activity — hence the two indexes.
@@ -553,10 +662,19 @@ export const adminCredentials = sqliteTable(
 );
 
 /**
- * Per-user knobs for the client-side notification experience (Phase 8b).
- * 1:1 with {@link users} (the `user_id` is the primary key).
- * `cadence_overrides_json` is an optional JSON blob of warning-cadence
- * overrides; NULL means "use the built-in 15/5/1-minute cadence".
+ * Per-user knobs for the client-side notification experience (#104, Phase 8b).
+ * 1:1 with {@link users} (the `user_id` is the primary key). The values and
+ * their defaults come from `docs/client-notifications.md` → "Configuration
+ * knobs" (the authoritative source); the shared bounds/defaults live in
+ * {@link ./notification.ts} so the storage `CHECK` and the API DTOs read one
+ * source.
+ *
+ * - `enabled` — master switch, default `true`.
+ * - `sound_profile` — `off` / `subtle` / `prominent` ({@link soundProfileValues}),
+ *   default `subtle`; a `CHECK` pins it to the enum the DTO validates against.
+ * - `grace_seconds` — 0–60, default 15 (0 disables the grace countdown).
+ * - `cadence_overrides_json` — optional JSON blob of warning-cadence overrides;
+ *   NULL means "use the built-in 15/5/1-minute cadence".
  */
 export const notificationPolicies = sqliteTable(
   "notification_policies",
@@ -564,14 +682,29 @@ export const notificationPolicies = sqliteTable(
     userId: integer("user_id")
       .primaryKey()
       .references(() => users.id, { onDelete: "cascade" }),
-    enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
-    soundProfile: text("sound_profile").notNull().default("default"),
-    graceSeconds: integer("grace_seconds").notNull().default(60),
+    enabled: integer("enabled", { mode: "boolean" })
+      .notNull()
+      .default(DEFAULT_NOTIFICATION_ENABLED),
+    soundProfile: text("sound_profile", { enum: soundProfileValues })
+      .notNull()
+      .default(DEFAULT_SOUND_PROFILE),
+    graceSeconds: integer("grace_seconds").notNull().default(DEFAULT_GRACE_SECONDS),
     cadenceOverridesJson: text("cadence_overrides_json", { mode: "json" }).$type<
       Record<string, unknown>
     >(),
   },
-  (table) => [check("notification_policies_grace_check", sql`${table.graceSeconds} >= 0`)],
+  (table) => [
+    check(
+      "notification_policies_sound_profile_check",
+      oneOf(table.soundProfile, soundProfileValues),
+    ),
+    // Grace period is a whole number of seconds in [0, 60] (ADR knobs: 0
+    // disables the countdown, 60 is the documented ceiling).
+    check(
+      "notification_policies_grace_check",
+      sql`${table.graceSeconds} between ${sql.raw(String(GRACE_SECONDS_MIN))} and ${sql.raw(String(GRACE_SECONDS_MAX))}`,
+    ),
+  ],
 );
 
 /**

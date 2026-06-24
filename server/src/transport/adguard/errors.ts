@@ -25,6 +25,12 @@
  *   request so the dashboard can never edit a client it does not own
  *   (`docs/server-deployment.md` → "What the dashboard expects from an external
  *   instance").
+ * - {@link AdGuardConfigError} — a configured credential file
+ *   (`PCT_ADGUARD_PASSWORD_FILE` / `PCT_ADGUARD_API_TOKEN_FILE`) could not be
+ *   read while resolving the dedicated AdGuard account's credentials (#95).
+ *   Distinct from the request-time errors above: it is raised before any client
+ *   is constructed, so it carries the offending file path rather than a base
+ *   URL + request path.
  *
  * License boundary: none touched — plain TypeScript, no AdGuard code linked
  * (REST-only integration, `docs/licensing-analysis.md`).
@@ -130,5 +136,24 @@ export class AdGuardScopeError extends AdGuardError {
     this.name = "AdGuardScopeError";
     this.clientName = clientName;
     this.requiredPrefix = requiredPrefix;
+  }
+}
+
+/**
+ * A configured AdGuard credential file could not be read while resolving the
+ * dedicated account's credentials (#95). Raised before any {@link AdGuardError}
+ * is possible — there is no base URL or request path yet — so it stands apart
+ * from the request-time taxonomy and carries the offending file {@link path}
+ * and the originating error as {@link Error.cause}.
+ */
+export class AdGuardConfigError extends Error {
+  /** The credential file path that could not be read. */
+  readonly path: string;
+
+  constructor(path: string, message: string, cause?: unknown) {
+    super(message);
+    this.name = "AdGuardConfigError";
+    this.path = path;
+    if (cause !== undefined) this.cause = cause;
   }
 }

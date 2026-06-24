@@ -119,7 +119,7 @@ describe("stub transport push on policy change (#54)", () => {
     await auth({
       method: "PUT",
       url: `/api/users/${userId}/clients/${clientId}`,
-      payload: { linuxUsername: "alice", linuxUid: 1001 },
+      payload: { osUsername: "alice", osUserRef: "1001" },
     });
 
     const pushed = pushLines("link.upserted");
@@ -128,7 +128,7 @@ describe("stub transport push on policy change (#54)", () => {
       clientId,
       userId,
       reason: "link.upserted",
-      detail: { linuxUsername: "alice", linuxUid: 1001 },
+      detail: { osUsername: "alice", osUserRef: "1001" },
     });
   });
 
@@ -137,7 +137,7 @@ describe("stub transport push on policy change (#54)", () => {
     await auth({
       method: "PUT",
       url: `/api/users/${userId}/clients/${clientId}`,
-      payload: { linuxUsername: "alice", linuxUid: 1001 },
+      payload: { osUsername: "alice", osUserRef: "1001" },
     });
 
     await auth({
@@ -168,12 +168,12 @@ describe("stub transport push on policy change (#54)", () => {
     await auth({
       method: "PUT",
       url: `/api/users/${userId}/clients/${clientId}`,
-      payload: { linuxUsername: "alice", linuxUid: 1001 },
+      payload: { osUsername: "alice", osUserRef: "1001" },
     });
     await auth({
       method: "PUT",
       url: `/api/users/${userId}/clients/${secondClientId}`,
-      payload: { linuxUsername: "alice", linuxUid: 1002 },
+      payload: { osUsername: "alice", osUserRef: "1002" },
     });
 
     await auth({
@@ -199,7 +199,7 @@ describe("stub transport push on policy change (#54)", () => {
     await auth({
       method: "PUT",
       url: `/api/users/${userId}/clients/${clientId}`,
-      payload: { linuxUsername: "alice", linuxUid: 1001 },
+      payload: { osUsername: "alice", osUserRef: "1001" },
     });
 
     await auth({ method: "DELETE", url: `/api/users/${userId}` });
@@ -214,7 +214,7 @@ describe("stub transport push on policy change (#54)", () => {
     await auth({
       method: "PUT",
       url: `/api/users/${userId}/clients/${clientId}`,
-      payload: { linuxUsername: "alice", linuxUid: 1001 },
+      payload: { osUsername: "alice", osUserRef: "1001" },
     });
 
     await auth({ method: "DELETE", url: `/api/users/${userId}/clients/${clientId}` });
@@ -230,7 +230,7 @@ describe("stub transport push on policy change (#54)", () => {
     await auth({
       method: "PUT",
       url: `/api/users/${userId}/clients/${clientId}`,
-      payload: { linuxUsername: "alice", linuxUid: 1001 },
+      payload: { osUsername: "alice", osUserRef: "1001" },
     });
     return { userId, clientId };
   }
@@ -345,6 +345,52 @@ describe("stub transport push on policy change (#54)", () => {
     const exc = pushLines("exception.created");
     expect(exc).toHaveLength(1);
     expect(exc[0]).toMatchObject({ clientId, userId, reason: "exception.created" });
+  });
+
+  it("logs a notification.upserted push to each linked client (#104)", async () => {
+    const { userId, clientId } = await linkedUser();
+
+    await auth({
+      method: "PUT",
+      url: `/api/users/${userId}/notification-policy`,
+      payload: {
+        enabled: false,
+        soundProfile: "prominent",
+        graceSeconds: 0,
+        cadenceOverrides: { homework: { suppressSub5: true } },
+      },
+    });
+
+    const pushed = pushLines("notification.upserted");
+    expect(pushed).toHaveLength(1);
+    expect(pushed[0]).toMatchObject({
+      clientId,
+      userId,
+      reason: "notification.upserted",
+      // The full effective policy is carried so the cached client copy isn't
+      // missing the cadence override the user just changed (#100/#103).
+      detail: {
+        enabled: false,
+        soundProfile: "prominent",
+        graceSeconds: 0,
+        cadenceOverrides: { homework: { suppressSub5: true } },
+      },
+    });
+  });
+
+  it("logs a notification.deleted push (clients resolved before the row is gone)", async () => {
+    const { userId, clientId } = await linkedUser();
+    await auth({
+      method: "PUT",
+      url: `/api/users/${userId}/notification-policy`,
+      payload: { enabled: false },
+    });
+
+    await auth({ method: "DELETE", url: `/api/users/${userId}/notification-policy` });
+
+    const pushed = pushLines("notification.deleted");
+    expect(pushed).toHaveLength(1);
+    expect(pushed[0]).toMatchObject({ clientId, userId, reason: "notification.deleted" });
   });
 
   it("does not push for activity/group definitions (no per-client effect)", async () => {

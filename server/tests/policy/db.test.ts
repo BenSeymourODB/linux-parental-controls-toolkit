@@ -6,10 +6,11 @@
  * the same file is what proves migrate-on-boot is idempotent. Each test gets
  * its own temp directory and closes the handle so nothing leaks between runs.
  */
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createDb, type PolicyDb } from "../../src/policy/db.js";
@@ -76,8 +77,8 @@ describe("createDb", () => {
     expect(() =>
       db.$client
         .prepare(
-          "INSERT INTO users_on_clients (user_id, client_id, linux_username, linux_uid) " +
-            "VALUES (999, 999, 'ghost', 1000)",
+          "INSERT INTO users_on_clients (user_id, client_id, os_username, os_user_ref) " +
+            "VALUES (999, 999, 'ghost', '1000')",
         )
         .run(),
     ).toThrow(/FOREIGN KEY/i);
@@ -102,6 +103,156 @@ describe("createDb", () => {
     expect(() =>
       createDb({ databaseUrl: dbPath }, { migrationsFolder: join(dir, "no-such-migrations") }),
     ).toThrow();
+  });
+
+  describe("pre-migration backup (#166)", () => {
+    /** Write a fixture migrations folder the drizzle migrator can apply. */
+    function writeMigrations(
+      folder: string,
+      migrations: { tag: string; when: number; sql: string }[],
+    ): void {
+      mkdirSync(join(folder, "meta"), { recursive: true });
+      writeFileSync(
+        join(folder, "meta", "_journal.json"),
+        JSON.stringify({
+          version: "7",
+          dialect: "sqlite",
+          entries: migrations.map((migration, idx) => ({
+            idx,
+            version: "6",
+            when: migration.when,
+            tag: migration.tag,
+            breakpoints: true,
+          })),
+        }),
+      );
+      for (const migration of migrations) {
+        writeFileSync(join(folder, `${migration.tag}.sql`), migration.sql);
+      }
+    }
+
+    const V1 = [
+      {
+        tag: "0000_init",
+        when: 1000,
+        sql: "CREATE TABLE widgets (id integer primary key, name text);",
+      },
+    ];
+    const V2 = [
+      ...V1,
+      { tag: "0001_more", when: 2000, sql: "CREATE TABLE gadgets (id integer primary key);" },
+    ];
+
+    it("snapshots the pre-migration state before applying a new migration", () => {
+      const v1 = join(dir, "mig-v1");
+      const v2 = join(dir, "mig-v2");
+      writeMigrations(v1, V1);
+      writeMigrations(v2, V2);
+      const backupDir = join(dir, "backups");
+
+      // First boot on V1: a fresh DB, so nothing is snapshotted.
+      const first = createDb({ databaseUrl: dbPath }, { migrationsFolder: v1 });
+      open.add(first);
+      first.$client.prepare("INSERT INTO widgets (name) VALUES (?)").run("alpha");
+      first.$client.close();
+      open.delete(first);
+      expect(existsSync(backupDir)).toBe(false);
+
+      // Upgrade boot on V2: 0001_more is pending, so the store is snapshotted
+      // before it is applied.
+      const second = createDb({ databaseUrl: dbPath }, { migrationsFolder: v2, backupDir });
+      open.add(second);
+
+      const snapshots = readdirSync(backupDir).filter((name) => name.startsWith("pre-migrate-"));
+      expect(snapshots).toHaveLength(1);
+
+      // The snapshot holds the pre-migration schema only (widgets, not gadgets)
+      // and the row written under V1.
+      const snapshot = new Database(join(backupDir, snapshots[0] as string));
+      try {
+        const tables = snapshot
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('widgets','gadgets')",
+          )
+          .pluck()
+          .all();
+        expect(tables).toEqual(["widgets"]);
+        expect(snapshot.prepare("SELECT name FROM widgets").pluck().all()).toEqual(["alpha"]);
+      } finally {
+        snapshot.close();
+      }
+
+      // The live DB has both tables after the upgrade migration applied.
+      const liveTables = second.$client
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('widgets','gadgets') ORDER BY name",
+        )
+        .pluck()
+        .all();
+      expect(liveTables).toEqual(["gadgets", "widgets"]);
+    });
+
+    it("writes no snapshot when the backup is disabled", () => {
+      const v1 = join(dir, "mig-v1");
+      const v2 = join(dir, "mig-v2");
+      writeMigrations(v1, V1);
+      writeMigrations(v2, V2);
+      const backupDir = join(dir, "backups");
+
+      const first = createDb({ databaseUrl: dbPath }, { migrationsFolder: v1 });
+      open.add(first);
+      first.$client.close();
+      open.delete(first);
+
+      const second = createDb(
+        { databaseUrl: dbPath, preMigrationBackup: { enabled: false, retain: 5 } },
+        { migrationsFolder: v2, backupDir },
+      );
+      open.add(second);
+
+      expect(existsSync(backupDir)).toBe(false);
+    });
+
+    it("is best-effort: a snapshot failure is logged and migration still proceeds", () => {
+      const v1 = join(dir, "mig-v1");
+      const v2 = join(dir, "mig-v2");
+      writeMigrations(v1, V1);
+      writeMigrations(v2, V2);
+
+      const first = createDb({ databaseUrl: dbPath }, { migrationsFolder: v1 });
+      open.add(first);
+      first.$client.close();
+      open.delete(first);
+
+      const errors: unknown[] = [];
+      const log = {
+        info: () => undefined,
+        warn: () => undefined,
+        error: (obj: unknown) => errors.push(obj),
+      };
+
+      const second = createDb(
+        { databaseUrl: dbPath },
+        {
+          migrationsFolder: v2,
+          log,
+          backUpBeforeMigrate: () => {
+            throw new Error("backup boom");
+          },
+        },
+      );
+      open.add(second);
+
+      // The failure was logged loudly, and the migration still applied.
+      expect(errors).toHaveLength(1);
+      const liveTables = second.$client
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('widgets','gadgets') ORDER BY name",
+        )
+        .pluck()
+        .all();
+      expect(liveTables).toEqual(["gadgets", "widgets"]);
+    });
   });
 
   it("is idempotent: reopening an existing file re-applies no migrations and keeps data", () => {

@@ -89,7 +89,7 @@ describe("evaluateUserEnforcement", () => {
         allowedSeconds: 1800,
         consumedSeconds: 3600,
         overageSeconds: 1800,
-        graceSeconds: 60, // schema default — no notification_policies row
+        graceSeconds: 15, // documented default — no notification_policies row
       },
     ]);
     expect(out.lastFiredAt.get(`activity:${firefoxId}`)).toEqual(NOW);
@@ -167,7 +167,9 @@ describe("evaluateUserEnforcement", () => {
   });
 
   it("uses the grace period from the user's notification policy when present", () => {
-    db.insert(notificationPolicies).values({ userId, graceSeconds: 120 }).run();
+    // A valid in-range value (0–60) distinct from the documented default (15),
+    // so the assertion proves the grace is read from the policy, not the default.
+    db.insert(notificationPolicies).values({ userId, graceSeconds: 45 }).run();
     db.insert(budgets)
       .values({
         userId,
@@ -184,7 +186,7 @@ describe("evaluateUserEnforcement", () => {
       { userId, now: NOW, tz: "UTC", cooldownSeconds: 300 },
       new Map(),
     );
-    expect(out.decisions[0]?.graceSeconds).toBe(120);
+    expect(out.decisions[0]?.graceSeconds).toBe(45);
   });
 
   it("treats a budgeted activity with no usage as zero-consumed (no decision)", () => {

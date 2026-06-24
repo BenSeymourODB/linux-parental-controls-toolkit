@@ -2,7 +2,7 @@
  * `TimekprClient` — the typed Timekpr-nExT control surface for one supervised
  * user on one enrolled client.
  *
- * It binds an SSH {@link SshTarget} and a `linux_username` to the pure argv
+ * It binds an SSH {@link SshTarget} and an OS `username` to the pure argv
  * builders in {@link ./commands.ts}, runs each command over the Phase-4 SSH
  * facade ({@link ../ssh/facade.ts}) as a **subprocess**, and confirms reads by
  * zod-parsing stdout. Setters use the facade's `execChecked` (a non-zero
@@ -30,6 +30,7 @@ import {
   buildSetPlayTimeLimitOverride,
   buildSetPlayTimeLimits,
   buildSetPlayTimeUnaccountedIntervalsEnabled,
+  buildSetTimeLeft,
   buildSetTimeLimits,
   buildSetTimeLimitMonth,
   buildSetTimeLimitWeek,
@@ -38,6 +39,7 @@ import {
   type AllowedHoursDay,
   type IsoWeekday,
   type PlayTimeActivity,
+  type TimeLeftOperation,
 } from "./commands.js";
 import { TimekprArgumentError } from "./errors.js";
 import { timekprUserInfoSchema, type TimekprUserInfo } from "./userinfo.js";
@@ -169,6 +171,16 @@ export class TimekprClient {
   /** Set the rolling monthly session-time limit in seconds (`--settimelimitmonth`). */
   setTimeLimitMonth(seconds: number): Promise<ExecResult> {
     return this.#exec(() => buildSetTimeLimitMonth(this.#username, seconds));
+  }
+
+  /**
+   * Adjust or set the user's **remaining time for today** (`--settimeleft`) —
+   * the same-day "add 30 minutes" / "set time left" lever (#257), independent of
+   * the standing daily limit. `operation` is `"+"`/`"-"` for an additive delta
+   * or `"="` to set outright; `seconds` is a non-negative count.
+   */
+  setTimeLeft(operation: TimeLeftOperation, seconds: number): Promise<ExecResult> {
+    return this.#exec(() => buildSetTimeLeft(this.#username, operation, seconds));
   }
 
   /** Enable or disable PlayTime (app-group time) for the user (`--setplaytimeenabled`). */
