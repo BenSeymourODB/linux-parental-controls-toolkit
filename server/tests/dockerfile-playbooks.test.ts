@@ -84,16 +84,26 @@ describe("Phase-6 playbooks packaged into the image (#260)", () => {
   });
 
   it("builds every image site from the repo root with -f server/Dockerfile", () => {
+    // Every site that builds the image — a single one left on the old `server/`
+    // context would build an image WITHOUT the playbooks.
     const sites = [
       ".github/workflows/ci.yml",
       ".github/workflows/license-guard.yml",
       ".github/workflows/release.yml",
+      "docker-compose.yml",
+      "scripts/screenshots/run.sh",
     ];
     for (const site of sites) {
-      const yml = readFileSync(repoRoot(site), "utf8");
-      expect(yml, `${site} must reference server/Dockerfile`).toContain("server/Dockerfile");
-      // The legacy `server/`-only build context must be gone everywhere.
-      expect(yml).not.toMatch(/\bcontext:\s*server\b/);
+      const text = readFileSync(repoRoot(site), "utf8");
+      // An explicit `server/Dockerfile` reference only appears once the context
+      // moved off `server/` (the old form used `server/` as the context with an
+      // implicit Dockerfile), so this proves the site was migrated.
+      expect(text, `${site} must build with -f server/Dockerfile`).toContain("server/Dockerfile");
+      // The legacy `server/`-only build context must be gone in any of its
+      // forms (`context: server`, `context: ./server`, `context: /server`).
+      expect(text, `${site} still uses the legacy server/ build context`).not.toMatch(
+        /context:\s*\.?\/?server\b/,
+      );
     }
   });
 });
