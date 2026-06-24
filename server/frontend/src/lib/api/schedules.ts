@@ -18,6 +18,7 @@ import type {
   ScheduleResponse,
   CreateScheduleRequest,
   UpdateScheduleRequest,
+  ScheduleOrderView,
 } from "./contract.js";
 
 /**
@@ -45,4 +46,28 @@ export function updateSchedule(
 /** Delete a schedule. Resolves on the server's `204`. */
 export function deleteSchedule(id: number): Promise<void> {
   return apiFetch<void>(`/schedules/${id}`, { method: "DELETE" });
+}
+
+/**
+ * Fetch a user's schedules in evaluation order, plus the editor's derived facts
+ * (#63): which rules are shadowed and which are in effect right now. Precedence
+ * is computed server-side, so the editor renders these without re-deriving them.
+ */
+export function getScheduleOrder(userId: number): Promise<ScheduleOrderView> {
+  return apiFetch<ScheduleOrderView>(`/users/${userId}/schedules/order`);
+}
+
+/**
+ * Persist a new evaluation order for a user's schedules. `orderedIds` must be a
+ * permutation of exactly that user's schedule ids (the server returns a 409
+ * otherwise); the refreshed order view comes back.
+ */
+export function reorderSchedules(
+  userId: number,
+  orderedIds: number[],
+): Promise<ScheduleOrderView> {
+  return apiFetch<ScheduleOrderView>(`/users/${userId}/schedules/order`, {
+    method: "PUT",
+    body: { orderedIds },
+  });
 }

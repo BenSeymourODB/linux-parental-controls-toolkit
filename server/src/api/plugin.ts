@@ -21,6 +21,7 @@ import { registerMetaRoute } from "./meta.js";
 import {
   registerEffectiveRoutes,
   registerPolicyRoutes,
+  registerScheduleOrderRoutes,
   registerPreviewRoutes,
   registerTimeTodayRoutes,
 } from "./policy/index.js";
@@ -74,6 +75,10 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (scope, opt
   // Effective-policy preview (#143): GET /users/:userId/effective. Needs
   // `settings` for the server-default timezone of users with no `tz`.
   registerEffectiveRoutes(scope, opts.settings);
+  // Schedule drag-to-reorder editor support (#63): GET/PUT
+  // /users/:userId/schedules/order. Needs `settings` for the server-default
+  // timezone used to resolve which rule is in effect "right now".
+  registerScheduleOrderRoutes(scope, opts.settings);
   // Usage views (#62): admin-only read of per-budget burndown + the
   // per-activity timeline, the data source for the Phase-5 chart components.
   // Needs `settings` for the server-default timezone of users with no `tz`.

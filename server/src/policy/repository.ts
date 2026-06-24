@@ -21,6 +21,7 @@ import { and, eq } from "drizzle-orm";
 
 import type { PolicyDb } from "./db.js";
 import type { ActivityKind, BudgetWindow, MatchType, ScheduleAction, Scope } from "./enums.js";
+import { reorder } from "./schedule-precedence.js";
 import {
   activities,
   activitiesToGroups,
@@ -761,6 +762,30 @@ export function deleteSchedule(db: PolicyDb, id: number): boolean {
     db.delete(schedules).where(eq(schedules.id, id)).returning({ id: schedules.id }).get() !==
     undefined
   );
+}
+
+/**
+ * Atomically reorder a user's schedules to match `orderedIds`, the persistence
+ * step behind the drag-to-reorder editor (#63). `orderedIds` must be a
+ * permutation of exactly that user's schedule ids; {@link reorder} validates
+ * this and throws {@link import("./schedule-precedence.js").ReorderMismatchError}
+ * before any write, so a stale or garbled request can never partially apply or
+ * drop a rule's position. The dense `0..n-1` ordinals are written in a single
+ * transaction; the rows are then re-read in the new evaluation order.
+ */
+export function reorderUserSchedules(
+  db: PolicyDb,
+  userId: number,
+  orderedIds: readonly number[],
+): ScheduleRow[] {
+  // Validate the permutation and compute dense ordinals up front (may throw).
+  const reordered = reorder(listUserSchedules(db, userId), orderedIds);
+  db.transaction((tx) => {
+    for (const rule of reordered) {
+      tx.update(schedules).set({ ordinal: rule.ordinal }).where(eq(schedules.id, rule.id)).run();
+    }
+  });
+  return listUserSchedules(db, userId);
 }
 
 // --- Exceptions ------------------------------------------------------------
