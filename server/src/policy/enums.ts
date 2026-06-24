@@ -62,6 +62,22 @@ export const scheduleActionSchema = z.enum(scheduleActionValues);
 export type ScheduleAction = z.infer<typeof scheduleActionSchema>;
 
 /**
+ * The client-side sound theme for a user's notifications, per
+ * `docs/client-notifications.md` → "Sound design":
+ *
+ * - `off` — no sounds at all.
+ * - `subtle` (default) — soft cues for routine warnings.
+ * - `prominent` — louder cues routed through a higher-volume channel, for a
+ *   user who routinely misses the subtle ones.
+ *
+ * The agent (#103) reads this from the pushed `NotificationPolicy` and the
+ * admin sets it from `/admin/notifications` (#105).
+ */
+export const soundProfileValues = ["off", "subtle", "prominent"] as const;
+export const soundProfileSchema = z.enum(soundProfileValues);
+export type SoundProfile = z.infer<typeof soundProfileSchema>;
+
+/**
  * Outcome of a transport command recorded in the audit log (#85), derived from
  * the SSH facade's error taxonomy (`transport/ssh/errors.ts`):
  *
