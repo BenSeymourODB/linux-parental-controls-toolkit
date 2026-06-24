@@ -129,6 +129,10 @@ describe("Bridge (fake WS → real AF_UNIX)", () => {
       order.push("ws-created");
       expect(url).toBe(config.serverUrl);
       expect(opts.headers.Authorization).toBe("Bearer tok-123");
+      // The WS must not be created until the per-user sockets are bound — pin
+      // the ordering at the moment the factory runs, not just after start().
+      expect(existsSync(join(dir, "1001.sock"))).toBe(true);
+      expect(existsSync(join(dir, "1002.sock"))).toBe(true);
       const s = new FakeSocket();
       sockets.push(s);
       return s;
@@ -136,10 +140,7 @@ describe("Bridge (fake WS → real AF_UNIX)", () => {
 
     const bridge = new Bridge(config, { logger: testLogger(), wsFactory: factory });
 
-    // start() must bind the dispatcher (sockets exist) before the WS is created.
-    const startP = bridge.start();
-    // The dispatcher.start() is async; the WS is created only after it resolves.
-    await startP;
+    await bridge.start();
     expect(existsSync(join(dir, "1001.sock"))).toBe(true);
     expect(existsSync(join(dir, "1002.sock"))).toBe(true);
     expect(order).toEqual(["ws-created"]);

@@ -155,6 +155,11 @@ export function loadConfigFromEnv(env: BridgeEnv = process.env): BridgeConfig {
 /** Parse an optional base-10 / 0o-prefixed integer env var, or `undefined`. */
 function parseOptionalInt(value: string | undefined, name: string): number | undefined {
   if (value === undefined) return undefined;
+  // Reject empty/whitespace explicitly: `Number("")` and `Number(" ")` are 0,
+  // which would silently yield an unusable socket mode (0o000) etc.
+  if (value.trim() === "") {
+    throw new ConfigError(`${name} is empty`);
+  }
   // `Number` handles "0o600" (octal mode) and plain decimals; reject the rest.
   const n = Number(value);
   if (!Number.isFinite(n)) {

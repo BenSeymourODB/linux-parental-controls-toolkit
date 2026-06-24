@@ -192,4 +192,22 @@ describe("Dispatcher (real AF_UNIX)", () => {
     expect(dispatcher.connectionCount(7)).toBe(1);
     agent.destroy();
   });
+
+  it("rejects and leaks no sockets when a later user fails to bind", async () => {
+    // The first user binds fine; the second points at a non-existent directory
+    // so its listen() rejects (ENOENT). start() must roll the first one back.
+    const badDir = join(dir, "does-not-exist");
+    dispatcher = new Dispatcher({
+      users: [
+        { userId: 7, linuxUid: 1001 },
+        { userId: 8, linuxUid: 1002 },
+      ],
+      socketPath: (uid) => (uid === 1002 ? join(badDir, `${uid}.sock`) : socketPath(uid)),
+      socketMode: 0o600,
+      logger: log,
+    });
+    await expect(dispatcher.start()).rejects.toThrow();
+    // The first user's socket must have been torn back down — no half-bound set.
+    expect(existsSync(socketPath(1001))).toBe(false);
+  });
 });

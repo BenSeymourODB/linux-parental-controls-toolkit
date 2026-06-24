@@ -130,4 +130,11 @@ describe("loadConfigFromEnv", () => {
       /PCT_BRIDGE_SOCKET_MODE is not a number/,
     );
   });
+
+  it("rejects an empty/whitespace socketMode rather than coercing it to 0", () => {
+    // `Number("")` is 0, which would yield an unusable 0o000 socket; reject it.
+    expect(() => loadConfigFromEnv({ ...VALID_ENV, PCT_BRIDGE_SOCKET_MODE: "  " })).toThrow(
+      /PCT_BRIDGE_SOCKET_MODE is empty/,
+    );
+  });
 });

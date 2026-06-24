@@ -123,10 +123,19 @@ export class Dispatcher {
     }
   }
 
-  /** Bind every per-user socket. Rejects if any fails to listen. */
+  /**
+   * Bind every per-user socket. If any fails to listen, the sockets already
+   * bound earlier in this call are torn back down before the error propagates,
+   * so a partial start never leaks a half-bound set of socket files.
+   */
   async start(): Promise<void> {
-    for (const userSocket of this.#byUserId.values()) {
-      await userSocket.listen(this.#options.socketMode);
+    try {
+      for (const userSocket of this.#byUserId.values()) {
+        await userSocket.listen(this.#options.socketMode);
+      }
+    } catch (err) {
+      await this.stop();
+      throw err;
     }
     this.#options.logger.info({ users: this.#byUserId.size }, "dispatcher listening");
   }

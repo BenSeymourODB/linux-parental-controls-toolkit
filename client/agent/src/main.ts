@@ -50,7 +50,24 @@ async function main(): Promise<void> {
   process.on("SIGTERM", () => shutdown("SIGTERM"));
   process.on("SIGINT", () => shutdown("SIGINT"));
 
-  await bridge.start();
+  try {
+    await bridge.start();
+  } catch (err) {
+    // A bind failure (EACCES/ENOENT under /run/pct, or a live peer on the
+    // path) must surface as a logged, non-zero exit — not a swallowed
+    // unhandled rejection. Dispatcher.start() has already rolled back any
+    // sockets it bound, but stop() the bridge defensively in case the WS
+    // client started.
+    logger.error({ err }, "failed to start; shutting down");
+    await bridge.stop().catch(() => undefined);
+    process.exitCode = 1;
+  }
 }
 
-void main();
+// Backstop: a rejection main() does not handle itself (e.g. a non-ConfigError
+// thrown while building the bridge) must still exit non-zero, never a silent
+// unhandled rejection.
+main().catch((err: unknown) => {
+  process.stderr.write(`pct-client-bridge: fatal: ${String(err)}\n`);
+  process.exit(1);
+});
