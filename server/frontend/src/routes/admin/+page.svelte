@@ -29,6 +29,7 @@
   import BudgetsView from "$lib/views/BudgetsView.svelte";
   import SchedulesView from "$lib/views/SchedulesView.svelte";
   import ExceptionsView from "$lib/views/ExceptionsView.svelte";
+  import NotificationsView from "$lib/views/NotificationsView.svelte";
   import LinksView from "$lib/views/LinksView.svelte";
   import IntegrationTokensView from "$lib/views/IntegrationTokensView.svelte";
   import AuditLogView from "$lib/views/AuditLogView.svelte";
@@ -51,6 +52,7 @@
     { id: "budgets", label: "Budgets" },
     { id: "schedules", label: "Schedules" },
     { id: "exceptions", label: "Exceptions" },
+    { id: "notifications", label: "Notifications" },
     { id: "integrations", label: "Integrations" },
     { id: "audit", label: "Audit log" },
   ];
@@ -139,6 +141,8 @@
       <SchedulesView />
     {:else if activeView === "exceptions"}
       <ExceptionsView />
+    {:else if activeView === "notifications"}
+      <NotificationsView />
     {:else if activeView === "integrations"}
       <IntegrationTokensView />
     {:else if activeView === "audit"}
