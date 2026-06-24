@@ -18,6 +18,20 @@
  * per-IP failed-attempt throttling these surfaces call for.
  */
 
+/**
+ * Default failed attempts allowed within a window before a key is blocked.
+ * Five tolerates a forgetful admin's typos while still cutting an online
+ * password-guessing attempt short long before it is useful.
+ */
+const DEFAULT_MAX_FAILED_ATTEMPTS = 5;
+
+/**
+ * Default window length in milliseconds (15 minutes). Long enough that a
+ * blocked attacker can't simply wait it out in seconds, short enough that a
+ * locked-out legitimate admin is not stranded.
+ */
+const DEFAULT_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
+
 /** A failed-attempt window for one key. */
 interface Window {
   count: number;
@@ -43,8 +57,8 @@ export class FixedWindowRateLimiter {
   private readonly windows = new Map<string, Window>();
 
   constructor(options: FixedWindowRateLimiterOptions = {}) {
-    this.maxAttempts = options.maxAttempts ?? 5;
-    this.windowMs = options.windowMs ?? 15 * 60 * 1000;
+    this.maxAttempts = options.maxAttempts ?? DEFAULT_MAX_FAILED_ATTEMPTS;
+    this.windowMs = options.windowMs ?? DEFAULT_RATE_LIMIT_WINDOW_MS;
     this.now = options.now ?? Date.now;
   }
 
