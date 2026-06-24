@@ -22,6 +22,13 @@
  */
 export type { SessionResponse, LoginRequest } from "../../../../src/auth/dtos.js";
 export type {
+  PinLoginRequest,
+  PinSessionResponse,
+  SetUserPinRequest,
+  UserPinStatusResponse,
+  AppMeResponse,
+} from "../../../../src/api/app/dtos.js";
+export type {
   UserResponse,
   CreateUserRequest,
   UpdateUserRequest,
