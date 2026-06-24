@@ -52,6 +52,11 @@ export type {
   TimeTodayResponse,
   ClientAdjustmentResultDto,
 } from "../../../../src/api/policy/dtos.js";
+export type {
+  PolicyPreviewRequest,
+  PolicyPreviewResponse,
+  PreviewAffectedClient,
+} from "../../../../src/api/policy/preview-dtos.js";
 export type { AuditEntryResponse, AuditListResponse } from "../../../../src/api/audit/dtos.js";
 export type {
   CreateIntegrationTokenRequest,

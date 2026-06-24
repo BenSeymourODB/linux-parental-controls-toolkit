@@ -28,6 +28,7 @@
   import ActivityGroupsView from "$lib/views/ActivityGroupsView.svelte";
   import BudgetsView from "$lib/views/BudgetsView.svelte";
   import SchedulesView from "$lib/views/SchedulesView.svelte";
+  import PolicyPreviewView from "$lib/views/PolicyPreviewView.svelte";
   import ExceptionsView from "$lib/views/ExceptionsView.svelte";
   import LinksView from "$lib/views/LinksView.svelte";
   import IntegrationTokensView from "$lib/views/IntegrationTokensView.svelte";
@@ -50,6 +51,7 @@
     { id: "activity-groups", label: "Activity Groups" },
     { id: "budgets", label: "Budgets" },
     { id: "schedules", label: "Schedules" },
+    { id: "policy-preview", label: "Policy preview" },
     { id: "exceptions", label: "Exceptions" },
     { id: "integrations", label: "Integrations" },
     { id: "audit", label: "Audit log" },
@@ -137,6 +139,8 @@
       <BudgetsView />
     {:else if activeView === "schedules"}
       <SchedulesView />
+    {:else if activeView === "policy-preview"}
+      <PolicyPreviewView />
     {:else if activeView === "exceptions"}
       <ExceptionsView />
     {:else if activeView === "integrations"}
