@@ -36,6 +36,7 @@ import {
   auditOutcomeValues,
   budgetWindowValues,
   matchTypeValues,
+  platformValues,
   scheduleActionValues,
   scopeValues,
   soundProfileValues,
@@ -112,6 +113,11 @@ export const users = sqliteTable("users", {
  * that doesn't report versions (an older install script, an admin-CRUD client)
  * still enrols; `versions_reported_at` is set only when at least one version is
  * reported. `component_versions` is a JSON blob keyed by managed component.
+ *
+ * `platform` (#229) is the OS-family discriminator — `linux` today, `windows`
+ * reserved (post-Phase-14 epic #233). It defaults to `linux` so every existing
+ * row and every current enrolment carries it without a backfill; reserving it
+ * now keeps a future per-platform transport/UI branch off a schema migration.
  */
 export interface ComponentVersions {
   // `| undefined` on each optional field so this lines up with the zod-inferred
@@ -133,6 +139,7 @@ export const clients = sqliteTable(
     agentVersion: text("agent_version"),
     componentVersions: text("component_versions", { mode: "json" }).$type<ComponentVersions>(),
     versionsReportedAt: integer("versions_reported_at", { mode: "timestamp" }),
+    platform: text("platform", { enum: platformValues }).notNull().default("linux"),
   },
   (table) => [
     uniqueIndex("clients_hostname_unique").on(table.hostname),
@@ -141,6 +148,7 @@ export const clients = sqliteTable(
     // by construction. SQLite treats multiple NULLs as distinct, so the
     // admin-CRUD clients that carry no bearer token are unaffected.
     uniqueIndex("clients_bearer_token_hash_unique").on(table.bearerTokenHash),
+    check("clients_platform_check", oneOf(table.platform, platformValues)),
   ],
 );
 
