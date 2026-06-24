@@ -161,9 +161,21 @@ describe("PolicyPreviewView", () => {
     await selectUser();
     await waitFor(() => expect(previewPolicyPush).toHaveBeenCalled());
 
-    await fireEvent.click(screen.getByLabelText("Include schedule rule 500"));
+    await fireEvent.click(screen.getByLabelText(/^Include .*schedule rule:/));
 
     await waitFor(() => expect(lastProposed().schedules).toHaveLength(0));
+  });
+
+  it("renders the no-clients empty state when the user has no linked clients", async () => {
+    previewPolicyPush.mockResolvedValue(previewResponse({ affectedClients: [] }));
+
+    render(PolicyPreviewView);
+    await selectUser();
+
+    expect(await screen.findByText("0 clients affected")).toBeInTheDocument();
+    expect(
+      screen.getByText("No clients linked — nothing to push to yet."),
+    ).toBeInTheDocument();
   });
 
   it("re-previews with the edited overall minutes", async () => {

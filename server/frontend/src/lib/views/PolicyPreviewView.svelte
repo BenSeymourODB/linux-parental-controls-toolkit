@@ -117,7 +117,10 @@
       budgets = loadedBudgets;
       schedules = loadedSchedules;
       // Seed the what-if state from the baseline: every rule included, every
-      // overall duration at its persisted value.
+      // overall duration at its persisted value. Budgets are authored in whole
+      // minutes (BudgetsView), so `secondsAllowed / 60` is lossless; the round
+      // only guards a hand-seeded sub-minute value, which would seed a rounded
+      // box rather than crash.
       minutesById = Object.fromEntries(
         loadedBudgets
           .filter((b) => b.scope === "overall")
@@ -356,7 +359,7 @@
                         type="checkbox"
                         checked={!excluded}
                         onchange={() => toggleSchedule(schedule.id)}
-                        aria-label={`Include schedule rule ${schedule.id}`}
+                        aria-label={`Include ${ACTION_LABEL[schedule.action]} schedule rule: ${scheduleSummary(schedule)}`}
                       />
                       <span class="act act-{schedule.action}">{ACTION_LABEL[schedule.action]}</span>
                     </label>
@@ -387,7 +390,7 @@
                     : ""}
                 </h3>
                 <ul class="changes">
-                  {#each preview.changes as change, i (i)}
+                  {#each preview.changes as change (`${change.field}-${change.weekday}`)}
                     <li class="change">
                       <span class="kind kind-{change.kind}">{change.kind}</span>
                       <span class="summary">{change.summary}</span>
