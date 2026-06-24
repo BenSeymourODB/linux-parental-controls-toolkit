@@ -452,6 +452,57 @@ export function toScheduleResponse(row: ScheduleRow): ScheduleResponse {
   };
 }
 
+// --- Schedule ordering (#63) -----------------------------------------------
+
+/**
+ * Atomic reorder body: the user's schedule ids in their new evaluation order
+ * (first wins). Completeness and uniqueness against the user's actual rows are
+ * checked server-side by `reorder()` (a 409 on mismatch), which gives a precise
+ * error a per-field schema can't — so this only asserts a non-empty list of ids.
+ */
+export const reorderSchedulesSchema = z.object({
+  orderedIds: z.array(z.number().int().positive()).min(1),
+});
+export type ReorderSchedulesRequest = z.infer<typeof reorderSchedulesSchema>;
+
+/**
+ * A later schedule rule that an earlier one renders unreachable — the wire form
+ * of `policy/schedule-precedence.ts`'s `ShadowFinding`, feeding the editor's
+ * "this rule will never apply" warning.
+ */
+export const shadowFindingSchema = z.object({
+  shadowedId: z.number().int(),
+  shadowedById: z.number().int(),
+});
+export type ShadowFindingDto = z.infer<typeof shadowFindingSchema>;
+
+/**
+ * A user's schedules in evaluation order, plus the two derived facts the
+ * drag-to-reorder editor (#63) renders without re-implementing precedence:
+ * `shadows` — rules an earlier rule provably pre-empts — and `effectiveIds` —
+ * the rule in effect *right now* for each distinct target. Both are computed
+ * server-side from the shared precedence module so every surface agrees.
+ */
+export const scheduleOrderViewSchema = z.object({
+  schedules: z.array(scheduleResponseSchema),
+  shadows: z.array(shadowFindingSchema),
+  effectiveIds: z.array(z.number().int()),
+});
+export type ScheduleOrderView = z.infer<typeof scheduleOrderViewSchema>;
+
+/** Assemble a {@link ScheduleOrderView} from ordered rows + the derived facts. */
+export function toScheduleOrderView(
+  rows: readonly ScheduleRow[],
+  shadows: readonly ShadowFindingDto[],
+  effectiveIds: readonly number[],
+): ScheduleOrderView {
+  return {
+    schedules: rows.map(toScheduleResponse),
+    shadows: shadows.map((s) => ({ shadowedId: s.shadowedId, shadowedById: s.shadowedById })),
+    effectiveIds: [...effectiveIds],
+  };
+}
+
 // --- Exceptions ------------------------------------------------------------
 
 /**

@@ -20,6 +20,7 @@ deliberately bounded tamper-resistance posture.
 | `/review-issues` | Analyzes all open issues for blockers, enablers, and synergies; writes `docs/issue-dependency-analysis.md` + `docs/issue-cross-reference-updates.md` and appends cross-reference sections to the issues. |
 | `/code-review` | Orchestrates a read-only cleanliness review: spawns the five `code-review-*` agents in parallel, dedupes findings, and files `code-review`-labelled GitHub issues. |
 | `/code-review-fix` | Reads open `code-review` issues, prioritizes them, and executes fixes one at a time through the quality gate, closing each when green. |
+| `/update-screenshots` | Regenerates `docs/screenshots/` and the README product shots from the current dashboard UI, via `scripts/screenshots/` (a throwaway, seeded instance + headless Chromium, all in Docker). Run after a significant UI change. |
 | `code-review-complexity` / `code-review-concerns` / `code-review-dead-code` / `code-review-readability` / `code-review-patterns` | Specialized review agents invoked by `/code-review`. Each emits findings in a fixed `FINDING:` format. Not meant to be run directly, though they can be. |
 
 ## Conventions these commands assume
