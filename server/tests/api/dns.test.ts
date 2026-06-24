@@ -136,7 +136,12 @@ describe("GET /api/dns", () => {
 
   it("surfaces managed mode as unknown, deferring to the supervisor (#96)", async () => {
     const built = await harnessWith(
-      createAdGuardService({ mode: "managed", bindAddr: "0.0.0.0:53", adminPort: 3000 }),
+      createAdGuardService({
+        mode: "managed",
+        bindAddr: "0.0.0.0:53",
+        adminPort: 3000,
+        dataDir: "/data/adguard",
+      }),
     );
     harness = built.harness;
     const res = await harness.app.inject({

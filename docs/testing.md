@@ -219,6 +219,45 @@ and leaves closing it to the provider. So `app.db`, the `db` returned by
 `buildTestApp()`, and the handle you passed in are all the same object, and
 `close()` tears down the app and then the database.
 
+### Fixtures and the clock — avoiding time-bombs
+
+A test is a **time-bomb** when it passes today but will fail on a future
+calendar day with no code change. The classic shape (issue #254) is a fixture
+that pins one timestamp to a hardcoded date while letting *another* default to
+the wall clock, then asserts on a relationship between the two:
+
+```ts
+// ❌ time-bomb: grantedAt defaults to unixepoch() (= now), but the query date
+// is hardcoded. It composes only while "now" still falls inside 2026-06-20;
+// once the wall clock passes that day, grantOverlapsDay correctly drops the
+// grant and the assertion flips (9000 → 7200).
+db.insert(grants).values({ userId, scope: "overall", secondsGranted: 1800,
+  expiresAt: new Date("2026-12-31T00:00:00Z"), source: "admin" }).run();
+await app.inject({ url: `/api/users/${userId}/effective?date=2026-06-20` });
+```
+
+The columns that bite are the `timestampNow()` defaults in `schema.ts`
+(`grants.grantedAt`, `exceptions.createdAt`, …) — they resolve to insertion
+time, i.e. the real wall clock, which no test controls.
+
+Two safe patterns, pick by what the test is asserting:
+
+- **Pin every timestamp the assertion depends on** to a fixed instant relative
+  to the hardcoded query date (this is the #254 fix — set `grantedAt` explicitly
+  so the grant deterministically overlaps the queried day).
+- **Derive the query date from the clock**, never hardcode it, when you *want*
+  to exercise a defaulted timestamp. See the evergreen guard
+  "resolves a default-grantedAt grant by wall clock" in
+  `tests/api/policy-effective.test.ts`: it inserts a grant on the `grantedAt`
+  default and asserts against `today` / a day 30 days in the past, both computed
+  from `Date.now()`, so it pins the wall-clock semantics without ever maturing
+  into a time-bomb.
+
+Sweep technique: temporarily change `timestampNow()` in `schema.ts` to default to
+a far-future literal (`unixepoch('2030-03-15T12:00:00Z')`) and run the suite — any
+test that secretly relies on a default timestamp being "near now" fails. The unit
+suite is clean under this check; keep it that way.
+
 ---
 
 ## Coverage targets by module

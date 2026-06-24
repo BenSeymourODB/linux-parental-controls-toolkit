@@ -21,6 +21,7 @@ import { and, eq } from "drizzle-orm";
 
 import type { PolicyDb } from "./db.js";
 import type { ActivityKind, BudgetWindow, MatchType, ScheduleAction, Scope } from "./enums.js";
+import { reorder } from "./schedule-precedence.js";
 import {
   activities,
   activitiesToGroups,
@@ -71,8 +72,9 @@ export interface ClientUpdate {
 
 /** The link's own attributes (the user/client pair comes from the route). */
 export interface LinkUpsert {
-  linuxUsername: string;
-  linuxUid: number;
+  osUsername: string;
+  /** OS account reference: a uid on Linux, a SID on Windows (#230). */
+  osUserRef: string;
 }
 
 // --- Users -----------------------------------------------------------------
@@ -199,12 +201,23 @@ export function listUserLinks(db: PolicyDb, userId: number): UserOnClientRow[] {
     .all();
 }
 
+/** All links for a client, ascending by user id (inverse of {@link listUserLinks}). */
+export function listClientLinks(db: PolicyDb, clientId: number): UserOnClientRow[] {
+  return db
+    .select()
+    .from(usersOnClients)
+    .where(eq(usersOnClients.clientId, clientId))
+    .orderBy(usersOnClients.userId)
+    .all();
+}
+
 /**
  * Create or replace the link between `userId` and `clientId` (idempotent on the
- * composite key). Throws on the `(client, linux_uid)` uniqueness collision —
- * i.e. another user already mapped to that UID on the same client (see
- * {@link isUniqueViolation}). The caller is responsible for confirming the user
- * and client exist first (FK violations otherwise surface as opaque errors).
+ * composite key). Throws on the `(client, os_user_ref)` uniqueness collision —
+ * i.e. another user already mapped to that OS account reference on the same
+ * client (see {@link isUniqueViolation}). The caller is responsible for
+ * confirming the user and client exist first (FK violations otherwise surface
+ * as opaque errors).
  */
 export function upsertLink(
   db: PolicyDb,
@@ -214,10 +227,10 @@ export function upsertLink(
 ): UserOnClientRow {
   return db
     .insert(usersOnClients)
-    .values({ userId, clientId, linuxUsername: input.linuxUsername, linuxUid: input.linuxUid })
+    .values({ userId, clientId, osUsername: input.osUsername, osUserRef: input.osUserRef })
     .onConflictDoUpdate({
       target: [usersOnClients.userId, usersOnClients.clientId],
-      set: { linuxUsername: input.linuxUsername, linuxUid: input.linuxUid },
+      set: { osUsername: input.osUsername, osUserRef: input.osUserRef },
     })
     .returning()
     .get();
@@ -749,6 +762,30 @@ export function deleteSchedule(db: PolicyDb, id: number): boolean {
     db.delete(schedules).where(eq(schedules.id, id)).returning({ id: schedules.id }).get() !==
     undefined
   );
+}
+
+/**
+ * Atomically reorder a user's schedules to match `orderedIds`, the persistence
+ * step behind the drag-to-reorder editor (#63). `orderedIds` must be a
+ * permutation of exactly that user's schedule ids; {@link reorder} validates
+ * this and throws {@link import("./schedule-precedence.js").ReorderMismatchError}
+ * before any write, so a stale or garbled request can never partially apply or
+ * drop a rule's position. The dense `0..n-1` ordinals are written in a single
+ * transaction; the rows are then re-read in the new evaluation order.
+ */
+export function reorderUserSchedules(
+  db: PolicyDb,
+  userId: number,
+  orderedIds: readonly number[],
+): ScheduleRow[] {
+  // Validate the permutation and compute dense ordinals up front (may throw).
+  const reordered = reorder(listUserSchedules(db, userId), orderedIds);
+  db.transaction((tx) => {
+    for (const rule of reordered) {
+      tx.update(schedules).set({ ordinal: rule.ordinal }).where(eq(schedules.id, rule.id)).run();
+    }
+  });
+  return listUserSchedules(db, userId);
 }
 
 // --- Exceptions ------------------------------------------------------------

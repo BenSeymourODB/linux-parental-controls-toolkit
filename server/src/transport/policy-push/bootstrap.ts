@@ -36,6 +36,11 @@ import {
 } from "../ssh/index.js";
 import { createPolicyPushStub } from "../stub.js";
 import type { PolicyPushStub } from "../stub.js";
+import {
+  adjustTimeToday,
+  type TimeTodayAdjustment,
+  type TimeTodayResult,
+} from "../time-today/index.js";
 import { TimekprClient } from "../timekpr/index.js";
 import { createPolicyPushDispatcher } from "./dispatcher.js";
 import { createPolicyPushExecutor } from "./executor.js";
@@ -50,10 +55,23 @@ export interface BootstrapSshTransport extends AuditableTransport {
   disposeAll(): void;
 }
 
+/**
+ * Applies a same-day "Add time today" adjustment (#257) over the live transport.
+ * Awaitable (unlike the fire-and-forget dispatcher) so the admin route can
+ * return a per-client result.
+ */
+export type TimeTodayAdjuster = (adjustment: TimeTodayAdjustment) => Promise<TimeTodayResult>;
+
 /** A live policy-push transport: the dispatcher plus its teardown. */
 export interface PolicyPushTransport {
   /** The dispatcher the policy routes push through. */
   readonly dispatcher: PolicyPushStub;
+  /**
+   * The "Add time today" adjuster (#257), present only when the live transport
+   * is wired (SSH key exists). Absent in the logging fallback — the admin route
+   * then reports the transport as unavailable rather than silently no-op'ing.
+   */
+  readonly adjustTimeToday?: TimeTodayAdjuster;
   /** Stop the drainer and close pooled SSH connections (on `app.close()`). */
   dispose(): void;
 }
@@ -141,8 +159,29 @@ export function createPolicyPushTransport(
   const probe = sshReachabilityProbe(db, ssh, credentials);
   const drainer = startOfflineQueueDrainer({ db, probe, executor, log });
 
+  // The same-day "Add time today" lever (#257): a synchronous, audited
+  // `--settimeleft` over the same audited SSH `timekpra` client, attributed to
+  // the admin. Online-only (see `time-today/adjust.ts` for why it is not queued).
+  const timeTodayAdjuster: TimeTodayAdjuster = (adjustment) =>
+    adjustTimeToday(
+      db,
+      ({ client, username, userId }) =>
+        new TimekprClient(
+          auditing.withContext({
+            clientId: client.id,
+            userId,
+            actor: "admin",
+            reason: "time.adjusted",
+          }),
+          targetFromClient(client, credentials),
+          username,
+        ),
+      adjustment,
+    );
+
   return {
     dispatcher,
+    adjustTimeToday: timeTodayAdjuster,
     dispose: (): void => {
       drainer.stop();
       ssh.disposeAll();

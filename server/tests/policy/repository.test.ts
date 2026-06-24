@@ -7,6 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import * as repo from "../../src/policy/repository.js";
+import { ReorderMismatchError } from "../../src/policy/schedule-precedence.js";
 import { clients } from "../../src/policy/schema.js";
 import { testDb, type TestDb } from "../helpers/db.js";
 
@@ -136,25 +137,39 @@ describe("policy repository — user/client links", () => {
   });
 
   it("upserts a link idempotently and lists it", () => {
-    const link = repo.upsertLink(db, userId, clientId, { linuxUsername: "alice", linuxUid: 1001 });
-    expect(link).toEqual({ userId, clientId, linuxUsername: "alice", linuxUid: 1001 });
+    const link = repo.upsertLink(db, userId, clientId, { osUsername: "alice", osUserRef: "1001" });
+    expect(link).toEqual({ userId, clientId, osUsername: "alice", osUserRef: "1001" });
     expect(repo.listUserLinks(db, userId)).toEqual([link]);
 
     // Re-upsert replaces the link's attributes rather than inserting a second.
     const replaced = repo.upsertLink(db, userId, clientId, {
-      linuxUsername: "alice2",
-      linuxUid: 1002,
+      osUsername: "alice2",
+      osUserRef: "1002",
     });
-    expect(replaced.linuxUid).toBe(1002);
+    expect(replaced.osUserRef).toBe("1002");
     expect(repo.listUserLinks(db, userId)).toEqual([replaced]);
   });
 
-  it("rejects a duplicate (client, uid) for a different user with a unique violation", () => {
+  it("listClientLinks returns a client's links ascending by user id, isolated per client", () => {
+    const bob = repo.createUser(db, { displayName: "Bob" }).id;
+    const otherClient = repo.createClient(db, { hostname: "mint-02", sshUser: "pct-agent" }).id;
+    const aliceLink = repo.upsertLink(db, userId, clientId, {
+      osUsername: "alice",
+      osUserRef: "1001",
+    });
+    const bobLink = repo.upsertLink(db, bob, clientId, { osUsername: "bob", osUserRef: "1002" });
+    repo.upsertLink(db, userId, otherClient, { osUsername: "alice", osUserRef: "1001" });
+
+    expect(repo.listClientLinks(db, clientId)).toEqual([aliceLink, bobLink]);
+    expect(repo.listClientLinks(db, 999)).toEqual([]);
+  });
+
+  it("rejects a duplicate (client, os_user_ref) for a different user with a unique violation", () => {
     const otherUser = repo.createUser(db, { displayName: "Bob" }).id;
-    repo.upsertLink(db, userId, clientId, { linuxUsername: "alice", linuxUid: 1001 });
+    repo.upsertLink(db, userId, clientId, { osUsername: "alice", osUserRef: "1001" });
     let caught: unknown;
     try {
-      repo.upsertLink(db, otherUser, clientId, { linuxUsername: "bob", linuxUid: 1001 });
+      repo.upsertLink(db, otherUser, clientId, { osUsername: "bob", osUserRef: "1001" });
     } catch (err) {
       caught = err;
     }
@@ -162,19 +177,19 @@ describe("policy repository — user/client links", () => {
   });
 
   it("cascades link removal when the user is deleted", () => {
-    repo.upsertLink(db, userId, clientId, { linuxUsername: "alice", linuxUid: 1001 });
+    repo.upsertLink(db, userId, clientId, { osUsername: "alice", osUserRef: "1001" });
     expect(repo.deleteUser(db, userId)).toBe(true);
     expect(repo.listUserLinks(db, userId)).toEqual([]);
   });
 
   it("cascades link removal when the client is deleted", () => {
-    repo.upsertLink(db, userId, clientId, { linuxUsername: "alice", linuxUid: 1001 });
+    repo.upsertLink(db, userId, clientId, { osUsername: "alice", osUserRef: "1001" });
     expect(repo.deleteClient(db, clientId)).toBe(true);
     expect(repo.listUserLinks(db, userId)).toEqual([]);
   });
 
   it("deleteLink reports whether a row was removed", () => {
-    repo.upsertLink(db, userId, clientId, { linuxUsername: "alice", linuxUid: 1001 });
+    repo.upsertLink(db, userId, clientId, { osUsername: "alice", osUserRef: "1001" });
     expect(repo.deleteLink(db, userId, clientId)).toBe(true);
     expect(repo.deleteLink(db, userId, clientId)).toBe(false);
   });
@@ -182,8 +197,8 @@ describe("policy repository — user/client links", () => {
   it("listUserClientIds returns the linked client ids ascending, [] when none", () => {
     expect(repo.listUserClientIds(db, userId)).toEqual([]);
     const second = repo.createClient(db, { hostname: "mint-02", sshUser: "pct-agent" }).id;
-    repo.upsertLink(db, userId, second, { linuxUsername: "alice", linuxUid: 1002 });
-    repo.upsertLink(db, userId, clientId, { linuxUsername: "alice", linuxUid: 1001 });
+    repo.upsertLink(db, userId, second, { osUsername: "alice", osUserRef: "1002" });
+    repo.upsertLink(db, userId, clientId, { osUsername: "alice", osUserRef: "1001" });
     expect(repo.listUserClientIds(db, userId)).toEqual([clientId, second].sort((a, b) => a - b));
   });
 });
@@ -529,6 +544,35 @@ describe("policy repository — schedules & exceptions", () => {
     expect(updated?.ordinal).toBe(0);
     expect(repo.deleteSchedule(db, second.id)).toBe(true);
     expect(repo.deleteSchedule(db, second.id)).toBe(false);
+  });
+
+  it("reorders a user's schedules to dense 0..n-1 ordinals in the new order", () => {
+    const a = repo.createSchedule(db, { userId, targetKind: "overall", action: "allow" });
+    const b = repo.createSchedule(db, { userId, targetKind: "overall", action: "deny" });
+    const c = repo.createSchedule(db, { userId, targetKind: "overall", action: "extend" });
+
+    const reordered = repo.reorderUserSchedules(db, userId, [c.id, a.id, b.id]);
+
+    // Returned in the requested order with dense, gap-free ordinals.
+    expect(reordered.map((r) => r.id)).toEqual([c.id, a.id, b.id]);
+    expect(reordered.map((r) => r.ordinal)).toEqual([0, 1, 2]);
+    // Persisted: a fresh evaluation-order read agrees.
+    expect(repo.listUserSchedules(db, userId).map((r) => r.id)).toEqual([c.id, a.id, b.id]);
+  });
+
+  it("rejects a reorder whose ids are not a permutation of the user's schedules", () => {
+    const a = repo.createSchedule(db, { userId, targetKind: "overall", action: "allow" });
+    const b = repo.createSchedule(db, { userId, targetKind: "overall", action: "deny" });
+
+    // Missing an id, an unknown id, and a duplicate each throw — and nothing is
+    // written, so the original order is intact.
+    expect(() => repo.reorderUserSchedules(db, userId, [a.id])).toThrow(ReorderMismatchError);
+    expect(() => repo.reorderUserSchedules(db, userId, [a.id, 9999])).toThrow(ReorderMismatchError);
+    expect(() => repo.reorderUserSchedules(db, userId, [a.id, a.id])).toThrow(ReorderMismatchError);
+    expect(repo.listUserSchedules(db, userId).map((r) => r.ordinal)).toEqual([
+      a.ordinal,
+      b.ordinal,
+    ]);
   });
 
   it("rejects a half-open minute pair at the storage CHECK", () => {

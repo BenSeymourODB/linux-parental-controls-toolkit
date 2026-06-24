@@ -16,7 +16,7 @@ afterEach(() => {
 
 describe("links API", () => {
   it("listUserLinks GETs the nested /api/users/:userId/clients collection", async () => {
-    const rows = [{ userId: 1, clientId: 2, linuxUsername: "alice", linuxUid: 1001 }];
+    const rows = [{ userId: 1, clientId: 2, osUsername: "alice", osUserRef: "1001" }];
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(200, rows));
 
     const result = await listUserLinks(1);
@@ -26,7 +26,7 @@ describe("links API", () => {
   });
 
   it("upsertLink PUTs the body to /api/users/:userId/clients/:clientId", async () => {
-    const body = { linuxUsername: "alice", linuxUid: 1001 };
+    const body = { osUsername: "alice", osUserRef: "1001" };
     const created = { userId: 1, clientId: 2, ...body };
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(200, created));
 
