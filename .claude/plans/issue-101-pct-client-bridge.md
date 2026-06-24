@@ -1,132 +1,124 @@
-# Issue #101 — `pct-client-bridge`: system-level WebSocket service + AF_UNIX dispatch
+# Plan — #101 `pct-client-bridge` core (Phase 8b)
 
-- **Issue:** [#101](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/101)
-- **Phase:** 8b (`docs/roadmap.md`)
-- **Design source of truth:** [`docs/client-notifications.md`](../../docs/client-notifications.md)
-  (§ "Components → 1. `pct-client-bridge`", § "Event channel"),
-  [`docs/adr/0007-event-stream-version-compatibility.md`](../../docs/adr/0007-event-stream-version-compatibility.md)
+System-level client daemon that holds the WebSocket connection to the
+dashboard's `/api/events/stream`, reconnects with backoff, validates incoming
+event frames, and fans each one out to the per-supervised-user
+`pct-client-agent` (#103) over an `AF_UNIX` socket at `/run/pct/<linux-uid>.sock`.
 
-## Goal
+Authoritative design: [`docs/client-notifications.md`](../../docs/client-notifications.md)
+§"Components" + §"Event channel"; the wire frame and event union are
+[`server/src/events/taxonomy.ts`](../../server/src/events/taxonomy.ts) (on `main`).
 
-Deliver the **independently-shippable core** of `pct-client-bridge`: the
-system-level TypeScript daemon that holds the outbound WebSocket to the
-dashboard's `/api/events/stream`, reconnects with backoff, and fans each
-server-pushed event out to the right per-user `pct-client-agent` over an
-AF_UNIX socket at `/run/pct/<linux-uid>.sock`.
+## Why this is implementable end-to-end now
 
-Everything this slice builds against is **already on `main`**:
+Everything the core consumes is already on `main`:
 
-- The event taxonomy + wire frame envelope — `server/src/events/taxonomy.ts`
-  (`ServerEvent` discriminated union; `EventFrame = { seq, at, event }`).
-- The stream endpoint + its auth — `server/src/events/{stream,auth}.ts`
-  (`Authorization: Bearer <client-token>`, ping/pong heartbeat).
-- The socket path + topology — `docs/client-notifications.md` "Event channel".
+- The event **frame envelope** (`{ seq, at, event }`) and the 5-member
+  `ServerEvent` discriminated union — `server/src/events/taxonomy.ts`.
+- The **bearer-auth WebSocket endpoint** `GET /api/events/stream`
+  (`server/src/events/stream.ts` + `auth.ts`): `Authorization: Bearer <client-token>`.
+- The **socket layout** `/run/pct/<linux-uid>.sock` — `docs/client-notifications.md`.
 
-So this PR has **zero merge-conflict surface** against the 17 in-flight PRs
-(it is all new files under the empty `client/agent/`) and waits on none of
-them to merge.
+`client/agent/` is empty greenfield → zero merge-conflict surface against the
+17 open PRs.
 
-## Explicitly deferred (tracked follow-ups, linked from the PR)
+## Scope of this PR (bridge core)
 
-1. **ADR-0007 version handshake** (`hello`/`accept`/`refuse`, the
-   `eventProtocol` N-1 window, `capabilities`). The server side + the shared
-   `hello`/`accept`/`refuse` zod schemas land with **#165 (PR #286)**, which is
-   **not on `main`** yet. Building the bridge's handshake against an unmerged,
-   still-moving contract would invite rework. The connect path ships with a
-   clean `negotiate` seam (an injected hook, default no-op against `main`'s
-   current handshake-less stream); the handshake is a **new follow-up issue**
-   that depends on #286. The frame envelope it negotiates is already stable on
-   `main`, so deferring the handshake does not destabilise frame handling.
-2. **Privileged enforcement actions** — `timekpra --kill-session` on
-   `enforce.session_lock`, and lockout set/clear. These are Phase **8c**
-   (**#107 / #108**); their frame *producers* (`enforce.*`, `lockout.cleared`)
-   are themselves not on `main`. The dispatcher already routes those event
-   types to the agent; the sudoers-backed privileged execution is the 8c slice.
-3. **`.deb` packaging, systemd units, the narrow `sudoers` rule, and `/run/pct`
-   `tmpfiles.d` provisioning / socket ownership** — **#106**. This slice is the
-   runnable daemon + tests; turning it into an installed system service is #106.
-4. **`userId → linux-uid` map provisioning from enrolment** — the bridge takes
-   the map as validated config here; wiring the install script to populate it
-   is client-install work (links to the enrolment issues).
+New self-contained TypeScript package under `client/agent/` (CLAUDE.md →
+"client/agent/ — pct-client bridge + agent"). The package will later also host
+the per-user agent (#103); this PR adds only the bridge.
 
-## Package shape
+Modules (`client/agent/src/bridge/`):
 
-New self-contained package `client/agent/` (per `CLAUDE.md`: "client/agent/ —
-pct-client bridge + agent (TypeScript)"). It is a separate package from
-`server/` because it ships as a `.deb` bundling its own Node runtime
-(`docs/client-notifications.md`), so it carries its own `package.json`,
-`tsconfig.json`, `eslint.config.js`, `.prettierrc`, `vitest.config.ts`.
+1. **`protocol.ts`** — zod schemas for `EventFrame` + `ServerEvent`, a
+   deliberate **mirror** of `server/src/events/taxonomy.ts`, plus
+   `parseFrame(raw: unknown): EventFrame`. No workspace exists to import the
+   server schemas cross-package and the `.deb` bundles its own runtime, so the
+   bridge owns its copy of the contract (the standard "generated client" shape);
+   a fidelity test pins the event-type set so drift surfaces. Validating all
+   external input with zod is the CLAUDE.md rule.
+2. **`backoff.ts`** — pure `nextDelay(attempt, opts, rand)` exponential backoff
+   with full jitter and a cap; injected `rand` keeps it deterministic in tests.
+3. **`config.ts`** — zod-validated `BridgeConfig` (server WS URL, client bearer
+   token, `userId → { linuxUid, socketPath }` routing map, socket dir, backoff
+   knobs, heartbeat). `loadConfigFromEnv()`. The routing map's *provisioning*
+   (from enrolment) is install-script work — here it is validated input.
+4. **`dispatch.ts`** — `UnixDispatcher`: owns one `net` **listening** socket per
+   configured user at `socketPath` (the bridge is the system service that owns
+   `/run/pct`; the agent connects in and reads — "subscribes to its own socket
+   from the bridge"). `dispatch(event)` routes by `event.userId` → uid → that
+   user's server → writes a newline-delimited JSON frame to every connected
+   agent. Unknown userId / no connected agent → log + drop (degraded mode per
+   the doc). `close()` tears down all servers. Socket filesystem
+   ownership/permissions and `/run/pct` creation are install/tmpfiles work
+   (deferred); the dispatcher takes the path + mode as input.
+5. **`ws-client.ts`** — `EventStreamClient`: opens the WebSocket with the bearer
+   header, validates each message via `parseFrame`, invokes an `onFrame`
+   callback, and on `close`/`error` schedules a reconnect using `backoff.ts`.
+   The `ws` socket is created through an injected factory (`WebSocketFactory`)
+   so the lifecycle unit-tests with a fake — no live server needed. `ws`
+   auto-answers server pings (matches the server heartbeat in `heartbeat.ts`).
+6. **`bridge.ts`** — orchestrator: wires `EventStreamClient.onFrame` →
+   `UnixDispatcher.dispatch`. `start()` / `stop()`.
+7. **`main.ts`** — thin bootstrap (load config, build logger, start bridge,
+   handle SIGTERM). Coverage-excluded like `server/src/main.ts`.
+8. **`logger.ts`** — minimal structured logger writing JSON lines to
+   stdout/stderr via `process.stdout.write` (journald captures it); avoids
+   `console.*` so the same `no-console` discipline as the server holds.
 
-```
-client/agent/
-  package.json          # ESM, Node>=22, deps: ws + zod; dev: vitest, eslint, ...
-  tsconfig.json         # strict, NodeNext, mirrors server/tsconfig.json
-  eslint.config.js      # mirrors server (no-explicit-any, no-console in src/)
-  .prettierrc           # { "printWidth": 100 }
-  vitest.config.ts      # unit tests + 80% coverage gate, excludes src/main.ts
-  src/
-    bridge/
-      protocol.ts        # zod frame/event schemas (mirror of server taxonomy) + decodeFrame()
-      backoff.ts         # pure exponential-backoff-with-jitter calculator
-      config.ts          # zod-validated BridgeConfig (+ loadConfigFromEnv)
-      logger.ts          # tiny structured logger over process.std{out,err} (no console)
-      ws-client.ts       # WS lifecycle: connect+bearer, decode, reconnect-with-backoff
-      dispatch.ts        # AF_UNIX per-uid listening sockets; route by userId
-      bridge.ts          # orchestrator: wires ws-client -> dispatch
-    main.ts              # thin bootstrap (loadConfig -> start bridge); coverage-excluded
-  tests/bridge/          # mirrors src layout; *.test.ts
-```
+Tooling: `package.json` (deps `ws` + `zod`; dev `vitest`, `eslint`,
+`typescript-eslint`, `prettier`, `@types/node`, `@types/ws`,
+`@vitest/coverage-v8`), `tsconfig.json` (mirror server: strict, NodeNext, ESM,
+`noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `verbatimModuleSyntax`),
+`eslint.config.js` (mirror server incl. `no-console` on `src/`), `.prettierrc`
+(`printWidth: 100`), `vitest.config.ts` (80% gate, exclude `main.ts`).
+CI: add a `client-agent` job to `.github/workflows/ci.yml` mirroring the server
+lint/typecheck/test gate, guarded on `client/agent/package.json` existing.
 
-### Wire-contract handling
+### New dependencies (justification for PR body)
 
-`protocol.ts` re-declares the `EventFrame` / `ServerEvent` zod schemas as the
-bridge's own copy of the contract, with a doc-comment pointing at
-`server/src/events/taxonomy.ts` as the single conceptual source and a test that
-pins every event `type` + the `{ seq, at, event }` envelope. The bridge cannot
-import from `server/src` (separate package, no workspace, deb bundles its own
-runtime), and ADR 0007 makes the contract a *negotiated* one anyway. A
-follow-up may extract a shared contract package if the maintainer wants it;
-noted in the PR. All inbound frames are zod-validated before use
-(`CLAUDE.md` → "Validate all external input").
+- **`ws`** — standalone WebSocket *client*; the server's `@fastify/websocket`
+  is a server-side Fastify plugin and can't drive an outbound client
+  connection. `ws` is what `@fastify/websocket` itself wraps, so it's already
+  transitively vetted in the tree. MIT.
+- **`zod`** — runtime frame validation; same validate-all-external-input rule
+  and same library already used server-wide. MIT.
 
-### AF_UNIX direction
+## Deferred (tracked follow-ups, linked from the PR)
 
-The **bridge owns the socket** (it is the system service that can write
-`/run/pct/`): for each configured supervised user it creates a listening
-AF_UNIX server at `socketPath` (default `/run/pct/<uid>.sock`), the per-user
-agent connects in and reads newline-delimited JSON frames
-(`docs/client-notifications.md`: the agent "subscribes to its own socket from
-the bridge"). Events are routed by `event.userId → linux uid → that uid's
-server` and written to whatever agent connection(s) are attached. Unknown
-`userId`, or no agent attached, is logged and dropped (degraded mode is
-acceptable per the doc's "Notification stack unavailable" failure mode).
-Filesystem ownership/mode of the socket is install/packaging concern (#106);
-the dispatcher takes mode as config and does not perform any privileged chown.
+- **ADR-0007 version handshake** (`hello`/`accept`/`refuse`, `eventProtocol`
+  N-1 window). Its server side + shared zod schemas land with **#165 (PR #286)**,
+  not yet on `main`. Building against an unmerged contract invites rework, so
+  the connect path ships with a documented negotiation seam and this becomes a
+  **new follow-up issue** that depends on #286. The frame envelope it negotiates
+  is already stable on `main`.
+- **Privileged enforcement actions** — `timekpra --kill-session` on
+  `enforce.session_lock`, lockout set/clear — Phase 8c, **#107 / #108**. Their
+  frame producers aren't on `main` either; the dispatcher exposes the routing
+  seam and 8c adds the sudoers-backed execution.
+- **`.deb` packaging, systemd units, narrow sudoers, `/run/pct` tmpfiles** —
+  **#106**.
 
-## Phases
+## Phasing
 
-- **Phase 1 — scaffold + pure core.** Package files + CI job + `protocol.ts`,
-  `backoff.ts`, `config.ts`, `logger.ts` with full unit tests. First push opens
-  the draft PR.
-- **Phase 2 — transport.** `dispatch.ts` (real `node:net` AF_UNIX in tests) and
-  `ws-client.ts` (injected WebSocket factory seam; fake socket in tests).
-- **Phase 3 — orchestration + finalize.** `bridge.ts` + `main.ts`; an
-  end-to-end-ish test (fake ws → bridge → real unix-socket reader). Quality
-  gate, file the deferred follow-ups, mark ready, review subagent.
-
-## Testing
-
-Vitest unit tests, 80% coverage gate (mirrors server). Seams chosen so every
-module is deterministically testable without a live server:
-
-- `protocol`/`backoff`/`config`/`logger`: pure — direct assertions, injected RNG/clock.
-- `dispatch`: real AF_UNIX socket in a tmpdir; assert the connected reader receives routed frames, unknown-uid drop, multi-frame ordering.
-- `ws-client`: inject a fake WebSocket factory; assert bearer header, frame decode/dispatch, reconnect scheduling + backoff escalation, malformed-frame tolerance.
-- `bridge`: fake ws + real unix socket reader end-to-end.
+- **Phase 1** — package scaffold + `protocol.ts` + `backoff.ts` + `config.ts` +
+  their unit tests + CI job. First push → draft PR.
+- **Phase 2** — `dispatch.ts` (real `node:net` AF_UNIX in tests) + `ws-client.ts`
+  (fake-ws seam) + unit tests.
+- **Phase 3** — `bridge.ts` + `main.ts` + `logger.ts`; an integration-style test
+  (fake ws frame → bridge → real unix-socket reader receives it). Quality gate,
+  follow-ups filed, PR marked ready, review subagent.
 
 ## License boundary
 
-None touched. The bridge talks to the dashboard over its own WebSocket/JSON
-API (no GPL linkage); `ws` (MIT) + `zod` (MIT) only; no GPL binary is bundled.
-The privileged `timekpra` invocation stays out of this slice and, when it lands
-in 8c, remains a `child_process` subprocess call (never in-process linkage).
+No GPL linkage: `ws` + `zod` are MIT; the bridge talks to the dashboard over
+WebSocket and to the per-user agent over a local JSON socket. `timekpra` is
+invoked only as a subprocess and that path is **deferred to Phase 8c** — not in
+this PR. No GPL binaries added to any image. The `.deb` (deferred, #106) bundles
+its own Node runtime.
+
+## Tamper-resistance
+
+Within bounds: the bridge is a plain notification/event relay. No anti-tamper,
+no obfuscation, no `/etc`/`/usr` lockdown. The privileged surface (narrow
+sudoers, deferred to 8c) is the documented minimum.
