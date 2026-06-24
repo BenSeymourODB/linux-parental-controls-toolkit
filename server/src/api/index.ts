@@ -201,6 +201,23 @@ export {
   type SessionResponse,
 } from "../auth/dtos.js";
 
+// Per-user PIN auth DTOs (#112): admin PIN management + the `/app` child-scoped
+// session. Re-exported so the SvelteKit `/app` surface imports the contract
+// from the same `/api` barrel as every other DTO.
+export {
+  setUserPinSchema,
+  userPinStatusResponseSchema,
+  pinLoginRequestSchema,
+  pinSessionUserSchema,
+  pinSessionResponseSchema,
+  appMeResponseSchema,
+  type SetUserPinRequest,
+  type UserPinStatusResponse,
+  type PinLoginRequest,
+  type PinSessionResponse,
+  type AppMeResponse,
+} from "./app/index.js";
+
 // Event-stream taxonomy (#100): the `/api/events/stream` wire contract — the
 // five server-pushed events and the frame envelope. Re-exported here so the
 // client bridge (#101) and any consumer share one definition; the schemas live
