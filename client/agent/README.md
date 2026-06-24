@@ -23,14 +23,14 @@ The system-level service that:
 The bridge reads its configuration from the environment (see
 `src/bridge/config.ts`):
 
-| Variable | Required | Meaning |
-|---|---|---|
-| `PCT_BRIDGE_SERVER_URL` | yes | `ws(s)://…/api/events/stream` |
-| `PCT_BRIDGE_TOKEN` | yes | per-client enrolment bearer token |
-| `PCT_BRIDGE_USERS` | yes | JSON array of `{ "userId": N, "linuxUid": N }` |
-| `PCT_BRIDGE_SOCKET_DIR` | no | socket dir (default `/run/pct`) |
-| `PCT_BRIDGE_SOCKET_MODE` | no | socket file mode (default `0o600`) |
-| `PCT_BRIDGE_BACKOFF_BASE_MS` / `PCT_BRIDGE_BACKOFF_MAX_MS` | no | reconnect bounds |
+| Variable                                                   | Required | Meaning                                        |
+| ---------------------------------------------------------- | -------- | ---------------------------------------------- |
+| `PCT_BRIDGE_SERVER_URL`                                    | yes      | `ws(s)://…/api/events/stream`                  |
+| `PCT_BRIDGE_TOKEN`                                         | yes      | per-client enrolment bearer token              |
+| `PCT_BRIDGE_USERS`                                         | yes      | JSON array of `{ "userId": N, "linuxUid": N }` |
+| `PCT_BRIDGE_SOCKET_DIR`                                    | no       | socket dir (default `/run/pct`)                |
+| `PCT_BRIDGE_SOCKET_MODE`                                   | no       | socket file mode (default `0o600`)             |
+| `PCT_BRIDGE_BACKOFF_BASE_MS` / `PCT_BRIDGE_BACKOFF_MAX_MS` | no       | reconnect bounds                               |
 
 ### Not in this slice (tracked elsewhere)
 
