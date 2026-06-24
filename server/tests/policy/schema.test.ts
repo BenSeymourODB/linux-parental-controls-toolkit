@@ -639,15 +639,35 @@ describe("enrolment_tokens", () => {
 });
 
 describe("notification_policies", () => {
-  it("applies its column defaults", () => {
+  it("applies its documented column defaults (#104)", () => {
     const userId = insertUser();
     db.insert(notificationPolicies).values({ userId }).run();
     const row = db.select().from(notificationPolicies).get();
 
+    // Defaults match docs/client-notifications.md → "Configuration knobs":
+    // enabled on, subtle sounds, a 15-second grace period, no cadence override.
     expect(row?.enabled).toBe(true);
-    expect(row?.soundProfile).toBe("default");
-    expect(row?.graceSeconds).toBe(60);
+    expect(row?.soundProfile).toBe("subtle");
+    expect(row?.graceSeconds).toBe(15);
     expect(row?.cadenceOverridesJson).toBeNull();
+  });
+
+  it("rejects a sound profile outside the off/subtle/prominent enum", () => {
+    const userId = insertUser();
+    expect(() =>
+      db.$client
+        .prepare("INSERT INTO notification_policies (user_id, sound_profile) VALUES (?,?)")
+        .run(userId, "blaring"),
+    ).toThrow(/CHECK constraint/i);
+  });
+
+  it("rejects a grace period above the 60-second ceiling", () => {
+    const userId = insertUser();
+    expect(() =>
+      db.$client
+        .prepare("INSERT INTO notification_policies (user_id, grace_seconds) VALUES (?,?)")
+        .run(userId, 61),
+    ).toThrow(/CHECK constraint/i);
   });
 });
 
