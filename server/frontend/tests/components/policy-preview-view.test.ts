@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
   BudgetResponse,
+  PolicyPreviewRequest,
   PolicyPreviewResponse,
   ScheduleResponse,
   UserResponse,
@@ -22,7 +23,12 @@ const listUsers = vi.fn<() => Promise<UserResponse[]>>();
 const listBudgets = vi.fn<(userId?: number) => Promise<BudgetResponse[]>>();
 const listSchedules = vi.fn<(userId?: number) => Promise<ScheduleResponse[]>>();
 const previewPolicyPush =
-  vi.fn<(userId: number, body: unknown) => Promise<PolicyPreviewResponse>>();
+  vi.fn<(userId: number, body: PolicyPreviewRequest) => Promise<PolicyPreviewResponse>>();
+
+/** The proposed payload from the most recent `previewPolicyPush` call. */
+function lastProposed(): PolicyPreviewRequest {
+  return previewPolicyPush.mock.calls.at(-1)![1];
+}
 
 vi.mock("$lib/api/users", () => ({ listUsers: () => listUsers() }));
 vi.mock("$lib/api/budgets", () => ({ listBudgets: (userId?: number) => listBudgets(userId) }));
@@ -30,7 +36,8 @@ vi.mock("$lib/api/schedules", () => ({
   listSchedules: (userId?: number) => listSchedules(userId),
 }));
 vi.mock("$lib/api/policy-preview", () => ({
-  previewPolicyPush: (userId: number, body: unknown) => previewPolicyPush(userId, body),
+  previewPolicyPush: (userId: number, body: PolicyPreviewRequest) =>
+    previewPolicyPush(userId, body),
 }));
 
 const { default: PolicyPreviewView } = await import(
@@ -135,10 +142,9 @@ describe("PolicyPreviewView", () => {
 
     // The proposed payload mirrors the loaded baseline on first preview.
     await waitFor(() => expect(previewPolicyPush).toHaveBeenCalled());
-    const [userId, body] = previewPolicyPush.mock.calls.at(-1)!;
-    expect(userId).toBe(1);
-    expect((body as { budgets: BudgetResponse[] }).budgets).toHaveLength(1);
-    expect((body as { schedules: ScheduleResponse[] }).schedules).toHaveLength(1);
+    expect(previewPolicyPush.mock.calls.at(-1)![0]).toBe(1);
+    expect(lastProposed().budgets).toHaveLength(1);
+    expect(lastProposed().schedules).toHaveLength(1);
   });
 
   it("renders the no-changes state when the push would be a no-op", async () => {
@@ -157,10 +163,7 @@ describe("PolicyPreviewView", () => {
 
     await fireEvent.click(screen.getByLabelText("Include schedule rule 500"));
 
-    await waitFor(() => {
-      const last = previewPolicyPush.mock.calls.at(-1)!;
-      expect((last[1] as { schedules: ScheduleResponse[] }).schedules).toHaveLength(0);
-    });
+    await waitFor(() => expect(lastProposed().schedules).toHaveLength(0));
   });
 
   it("re-previews with the edited overall minutes", async () => {
@@ -172,11 +175,74 @@ describe("PolicyPreviewView", () => {
       target: { value: "150" },
     });
 
-    await waitFor(() => {
-      const last = previewPolicyPush.mock.calls.at(-1)!;
-      const budgets = (last[1] as { budgets: BudgetResponse[] }).budgets;
-      expect(budgets[0]!.secondsAllowed).toBe(150 * 60);
+    await waitFor(() => expect(lastProposed().budgets[0]!.secondsAllowed).toBe(150 * 60));
+  });
+
+  it("falls back to the persisted seconds when the minutes field is empty or non-integer", async () => {
+    render(PolicyPreviewView);
+    await selectUser();
+    await waitFor(() => expect(previewPolicyPush).toHaveBeenCalled());
+    const minutes = screen.getByLabelText("Daily overall minutes");
+
+    // Cleared field → keep the baseline 7200s, NOT a real "0 minutes" limit.
+    await fireEvent.input(minutes, { target: { value: "" } });
+    await waitFor(() => expect(lastProposed().budgets[0]!.secondsAllowed).toBe(7200));
+
+    // Non-integer → also falls back rather than emitting a bogus limit.
+    await fireEvent.input(minutes, { target: { value: "1.5" } });
+    await waitFor(() => expect(lastProposed().budgets[0]!.secondsAllowed).toBe(7200));
+  });
+
+  it("collapses a burst of edits into a single trailing preview (debounce)", async () => {
+    render(PolicyPreviewView);
+    await selectUser();
+    await waitFor(() => expect(previewPolicyPush).toHaveBeenCalledTimes(1));
+    const minutes = screen.getByLabelText("Daily overall minutes");
+
+    // Three rapid edits within the debounce window → one more request, not three.
+    await fireEvent.input(minutes, { target: { value: "30" } });
+    await fireEvent.input(minutes, { target: { value: "31" } });
+    await fireEvent.input(minutes, { target: { value: "32" } });
+
+    await waitFor(() => expect(previewPolicyPush).toHaveBeenCalledTimes(2));
+    expect(lastProposed().budgets[0]!.secondsAllowed).toBe(32 * 60);
+    // Give any erroneously-scheduled extra timers a chance to fire.
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(previewPolicyPush).toHaveBeenCalledTimes(2);
+  });
+
+  it("ignores a stale (out-of-order) preview response and keeps the newest", async () => {
+    // Hand-controlled promises so we can resolve the OLDER request last.
+    const resolvers: Array<(value: PolicyPreviewResponse) => void> = [];
+    previewPolicyPush.mockImplementation(
+      () => new Promise<PolicyPreviewResponse>((resolve) => resolvers.push(resolve)),
+    );
+
+    render(PolicyPreviewView);
+    await selectUser();
+    await waitFor(() => expect(resolvers).toHaveLength(1)); // initial load preview
+    const minutes = screen.getByLabelText("Daily overall minutes");
+
+    await fireEvent.input(minutes, { target: { value: "60" } });
+    await waitFor(() => expect(resolvers).toHaveLength(2)); // request A
+    await fireEvent.input(minutes, { target: { value: "90" } });
+    await waitFor(() => expect(resolvers).toHaveLength(3)); // request B (newest)
+
+    const stale = previewResponse({
+      changes: [{ ...previewResponse().changes[0]!, summary: "STALE — should not win" }],
     });
+    const newest = previewResponse({
+      changes: [{ ...previewResponse().changes[0]!, summary: "NEWEST — should win" }],
+    });
+    // Resolve the NEWEST (B) first, then the older A — A must not overwrite B.
+    resolvers[2]!(newest);
+    await screen.findByText("NEWEST — should win");
+    resolvers[1]!(stale);
+    resolvers[0]!(previewResponse());
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(screen.getByText("NEWEST — should win")).toBeInTheDocument();
+    expect(screen.queryByText("STALE — should not win")).not.toBeInTheDocument();
   });
 
   it("drops an overall budget from the payload when its include toggle is cleared", async () => {
@@ -186,10 +252,7 @@ describe("PolicyPreviewView", () => {
 
     await fireEvent.click(screen.getByLabelText("Include Daily overall budget"));
 
-    await waitFor(() => {
-      const last = previewPolicyPush.mock.calls.at(-1)!;
-      expect((last[1] as { budgets: BudgetResponse[] }).budgets).toHaveLength(0);
-    });
+    await waitFor(() => expect(lastProposed().budgets).toHaveLength(0));
   });
 
   it("surfaces a preview failure in the push bar", async () => {

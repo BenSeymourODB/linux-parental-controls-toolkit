@@ -133,12 +133,18 @@
     }
   }
 
-  /** Parse a minutes field to whole seconds, or `null` if not a valid count. */
+  /**
+   * Parse a minutes field to whole seconds, or `null` if it is not a plain
+   * non-negative integer count. An empty/blank field is `null` (not `0`) so a
+   * half-typed or cleared box falls back to the budget's persisted value rather
+   * than previewing a real "0 minutes" limit; the digits-only guard also keeps
+   * `"1e3"` / `"0x10"` from sneaking through `Number`.
+   */
   function minutesToSeconds(value: string | undefined): number | null {
     if (value === undefined) return null;
-    const minutes = Number(value);
-    if (!Number.isInteger(minutes) || minutes < 0) return null;
-    return minutes * 60;
+    const trimmed = value.trim();
+    if (!/^\d+$/.test(trimmed)) return null;
+    return Number(trimmed) * 60;
   }
 
   /** Build the proposed policy from the baseline + the current what-if edits. */
@@ -306,10 +312,16 @@
                       <span class="win">{windowLabel(budget.window)}</span>
                     </label>
                     <span class="mins">
+                      <!--
+                        Text (not `type="number"`) so the value stays a string:
+                        the house pattern (BudgetsView) — a number input coerces
+                        to a number and breaks the string contract
+                        `minutesToSeconds` parses. `inputmode="numeric"` still
+                        gives a numeric keypad.
+                      -->
                       <input
-                        type="number"
-                        min="0"
-                        step="1"
+                        type="text"
+                        inputmode="numeric"
                         value={minutesById[budget.id] ?? ""}
                         oninput={(e) => onMinutesChange(budget.id, e.currentTarget.value)}
                         disabled={excluded}
