@@ -23,7 +23,12 @@ const envFileEntrySchema = z.union([
   z.object({ path: z.string().optional(), required: z.boolean().optional() }),
 ]);
 const serviceSchema = z.object({
-  build: z.union([z.string(), z.object({ context: z.string().optional() })]).optional(),
+  build: z
+    .union([
+      z.string(),
+      z.object({ context: z.string().optional(), dockerfile: z.string().optional() }),
+    ])
+    .optional(),
   ports: z.array(z.string()).optional(),
   volumes: z.array(z.string()).optional(),
   env_file: z.union([z.array(envFileEntrySchema), z.string()]).optional(),
@@ -56,10 +61,16 @@ describe("docker-compose.yml (local dev)", () => {
     expect(Object.keys(compose.services ?? {})).toEqual(["dashboard"]);
   });
 
-  it("builds the image from ./server", () => {
+  it("builds the image from the repo root with -f server/Dockerfile (#260)", () => {
+    // The build context is the repo root (not ./server) so the runtime stage
+    // can COPY the server-orchestrated Ansible playbooks from
+    // client/ansible/playbooks/, which sit outside server/.
     const { build } = dashboardService();
-    const context = typeof build === "string" ? build : build?.context;
-    expect(context).toBe("./server");
+    expect(typeof build).toBe("object");
+    if (typeof build === "object") {
+      expect(build?.context).toBe(".");
+      expect(build?.dockerfile).toBe("server/Dockerfile");
+    }
   });
 
   it("publishes the dashboard HTTP port 8000", () => {

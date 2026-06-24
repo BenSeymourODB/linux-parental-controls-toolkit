@@ -69,7 +69,10 @@ jobs:
       - name: Build and push image
         uses: docker/build-push-action@v6
         with:
-          context: server
+          # Build context is the repo root so the runtime stage can COPY the
+          # server-orchestrated Ansible playbooks from client/ansible/ (#260).
+          context: .
+          file: server/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

@@ -3,17 +3,20 @@
 #   cp .env.example .env   # optional — defaults work without it
 #   docker compose up --build
 #
-# This builds the image from source (server/) so local changes are picked up
-# on the next `--build`. It is NOT the production deployment: the reference
+# This builds the image from source so local changes are picked up on the next
+# `--build`. It is NOT the production deployment: the reference
 # compose files in docs/server-deployment.md pull the published GHCR image and
 # cover the AdGuard topologies. DNS filtering (AdGuard Home) is a Phase 7
 # concern and intentionally absent here.
 services:
   dashboard:
-    # Build context is server/, matching server/Dockerfile's expectations and
-    # the CI docker-build job (.github/workflows/ci.yml).
+    # Build context is the repo root (with -f server/Dockerfile), matching the
+    # CI docker-build job (.github/workflows/ci.yml). The root context is
+    # required so the runtime stage can COPY the server-orchestrated Ansible
+    # playbooks from client/ansible/playbooks/ into the image (#260).
     build:
-      context: ./server
+      context: .
+      dockerfile: server/Dockerfile
     image: linux-parental-controls-toolkit:dev
     container_name: pct-dashboard
     restart: unless-stopped

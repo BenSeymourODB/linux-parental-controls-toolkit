@@ -10,8 +10,13 @@
 # docs/server-deployment.md and docs/licensing-analysis.md, enforced by
 # .github/workflows/license-guard.yml.
 #
-# Build context is server/ (see .github/workflows/ci.yml → docker-build),
-# so server/frontend/ is in scope for the frontend build stage.
+# Build context is the REPO ROOT, built with `-f server/Dockerfile` (see
+# .github/workflows/ci.yml → docker-build and docker-compose.yml). The root
+# context is required so the runtime stage can COPY the server-orchestrated
+# Ansible playbooks from client/ansible/playbooks/ — which sit outside
+# server/ — into the image (#260). server/frontend/ is therefore referenced
+# as server/frontend/ below; a conservative root .dockerignore keeps the
+# context lean.
 
 # ---------------------------------------------------------------------------
 # Stage 1: build the SvelteKit frontend (/admin + /app) to static assets.
@@ -20,10 +25,10 @@
 FROM node:22-slim AS frontend-builder
 WORKDIR /app/frontend
 
-COPY frontend/package.json frontend/package-lock.json ./
+COPY server/frontend/package.json server/frontend/package-lock.json ./
 RUN npm ci
 
-COPY frontend/ ./
+COPY server/frontend/ ./
 RUN npm run build
 
 # ---------------------------------------------------------------------------
@@ -40,11 +45,11 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends python3 make g++ \
   && rm -rf /var/lib/apt/lists/*
 
-COPY package.json package-lock.json ./
+COPY server/package.json server/package-lock.json ./
 RUN npm ci
 
-COPY tsconfig.json tsconfig.build.json ./
-COPY src/ ./src/
+COPY server/tsconfig.json server/tsconfig.build.json ./
+COPY server/src/ ./src/
 RUN npm run build
 
 # Strip dev dependencies in place, leaving the already-compiled native
@@ -75,14 +80,21 @@ COPY --from=builder /app/package.json ./package.json
 # Committed drizzle-kit migrations, reconciled into /data on start (Phase 2).
 # Copied straight from the build context (not the builder stage, which only
 # carries the TypeScript sources it compiles).
-COPY drizzle ./drizzle
+COPY server/drizzle ./drizzle
+
+# Server-orchestrated Ansible playbooks (#260). The first-run bootstrap
+# (#259) syncs these from PCT_ANSIBLE_PLAYBOOK_SRC (default
+# /app/ansible/playbooks) into the /data venv directory. These are our own
+# YAML — Ansible itself is never bundled (it installs into the /data venv),
+# so license-guard stays green.
+COPY client/ansible/playbooks /app/ansible/playbooks
 
 # Prerendered frontend (served at /admin and /app once the static mount
 # lands in Phase 2; carried in the image now so the asset path is settled).
 COPY --from=frontend-builder /app/frontend/build ./frontend
 
 # First-run setup + server launch.
-COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+COPY server/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 # Canonical policy store, Ansible venv, AdGuard payload, logs, secrets.

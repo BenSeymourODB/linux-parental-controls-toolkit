@@ -1,0 +1,50 @@
+# Root build-context ignore. The image build context is the repo root (built
+# with `-f server/Dockerfile`) so the runtime stage can COPY the
+# server-orchestrated Ansible playbooks from client/ansible/playbooks/ (#260).
+#
+# This list is deliberately conservative: an over-broad ignore only makes the
+# context larger, but excluding a path the Dockerfile COPYs would break the
+# build — so it errs toward leaving small dirs (client/) in rather than
+# surgically pruning them. The Dockerfile COPYs only server/* and
+# client/ansible/playbooks; everything below is build-irrelevant.
+
+# Version control / agent / CI metadata (never needed inside the image)
+.git/
+.gitignore
+.gitattributes
+.github/
+.claude/
+
+# Node build / cache — the builder + frontend-builder stages run their own
+# npm ci, so the host's installs and artefacts must never ship.
+**/node_modules/
+**/dist/
+**/coverage/
+**/.svelte-kit/
+server/frontend/build/
+*.tsbuildinfo
+.eslintcache
+
+# Tests are built/run in CI, not at runtime, and are not COPYed into the image.
+server/tests/
+client/tests/
+scripts/tests/
+
+# Docs / design assets / dev scripts are not part of the image.
+docs/
+design/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Local runtime / secrets / persistent state
+.env
+**/*.sqlite
+**/*.sqlite-journal
+/data/
+
+# Docker meta
+**/Dockerfile
+.dockerignore

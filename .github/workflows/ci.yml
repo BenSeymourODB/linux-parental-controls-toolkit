@@ -196,13 +196,33 @@ jobs:
       - name: Build image (no push)
         run: |
           if [ -f server/Dockerfile ]; then
+            # Build context is the repo root (-f server/Dockerfile) so the
+            # runtime stage can COPY client/ansible/playbooks (#260). --load
+            # makes the image available to the daemon for the presence check.
             docker buildx build \
+              --load \
               --cache-from type=gha \
               --cache-to type=gha,mode=max \
               --tag pct-dashboard:ci \
-              server/
+              -f server/Dockerfile \
+              .
           else
             echo "server/Dockerfile not yet present — skipping Docker build"
+          fi
+
+      - name: Verify Phase-6 playbooks shipped in the image (#260)
+        run: |
+          if docker image inspect pct-dashboard:ci > /dev/null 2>&1; then
+            echo "Listing /app/ansible/playbooks inside the image:"
+            docker run --rm pct-dashboard:ci sh -c '
+              set -e
+              ls -1R /app/ansible/playbooks
+              test -f /app/ansible/playbooks/activitywatch.yml
+              test -f /app/ansible/playbooks/apparmor-profiles.yml
+            '
+            echo "OK: Phase-6 playbooks present at PCT_ANSIBLE_PLAYBOOK_SRC."
+          else
+            echo "Image not built (Dockerfile absent) — skipping playbook presence check."
           fi
 
   pre-commit:
