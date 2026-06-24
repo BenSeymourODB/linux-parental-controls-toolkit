@@ -340,9 +340,11 @@ limiting.
     (`POST /api/app/session`), which issues a second signed cookie
     (`pct_pin_session`, `HttpOnly`, `SameSite=Strict`, **12-hour** expiry —
     shorter than the admin week because it is a shared family device). Failed
-    attempts are throttled per user, and an unknown user / unset PIN takes the
-    same time as a wrong PIN, so the endpoint cannot be used to enumerate which
-    accounts exist. There is intentionally **no unauthenticated endpoint that
+    attempts are throttled per `(user, source IP)` — enough to cut off online
+    guessing from any one source, without letting an attacker lock a child out
+    of their *own* device from a different IP — and an unknown user / unset PIN
+    takes the same time as a wrong PIN, so the endpoint cannot be used to
+    enumerate which accounts exist. There is intentionally **no unauthenticated endpoint that
     lists users** — login is by id, not a roster picker.
   - **Deny-by-default scoping.** A PIN session reaches a route only if that
     route explicitly opts into the `requirePinSession` guard and serves *only*

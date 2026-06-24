@@ -237,6 +237,39 @@ describe("per-user PIN auth routes", () => {
     expect(blocked.statusCode).toBe(429);
   });
 
+  it("lockout is per (user, ip): an attacker can't lock a child out of their own device", async () => {
+    const userId = await createUser("Alice");
+    await setPin(userId, "4242");
+
+    // An attacker hammers this user's login from their own IP until it locks.
+    for (let i = 0; i < 5; i += 1) {
+      await harness.app.inject({
+        method: "POST",
+        url: "/api/app/session",
+        payload: { userId, pin: "0000" },
+        remoteAddress: "203.0.113.7",
+      });
+    }
+    const attacker = await harness.app.inject({
+      method: "POST",
+      url: "/api/app/session",
+      payload: { userId, pin: "4242" },
+      remoteAddress: "203.0.113.7",
+    });
+    expect(attacker.statusCode).toBe(429);
+
+    // The child, on their own device (a different IP), is unaffected and can
+    // still sign in with the correct PIN.
+    const child = await harness.app.inject({
+      method: "POST",
+      url: "/api/app/session",
+      payload: { userId, pin: "4242" },
+      remoteAddress: "192.168.1.50",
+    });
+    expect(child.statusCode).toBe(200);
+    expect(child.json()).toMatchObject({ authenticated: true, user: { id: userId } });
+  });
+
   it("logs out by clearing the PIN cookie", async () => {
     const userId = await createUser("Alice");
     await setPin(userId, "4242");

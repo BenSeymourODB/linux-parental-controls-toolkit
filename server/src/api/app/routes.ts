@@ -52,10 +52,15 @@ export function registerAppAuthRoutes(
   const authConfigured = settings.secretKey !== undefined;
   const adminGuard = { preHandler: scope.requireAdmin };
 
-  // Per-user failed-PIN throttle, keyed by userId. A dedicated instance (not
-  // shared with admin login) so a child's typos can't lock the admin out and
-  // vice versa. Default 5 failures / 15-minute window — see `auth/rate-limit`.
+  // Failed-PIN throttle. A dedicated instance (not shared with admin login) so
+  // a child's typos can't lock the admin out and vice versa. Default 5 failures
+  // / 15-minute window — see `auth/rate-limit`. The window is keyed by
+  // `userId:ip` (see `loginKey`), not `userId` alone, so it throttles online
+  // guessing from any single source without letting one source lock a child out
+  // of their *own* device: an attacker hammering from another IP only fills
+  // their own bucket, leaving the child's `userId:childIp` bucket untouched.
   const loginLimiter = new FixedWindowRateLimiter();
+  const loginKey = (userId: number, ip: string): string => `${userId}:${ip}`;
 
   // --- Admin PIN management (/admin) ---------------------------------------
 
@@ -111,7 +116,7 @@ export function registerAppAuthRoutes(
       assertAuthConfigured(authConfigured);
 
       const { userId, pin } = request.body;
-      const key = String(userId);
+      const key = loginKey(userId, request.ip);
       if (loginLimiter.isBlocked(key)) {
         throw new ApiError(
           429,
