@@ -16,6 +16,8 @@ import {
   scheduleActionValues,
   scopeSchema,
   scopeValues,
+  soundProfileSchema,
+  soundProfileValues,
 } from "../../src/policy/enums.js";
 
 const cases = [
@@ -23,6 +25,7 @@ const cases = [
   { name: "budgetWindow", schema: budgetWindowSchema, values: budgetWindowValues },
   { name: "activityKind", schema: activityKindSchema, values: activityKindValues },
   { name: "scheduleAction", schema: scheduleActionSchema, values: scheduleActionValues },
+  { name: "soundProfile", schema: soundProfileSchema, values: soundProfileValues },
 ] as const;
 
 describe("policy enums", () => {
@@ -46,5 +49,6 @@ describe("policy enums", () => {
     expect(budgetWindowValues).toStrictEqual(["daily", "weekly", "monthly"]);
     expect(activityKindValues).toStrictEqual(["app", "app_group", "domain", "domain_group"]);
     expect(scheduleActionValues).toStrictEqual(["allow", "deny", "extend"]);
+    expect(soundProfileValues).toStrictEqual(["off", "subtle", "prominent"]);
   });
 });
