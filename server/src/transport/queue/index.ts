@@ -31,10 +31,13 @@ export {
   markDrained,
   markFailed,
   recordAttempt,
+  updateActionPayload,
   type PendingCount,
 } from "./repository.js";
 
 export { drainClient } from "./drainer.js";
+
+export { compositeExecutor } from "./composite.js";
 
 export { pushOrEnqueue, type PushOutcome } from "./facade.js";
 

@@ -253,9 +253,9 @@ server {
 }
 ```
 
-The `X-Forwarded-*` headers are sent so a future `trustProxy` option can
-recover the real client IP — see [Caveats](#application-layer-caveats)
-below for why that matters today.
+The `X-Forwarded-*` headers are sent so the opt-in `PCT_TRUST_PROXY`
+setting can recover the real client IP — see [Caveats](#application-layer-caveats)
+below for how to enable it.
 
 ### Traefik
 
@@ -351,15 +351,16 @@ The dashboard applies a per-IP failed-attempt limiter to its two
 unauthenticated surfaces — the admin login and the token-authenticated
 `POST /api/clients/enrol` exchange — as cheap defence-in-depth
 (`docs/server-deployment.md`; issues #154). That limiter keys on the
-TCP peer address (Fastify's `request.ip`), and the dashboard does **not**
-currently trust `X-Forwarded-*` headers.
+TCP peer address (Fastify's `request.ip`), and by default the dashboard
+does **not** trust `X-Forwarded-*` headers.
 
 Behind a reverse proxy, every request arrives from the **proxy's**
-address, so the per-IP limiter sees a single IP for all callers and
-effectively becomes one global bucket: a brute-force attempt from one host
-can throttle legitimate logins from another, and per-attacker isolation is
-lost. This is a defence-in-depth degradation, not an authentication
-bypass — the Argon2id check and signed-cookie session are unaffected.
+address, so unless the dashboard is told to trust the proxy the per-IP
+limiter sees a single IP for all callers and effectively becomes one global
+bucket: a brute-force attempt from one host can throttle legitimate logins
+from another, and per-attacker isolation is lost. This is a
+defence-in-depth degradation, not an authentication bypass — the Argon2id
+check and signed-cookie session are unaffected.
 
 Two things follow:
 
@@ -368,11 +369,29 @@ Two things follow:
    (`docs/server-deployment.md` notes the proxy is the DoS-protection
    tier). All three proxies above can rate-limit by real client IP.
 2. **Forward `X-Forwarded-For`** (the nginx config does; Caddy and
-   Traefik do by default). A planned opt-in `trustProxy` setting will let
-   the dashboard recover the real client IP from that header so its own
-   per-IP limiter works correctly behind a proxy — tracked in
-   [#235](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/235).
-   Until then, rely on the proxy tier for per-IP limits.
+   Traefik do by default) **and set `PCT_TRUST_PROXY`** so the dashboard
+   derives `request.ip` from that header and its own per-IP limiter keys on
+   the real client IP again (#235).
+
+#### Enabling `PCT_TRUST_PROXY`
+
+Off by default — never trust `X-Forwarded-*` from an untrusted direct
+caller on a LAN. Enable it **only** when the dashboard is reachable solely
+through a trusted proxy, and scope the trust to that proxy. Accepted forms
+(Fastify's [`trustProxy`](https://fastify.dev/docs/latest/Reference/Server/#trustproxy)):
+
+| `PCT_TRUST_PROXY` | Meaning |
+| --- | --- |
+| _unset_ / `false` / `off` | Trust nothing; `request.ip` is the TCP peer (default). |
+| `true` / `on` | Trust every upstream hop and use the left-most `X-Forwarded-For` entry. Use only when the proxy is the **sole** ingress. |
+| a number, e.g. `1` | Trust exactly that many proxy hops (count from the dashboard outward). |
+| an IP/CIDR allowlist, e.g. `127.0.0.1,10.0.0.0/8` | Trust `X-Forwarded-For` only when the immediate peer is in the list — the tightest option when the proxy's address is fixed. |
+
+Prefer the hop-count or allowlist forms over a bare `true`: if the
+dashboard's port is ever reachable directly, a bare `true` would trust a
+spoofed `X-Forwarded-For` from any caller. Keep the proxy-tier rate limit
+in place regardless — `PCT_TRUST_PROXY` restores per-attacker isolation in
+the application limiter; it is not a substitute for the volumetric tier.
 
 ---
 
