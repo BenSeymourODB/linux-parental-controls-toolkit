@@ -4,6 +4,7 @@
  * top-level `api/` barrel so the contract is imported from one place.
  */
 export { registerPolicyRoutes } from "./routes.js";
+export { registerScheduleOrderRoutes } from "./schedule-order.js";
 export { registerTimeTodayRoutes } from "./time-today.js";
 export {
   registerEffectiveRoutes,
@@ -83,6 +84,13 @@ export {
   type ScheduleResponse,
   type CreateScheduleRequest,
   type UpdateScheduleRequest,
+  // Schedule ordering / drag-reorder editor (#63)
+  reorderSchedulesSchema,
+  shadowFindingSchema,
+  scheduleOrderViewSchema,
+  type ReorderSchedulesRequest,
+  type ShadowFindingDto,
+  type ScheduleOrderView,
   // Exceptions (#148)
   exceptionResponseSchema,
   createExceptionSchema,
@@ -90,6 +98,11 @@ export {
   type ExceptionResponse,
   type CreateExceptionRequest,
   type UpdateExceptionRequest,
+  // Notification policy (#104)
+  notificationPolicyResponseSchema,
+  upsertNotificationPolicySchema,
+  type NotificationPolicyResponse,
+  type UpsertNotificationPolicyRequest,
   // Group-targeted schedules + exceptions (#182). The PATCH bodies reuse the
   // user-keyed `updateScheduleSchema` / `updateExceptionSchema` above.
   createGroupScheduleSchema,

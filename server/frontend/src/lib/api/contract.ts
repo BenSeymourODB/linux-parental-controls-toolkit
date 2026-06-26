@@ -42,14 +42,26 @@ export type {
   ScheduleResponse,
   CreateScheduleRequest,
   UpdateScheduleRequest,
+  ReorderSchedulesRequest,
+  ShadowFindingDto,
+  ScheduleOrderView,
   ExceptionResponse,
   CreateExceptionRequest,
   UpdateExceptionRequest,
   AdjustTimeTodayRequest,
   TimeTodayResponse,
   ClientAdjustmentResultDto,
+  NotificationPolicyResponse,
+  UpsertNotificationPolicyRequest,
 } from "../../../../src/api/policy/dtos.js";
 export type { AuditEntryResponse, AuditListResponse } from "../../../../src/api/audit/dtos.js";
+export type {
+  CreateIntegrationTokenRequest,
+  IntegrationTokenCreatedResponse,
+  IntegrationTokenSummaryResponse,
+  IntegrationTokenListResponse,
+} from "../../../../src/api/integrations/dtos.js";
+export type { IntegrationScope } from "../../../../src/integrations/scopes.js";
 export type {
   MintEnrolmentTokenRequest,
   EnrolmentTokenResponse,
@@ -73,6 +85,7 @@ export type {
   Scope,
   BudgetWindow,
   ScheduleAction,
+  SoundProfile,
   AuditOutcome,
 } from "../../../../src/policy/enums.js";
 export type { ErrorEnvelope, ErrorDetail } from "../../../../src/api/errors.js";

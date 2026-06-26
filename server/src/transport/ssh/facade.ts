@@ -155,12 +155,20 @@ interface ResolvedTarget {
 /** The only address a forwarded port ever binds — never network-exposed. */
 const LOOPBACK_HOST = "127.0.0.1";
 
+/**
+ * SSH handshake/ready timeout — if the peer doesn't reach the ready state
+ * within this window the host is treated as unreachable (the offline-queue's
+ * retry signal), rather than the dashboard hanging on a dead box.
+ */
 const DEFAULT_READY_TIMEOUT_MS = 10_000;
 
-// A facade orchestrating possibly-wedged remote clients should never let a
-// hung command block its caller forever, so exec is time-boxed by default.
-// readyTimeout only covers the handshake, not a command that connected and
-// then hung. Callers can override (or disable with 0) per invocation.
+/**
+ * Default per-exec timeout. A facade orchestrating possibly-wedged remote
+ * clients should never let a hung command block its caller forever, so exec is
+ * time-boxed by default. `readyTimeout` only covers the handshake, not a
+ * command that connected and then hung. Callers can override (or disable with
+ * `0`) per invocation.
+ */
 const DEFAULT_EXEC_TIMEOUT_MS = 30_000;
 
 /**

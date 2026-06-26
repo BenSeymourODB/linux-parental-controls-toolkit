@@ -37,6 +37,19 @@ export const moduleName = "transport/ansible";
 export * from "./errors.js";
 export { buildInventory, INVENTORY_GROUP, type AnsibleHost } from "./inventory.js";
 
+export {
+  E2GUARDIAN_PLAYBOOK,
+  DEFAULT_PROXY_PORT,
+  e2guardianPlanSchema,
+  e2guardianUserFilterSchema,
+  buildE2guardianPlan,
+  pushE2guardianFiltering,
+  type E2guardianPlan,
+  type E2guardianUserFilter,
+  type BuildE2guardianPlanOptions,
+  type PushE2guardianFilteringOptions,
+} from "./e2guardian.js";
+
 /**
  * Ansible's `TaskQueueManager` encodes the run outcome as an OR-able bit set
  * in the process exit code: `2` = one or more hosts failed, `4` = one or more
@@ -45,7 +58,12 @@ export { buildInventory, INVENTORY_GROUP, type AnsibleHost } from "./inventory.j
  */
 const UNREACHABLE_BIT = 4;
 
-/** Generous cap so a verbose playbook run is not truncated mid-capture. */
+/**
+ * Cap on captured stdout/stderr (10 MiB). Generous enough that a verbose
+ * playbook run is not truncated mid-capture, while bounding memory so a runaway
+ * run can't exhaust it (`execFile` rejects with
+ * `ERR_CHILD_PROCESS_STDIO_MAXBUFFER` past this — see {@link classifyFailure}).
+ */
 const DEFAULT_MAX_BUFFER = 10 * 1024 * 1024;
 
 /**

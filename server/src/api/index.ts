@@ -93,6 +93,11 @@ export {
   type ExceptionResponse,
   type CreateExceptionRequest,
   type UpdateExceptionRequest,
+  // Notification policy (#104)
+  notificationPolicyResponseSchema,
+  upsertNotificationPolicySchema,
+  type NotificationPolicyResponse,
+  type UpsertNotificationPolicyRequest,
   // Group-targeted schedules + exceptions (#182)
   createGroupScheduleSchema,
   groupScheduleResponseSchema,
@@ -186,6 +191,9 @@ export {
   ansibleVenvStateSchema,
   ansibleVenvStatusResponseSchema,
   type AnsibleVenvStatusResponse,
+  adGuardManagedStateSchema,
+  adGuardManagedStatusResponseSchema,
+  type AdGuardManagedStatusResponse,
 } from "./system/index.js";
 
 // Auth DTOs (#52). Re-exported here so the frontend imports the auth contract

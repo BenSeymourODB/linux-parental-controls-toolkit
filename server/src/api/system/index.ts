@@ -6,5 +6,9 @@ export {
   ansibleVenvStatusResponseSchema,
   toAnsibleVenvStatusResponse,
   type AnsibleVenvStatusResponse,
+  adGuardManagedStateSchema,
+  adGuardManagedStatusResponseSchema,
+  toAdGuardManagedStatusResponse,
+  type AdGuardManagedStatusResponse,
 } from "./dtos.js";
 export { registerSystemRoutes } from "./routes.js";

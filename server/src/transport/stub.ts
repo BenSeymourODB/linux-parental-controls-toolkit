@@ -33,11 +33,14 @@ export const PUSH_STUB_MESSAGE = "stub transport: would push policy change to cl
  * Which policy mutation triggered a would-be push. Mirrors the #51/#148 CRUD
  * operations one-to-one so a log reader can trace a line back to its cause.
  *
- * `budget.*`, `schedule.*`, and `exception.*` are user-scoped (#148): they
- * change what is enforced for one supervised user, so a real transport would
- * push to every client that user is linked to — exactly like `user.*`.
- * Activity / ActivityGroup / membership are *definitions* with no per-client
- * effect until a budget or schedule references them, so they do not push.
+ * `budget.*`, `schedule.*`, `exception.*`, and `notification.*` are
+ * user-scoped (#148/#104): they change what is enforced or rendered for one
+ * supervised user, so a real transport would push to every client that user is
+ * linked to — exactly like `user.*`. (A `NotificationPolicy` is pushed "with
+ * the rest of policy" and cached client-side; eventual wire delivery is the
+ * `policy.changed` event, #100.) Activity / ActivityGroup / membership are
+ * *definitions* with no per-client effect until a budget or schedule
+ * references them, so they do not push.
  */
 export type PolicyPushReason =
   | "user.created"
@@ -56,7 +59,9 @@ export type PolicyPushReason =
   | "schedule.deleted"
   | "exception.created"
   | "exception.updated"
-  | "exception.deleted";
+  | "exception.deleted"
+  | "notification.upserted"
+  | "notification.deleted";
 
 /**
  * The intended effect of one policy mutation on **one** client — the unit a
@@ -84,7 +89,11 @@ export interface PolicyPushCommand {
  */
 export type UserPushReason = Extract<
   PolicyPushReason,
-  `user.${string}` | `budget.${string}` | `schedule.${string}` | `exception.${string}`
+  | `user.${string}`
+  | `budget.${string}`
+  | `schedule.${string}`
+  | `exception.${string}`
+  | `notification.${string}`
 >;
 /** A client-scoped change reason (affects that one client). */
 export type ClientPushReason = Extract<PolicyPushReason, `client.${string}`>;
