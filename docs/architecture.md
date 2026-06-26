@@ -120,12 +120,16 @@ Client        (id, hostname, ssh_user, bearer_token_hash?, enrolled_at,
               --  fleet inventory the client reports at enrolment (#164); all
               --  NULL until reported. The Phase-8b heartbeat (#165/#101)
               --  refreshes agent_version + versions_reported_at later.
-UserOnClient  (user_id, client_id, linux_username, linux_uid)
+UserOnClient  (user_id, client_id, os_username, os_user_ref)
+              --  os_username / os_user_ref are OS-neutral (#230): the local
+              --  login name and an account reference — a uid on Linux, a SID
+              --  on Windows — so os_user_ref is TEXT (the Linux uid in its
+              --  decimal-string form). UNIQUE(client_id, os_user_ref).
 
 EnrolmentToken (id, token_hash, hostname?, supervised_users[],
                 expires_at, created_at, consumed_at?, consumed_client_id?)
               --  single-use, expiring client-enrolment credential (#77).
-              --  Admin mints one bound to the policy-user ↔ Linux-account
+              --  Admin mints one bound to the policy-user ↔ OS-account
               --  mapping; POST /api/clients/enrol redeems it (creating the
               --  Client + UserOnClient rows) and marks it consumed. Only the
               --  SHA-256 token_hash is stored, never the plaintext.
@@ -237,13 +241,60 @@ Key derived views the dashboard renders:
 5. If a client is offline, the change is queued; an Ansible run is
    scheduled on next reconnect (detected by SSH probe).
 
-In **Phase 2** (`docs/roadmap.md`) none of the transport in steps 3–5 exists
-yet: every mutating policy write instead runs through a **stub transport**
-(`server/src/transport/stub.ts`, #54) that computes the intended per-client
-effect and *logs* it (`component: "transport/stub"`) rather than dispatching
-it. The logged command is shaped like the real per-client transport command,
-so Phase 4 (SSH + `timekpra`) and Phase 6 (Ansible) swap the log for a real
-dispatch without changing the call sites.
+In **Phase 4** the session-limit push (step 3) is **live** (#201). Every
+mutating policy write computes the same per-client `PolicyPushCommand` it always
+did, but the dispatcher (`server/src/transport/policy-push/`,
+`component: "transport/policy-push"`) now resolves the affected user's effective
+overall policy and pushes it over the SSH + `timekpra` transport:
+
+- the per-weekday daily limit, the rolling weekly/monthly limits, and the
+  recurring allowed-days/allowed-hours grid (resolved via the #143 resolver and
+  the #140 weekly-window bridge);
+- through the **offline queue** (#84): reachable clients are pushed immediately,
+  unreachable ones are queued and replayed on the next successful SSH probe
+  (step 5);
+- recorded in the **audit log** (#85): every issued command, with attribution,
+  for the admin Clients/audit views.
+
+The push is **fire-and-forget** from the HTTP handler — a mutation does not block
+on SSH round-trips to (possibly offline) clients; durability for offline clients
+comes from the queue + the periodic drainer. The live transport needs the
+server's SSH key (generated on first run, #39); until it exists the dispatcher
+falls back to the **logging stub** (`server/src/transport/stub.ts`, #54,
+`component: "transport/stub"`) so the dashboard still starts and CRUD still
+works (the change is logged, not dispatched). The file-level Ansible push
+(step 4) is still Phase 6, and PlayTime / per-activity limits are Phase 8 — both
+plug into the same call sites without reshaping them.
+
+#### "Add time today" — the same-day adjustment lever (#257)
+
+`POST /api/users/:userId/time-today` is a manual admin action that adjusts a
+supervised user's **remaining time for today** (`timekpra --settimeleft USER
+(+|-|=) SECONDS`) on their linked client(s) — the pre-Grant-ledger bonus / unlock
+affordance (#185). It does **not** change the standing daily `Budget`; it is a
+same-day, ephemeral nudge that Timekpr forgets at the daily rollover. The durable,
+auditable, idempotent path is the **Grant ledger** (Phase 10), which supersedes
+this lever.
+
+Two ways it deliberately differs from the standing policy push above:
+
+- **Awaitable, not fire-and-forget.** The admin clicked "give Alice 30 more
+  minutes" and wants to know it took, so the route awaits the transport and
+  returns a per-client `applied | unreachable | failed` result.
+- **Online-only — _not_ routed through the offline queue.** The queue (#84) is
+  at-least-once with coalescing and therefore requires **idempotent** executors;
+  the standing push satisfies that by setting *absolute* limits. An additive
+  `--settimeleft +N` is **not** idempotent — a crash-then-replay would
+  double-apply and coalescing two queued adjustments would drop one. So an
+  adjustment to an unreachable client is reported as `unreachable` rather than
+  queued. (A queue-safe absolute-target variant could be added later if a
+  same-day adjustment to an offline client is ever wanted; tracked as a
+  follow-up.)
+
+Both paths are still recorded in the **audit log** (#85) — the `--settimeleft`
+command is attributed to `actor: "admin"`, `reason: "time.adjusted"`. When the
+live transport isn't wired (no SSH key yet), the route returns `503
+transport_unavailable` rather than silently no-op'ing.
 
 ### Inbound (client → server) — telemetry pull
 

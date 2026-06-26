@@ -4,6 +4,8 @@
  * top-level `api/` barrel so the contract is imported from one place.
  */
 export { registerPolicyRoutes } from "./routes.js";
+export { registerScheduleOrderRoutes } from "./schedule-order.js";
+export { registerTimeTodayRoutes } from "./time-today.js";
 export {
   registerEffectiveRoutes,
   activeRuleResponseSchema,
@@ -12,6 +14,16 @@ export {
   effectivePolicyResponseSchema,
   type EffectivePolicyResponse,
 } from "./effective.js";
+export { registerPreviewRoutes } from "./preview-routes.js";
+export {
+  policyPreviewRequestSchema,
+  policyPreviewResponseSchema,
+  policyPushChangeResponseSchema,
+  previewAffectedClientSchema,
+  type PolicyPreviewRequest,
+  type PolicyPreviewResponse,
+  type PreviewAffectedClient,
+} from "./preview-dtos.js";
 export {
   // Account/device core (#51)
   clientResponseSchema,
@@ -72,6 +84,13 @@ export {
   type ScheduleResponse,
   type CreateScheduleRequest,
   type UpdateScheduleRequest,
+  // Schedule ordering / drag-reorder editor (#63)
+  reorderSchedulesSchema,
+  shadowFindingSchema,
+  scheduleOrderViewSchema,
+  type ReorderSchedulesRequest,
+  type ShadowFindingDto,
+  type ScheduleOrderView,
   // Exceptions (#148)
   exceptionResponseSchema,
   createExceptionSchema,
@@ -79,4 +98,28 @@ export {
   type ExceptionResponse,
   type CreateExceptionRequest,
   type UpdateExceptionRequest,
+  // Notification policy (#104)
+  notificationPolicyResponseSchema,
+  upsertNotificationPolicySchema,
+  type NotificationPolicyResponse,
+  type UpsertNotificationPolicyRequest,
+  // Group-targeted schedules + exceptions (#182). The PATCH bodies reuse the
+  // user-keyed `updateScheduleSchema` / `updateExceptionSchema` above.
+  createGroupScheduleSchema,
+  groupScheduleResponseSchema,
+  type CreateGroupScheduleRequest,
+  type GroupScheduleResponse,
+  createGroupExceptionSchema,
+  groupExceptionResponseSchema,
+  type CreateGroupExceptionRequest,
+  type GroupExceptionResponse,
+  // "Add time today" same-day adjustment (#257)
+  adjustTimeTodaySchema,
+  timeTodayResponseSchema,
+  clientAdjustmentResultSchema,
+  toTimeLeftCommand,
+  TIME_TODAY_MAX_SECONDS,
+  type AdjustTimeTodayRequest,
+  type TimeTodayResponse,
+  type ClientAdjustmentResultDto,
 } from "./dtos.js";

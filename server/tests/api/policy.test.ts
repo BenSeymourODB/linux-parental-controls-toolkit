@@ -288,10 +288,10 @@ describe("policy CRUD routes", () => {
     const put = await auth({
       method: "PUT",
       url: `/api/users/${userId}/clients/${clientId}`,
-      payload: { linuxUsername: "alice", linuxUid: 1001 },
+      payload: { osUsername: "alice", osUserRef: "1001" },
     });
     expect(put.statusCode).toBe(200);
-    expect(put.json()).toEqual({ userId, clientId, linuxUsername: "alice", linuxUid: 1001 });
+    expect(put.json()).toEqual({ userId, clientId, osUsername: "alice", osUserRef: "1001" });
 
     const list = await auth({ method: "GET", url: `/api/users/${userId}/clients` });
     expect(list.json()).toHaveLength(1);
@@ -300,9 +300,9 @@ describe("policy CRUD routes", () => {
     const again = await auth({
       method: "PUT",
       url: `/api/users/${userId}/clients/${clientId}`,
-      payload: { linuxUsername: "alice2", linuxUid: 1002 },
+      payload: { osUsername: "alice2", osUserRef: "1002" },
     });
-    expect(again.json().linuxUid).toBe(1002);
+    expect(again.json().osUserRef).toBe("1002");
     expect(
       (await auth({ method: "GET", url: `/api/users/${userId}/clients` })).json(),
     ).toHaveLength(1);
@@ -313,13 +313,13 @@ describe("policy CRUD routes", () => {
     const noUser = await auth({
       method: "PUT",
       url: `/api/users/999/clients/${clientId}`,
-      payload: { linuxUsername: "x", linuxUid: 1001 },
+      payload: { osUsername: "x", osUserRef: "1001" },
     });
     expect(noUser.statusCode).toBe(404);
     const noClient = await auth({
       method: "PUT",
       url: `/api/users/${userId}/clients/999`,
-      payload: { linuxUsername: "x", linuxUid: 1001 },
+      payload: { osUsername: "x", osUserRef: "1001" },
     });
     expect(noClient.statusCode).toBe(404);
   });
@@ -329,7 +329,7 @@ describe("policy CRUD routes", () => {
     expect(res.statusCode).toBe(404);
   });
 
-  it("409s when a UID is already mapped to another user on the same client", async () => {
+  it("409s when an OS account reference is already mapped to another user on the same client", async () => {
     const { userId, clientId } = await makeUserAndClient();
     const otherUser = (
       await auth({ method: "POST", url: "/api/users", payload: { displayName: "Bob" } })
@@ -337,12 +337,12 @@ describe("policy CRUD routes", () => {
     await auth({
       method: "PUT",
       url: `/api/users/${userId}/clients/${clientId}`,
-      payload: { linuxUsername: "alice", linuxUid: 1001 },
+      payload: { osUsername: "alice", osUserRef: "1001" },
     });
     const conflict = await auth({
       method: "PUT",
       url: `/api/users/${otherUser}/clients/${clientId}`,
-      payload: { linuxUsername: "bob", linuxUid: 1001 },
+      payload: { osUsername: "bob", osUserRef: "1001" },
     });
     expect(conflict.statusCode).toBe(409);
   });
@@ -352,7 +352,7 @@ describe("policy CRUD routes", () => {
     await auth({
       method: "PUT",
       url: `/api/users/${userId}/clients/${clientId}`,
-      payload: { linuxUsername: "alice", linuxUid: 1001 },
+      payload: { osUsername: "alice", osUserRef: "1001" },
     });
     const del = await auth({ method: "DELETE", url: `/api/users/${userId}/clients/${clientId}` });
     expect(del.statusCode).toBe(204);
@@ -1032,5 +1032,257 @@ describe("policy CRUD routes — user groups (#124)", () => {
     expect(
       (await auth({ method: "PUT", url: `/api/user-groups/${group}/members/999` })).statusCode,
     ).toBe(404);
+  });
+});
+
+describe("policy CRUD routes — group schedules & exceptions (#182)", () => {
+  let harness: TestApp;
+  let cookie: string;
+
+  beforeEach(async () => {
+    harness = buildTestApp({ appOptions: { settings: configuredSettings() } });
+    await harness.app.ready();
+    const login = await harness.app.inject({
+      method: "POST",
+      url: "/api/auth/login",
+      payload: { username: "ben", password: "hunter2" },
+    });
+    cookie = sessionCookie(login);
+  });
+
+  afterEach(async () => {
+    await harness.close();
+  });
+
+  function auth(opts: InjectOptions) {
+    return harness.app.inject({ ...opts, headers: { ...opts.headers, cookie } });
+  }
+
+  async function makeGroup(name = "Kids"): Promise<number> {
+    return (await auth({ method: "POST", url: "/api/user-groups", payload: { name } })).json().id;
+  }
+
+  async function makeActivity(matcher = "firefox"): Promise<number> {
+    return (
+      await auth({ method: "POST", url: "/api/activities", payload: { kind: "app", matcher } })
+    ).json().id;
+  }
+
+  it("rejects anonymous access to the group collections with a 401", async () => {
+    for (const url of ["/api/user-groups/1/schedules", "/api/user-groups/1/exceptions"]) {
+      const res = await harness.app.inject({ method: "GET", url });
+      expect(res.statusCode).toBe(401);
+      expect(res.json().error.code).toBe("unauthorized");
+    }
+  });
+
+  it("creates, lists, reads, patches, and deletes a group schedule", async () => {
+    const groupId = await makeGroup();
+    const created = await auth({
+      method: "POST",
+      url: `/api/user-groups/${groupId}/schedules`,
+      payload: {
+        targetKind: "overall",
+        action: "deny",
+        recurrenceDays: 0b0011111,
+        recurrenceStartMinute: 16 * 60,
+        recurrenceEndMinute: 18 * 60,
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const body = created.json();
+    expect(body).toMatchObject({
+      userGroupId: groupId,
+      targetKind: "overall",
+      action: "deny",
+      recurrenceDays: 0b0011111,
+      ordinal: 0,
+    });
+
+    const list = await auth({ method: "GET", url: `/api/user-groups/${groupId}/schedules` });
+    expect(list.json().map((r: { id: number }) => r.id)).toEqual([body.id]);
+
+    expect((await auth({ method: "GET", url: `/api/group-schedules/${body.id}` })).json().id).toBe(
+      body.id,
+    );
+
+    const patched = await auth({
+      method: "PATCH",
+      url: `/api/group-schedules/${body.id}`,
+      payload: { action: "allow" },
+    });
+    expect(patched.json().action).toBe("allow");
+
+    expect(
+      (await auth({ method: "DELETE", url: `/api/group-schedules/${body.id}` })).statusCode,
+    ).toBe(204);
+    expect((await auth({ method: "GET", url: `/api/group-schedules/${body.id}` })).statusCode).toBe(
+      404,
+    );
+  });
+
+  it("resolves an activity target and 400s a dangling one on a group schedule", async () => {
+    const groupId = await makeGroup();
+    const activityId = await makeActivity();
+    const ok = await auth({
+      method: "POST",
+      url: `/api/user-groups/${groupId}/schedules`,
+      payload: { targetKind: "activity", targetId: activityId, action: "deny" },
+    });
+    expect(ok.statusCode).toBe(201);
+
+    const dangling = await auth({
+      method: "POST",
+      url: `/api/user-groups/${groupId}/schedules`,
+      payload: { targetKind: "activity", targetId: 9999, action: "deny" },
+    });
+    expect(dangling.statusCode).toBe(400);
+    expect(dangling.json().error.code).toBe("validation_error");
+  });
+
+  it("400s an invalid recurrence window and 404s a missing group on create", async () => {
+    const groupId = await makeGroup();
+    const bad = await auth({
+      method: "POST",
+      url: `/api/user-groups/${groupId}/schedules`,
+      payload: { targetKind: "overall", action: "allow", recurrenceStartMinute: 600 }, // half a pair
+    });
+    expect(bad.statusCode).toBe(400);
+
+    const missing = await auth({
+      method: "POST",
+      url: "/api/user-groups/9999/schedules",
+      payload: { targetKind: "overall", action: "deny" },
+    });
+    expect(missing.statusCode).toBe(404);
+
+    expect((await auth({ method: "GET", url: "/api/user-groups/9999/schedules" })).statusCode).toBe(
+      404,
+    );
+  });
+
+  it("creates, lists, patches, and deletes a group exception", async () => {
+    const groupId = await makeGroup();
+    const created = await auth({
+      method: "POST",
+      url: `/api/user-groups/${groupId}/exceptions`,
+      payload: {
+        targetKind: "overall",
+        action: "allow",
+        reason: "movie night",
+        expiresAt: "2026-07-02T00:00:00.000Z",
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const body = created.json();
+    expect(body).toMatchObject({ userGroupId: groupId, action: "allow", reason: "movie night" });
+
+    expect(
+      (await auth({ method: "GET", url: `/api/user-groups/${groupId}/exceptions` })).json(),
+    ).toHaveLength(1);
+
+    const patched = await auth({
+      method: "PATCH",
+      url: `/api/group-exceptions/${body.id}`,
+      payload: { reason: "trip" },
+    });
+    expect(patched.json().reason).toBe("trip");
+
+    expect(
+      (await auth({ method: "DELETE", url: `/api/group-exceptions/${body.id}` })).statusCode,
+    ).toBe(204);
+    expect(
+      (await auth({ method: "GET", url: `/api/group-exceptions/${body.id}` })).statusCode,
+    ).toBe(404);
+  });
+
+  it("400s a group exception whose effectiveFrom is not before expiry", async () => {
+    const groupId = await makeGroup();
+    const bad = await auth({
+      method: "POST",
+      url: `/api/user-groups/${groupId}/exceptions`,
+      payload: {
+        targetKind: "overall",
+        action: "allow",
+        effectiveFrom: "2026-07-02T00:00:00.000Z",
+        expiresAt: "2026-07-01T00:00:00.000Z",
+      },
+    });
+    expect(bad.statusCode).toBe(400);
+    expect(bad.json().error.code).toBe("validation_error");
+  });
+
+  it("404s item reads/patches/deletes against missing group rules", async () => {
+    for (const base of ["group-schedules", "group-exceptions"]) {
+      expect((await auth({ method: "GET", url: `/api/${base}/9999` })).statusCode).toBe(404);
+      expect(
+        (await auth({ method: "PATCH", url: `/api/${base}/9999`, payload: { action: "deny" } }))
+          .statusCode,
+      ).toBe(404);
+      expect((await auth({ method: "DELETE", url: `/api/${base}/9999` })).statusCode).toBe(404);
+    }
+  });
+
+  it("re-validates the target on a group-schedule PATCH", async () => {
+    const groupId = await makeGroup();
+    const activityId = await makeActivity();
+    const created = await auth({
+      method: "POST",
+      url: `/api/user-groups/${groupId}/schedules`,
+      payload: { targetKind: "overall", action: "deny" },
+    });
+    const id = created.json().id;
+
+    // Re-target to a real activity: ok.
+    const ok = await auth({
+      method: "PATCH",
+      url: `/api/group-schedules/${id}`,
+      payload: { targetKind: "activity", targetId: activityId },
+    });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.json()).toMatchObject({ targetKind: "activity", targetId: activityId });
+
+    // Re-target to a dangling activity: 400.
+    const bad = await auth({
+      method: "PATCH",
+      url: `/api/group-schedules/${id}`,
+      payload: { targetKind: "activity", targetId: 9999 },
+    });
+    expect(bad.statusCode).toBe(400);
+  });
+
+  it("pushes a group-rule change to every member's clients (stub)", async () => {
+    const groupId = await makeGroup();
+    // Two members; one has a client linked, the other does not.
+    const alice = (
+      await auth({ method: "POST", url: "/api/users", payload: { displayName: "Alice" } })
+    ).json().id;
+    const bob = (
+      await auth({ method: "POST", url: "/api/users", payload: { displayName: "Bob" } })
+    ).json().id;
+    await auth({ method: "PUT", url: `/api/user-groups/${groupId}/members/${alice}` });
+    await auth({ method: "PUT", url: `/api/user-groups/${groupId}/members/${bob}` });
+    const client = (
+      await auth({
+        method: "POST",
+        url: "/api/clients",
+        payload: { hostname: "mint-1", sshUser: "pct-agent" },
+      })
+    ).json().id;
+    await auth({
+      method: "PUT",
+      url: `/api/users/${alice}/clients/${client}`,
+      payload: { osUsername: "alice", osUserRef: "1000" },
+    });
+
+    // The mutation must succeed (the stub logs the fan-out); no client → no-op
+    // for Bob, one command for Alice. Asserting the request path is reachable
+    // and returns 201 covers the fan-out wiring without coupling to log output.
+    const created = await auth({
+      method: "POST",
+      url: `/api/user-groups/${groupId}/schedules`,
+      payload: { targetKind: "overall", action: "deny" },
+    });
+    expect(created.statusCode).toBe(201);
   });
 });

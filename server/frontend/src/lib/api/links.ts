@@ -4,7 +4,7 @@
  * Same proven shape as `$lib/api/activities` (#53/#189): thin typed wrappers
  * over {@link apiFetch}, with the request/response types imported from the
  * shared `/api` contract so the frontend never re-declares a DTO. A link maps
- * a policy `User` to a Linux account (`linuxUsername` + `linuxUid`) on a given
+ * a policy `User` to an OS account (`osUsername` + `osUserRef`) on a given
  * `Client`; the routes are nested under the user so the collection is scoped to
  * one supervised user at a time.
  *
@@ -20,8 +20,8 @@ export function listUserLinks(userId: number): Promise<LinkResponse[]> {
 
 /**
  * Create-or-update the link between `userId` and `clientId` (idempotent `PUT`).
- * The server enforces that the Linux UID is unique per client and returns the
- * stored row.
+ * The server enforces that the OS account reference is unique per client and
+ * returns the stored row.
  */
 export function upsertLink(
   userId: number,

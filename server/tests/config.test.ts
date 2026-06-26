@@ -17,15 +17,62 @@ describe("loadSettings", () => {
     expect(settings.trustProxy).toBe(false);
     expect(settings.secretKey).toBeUndefined();
     expect(settings.ansibleDir).toBe("/data/ansible");
+    expect(settings.ansibleCoreVersion).toBe("2.18.1");
+    expect(settings.ansiblePlaybookSourceDir).toBe("/app/ansible/playbooks");
     expect(settings.sshPublicKeyPath).toBe("/data/secrets/ssh/id_ed25519.pub");
     expect(settings.sshPrivateKeyPath).toBe("/data/secrets/ssh/id_ed25519");
     expect(settings.adguard).toEqual({ mode: "disabled" });
     expect(settings.telemetry).toEqual({ pullCron: "*/5 * * * *", pullConcurrency: 4 });
     expect(settings.reapply).toEqual({ cron: "0 * * * *", playbooks: [] });
+    expect(settings.clientHealth).toEqual({ probeConcurrency: 4, probeDeadlineMs: 15000 });
+    expect(settings.preMigrationBackup).toEqual({ enabled: true, retain: 5 });
+  });
+
+  describe("pre-migration backup (#166)", () => {
+    it("defaults to enabled with retain 5 and no explicit dir", () => {
+      const { preMigrationBackup } = loadSettings({});
+      expect(preMigrationBackup).toEqual({ enabled: true, retain: 5 });
+      expect(preMigrationBackup.dir).toBeUndefined();
+    });
+
+    it("honours explicit overrides", () => {
+      const { preMigrationBackup } = loadSettings({
+        PCT_PRE_MIGRATION_BACKUP: "false",
+        PCT_PRE_MIGRATION_BACKUP_DIR: "/srv/backups",
+        PCT_PRE_MIGRATION_BACKUP_RETAIN: "3",
+      });
+      expect(preMigrationBackup).toEqual({ enabled: false, dir: "/srv/backups", retain: 3 });
+    });
+
+    it("rejects a non-positive retain count", () => {
+      expect(() => loadSettings({ PCT_PRE_MIGRATION_BACKUP_RETAIN: "0" })).toThrow(SettingsError);
+      expect(() => loadSettings({ PCT_PRE_MIGRATION_BACKUP_RETAIN: "-1" })).toThrow(SettingsError);
+    });
+
+    it("rejects a non-numeric retain count", () => {
+      expect(() => loadSettings({ PCT_PRE_MIGRATION_BACKUP_RETAIN: "lots" })).toThrow(
+        SettingsError,
+      );
+    });
   });
 
   it("honours an explicit PCT_ANSIBLE_DIR", () => {
     expect(loadSettings({ PCT_ANSIBLE_DIR: "/srv/ansible" }).ansibleDir).toBe("/srv/ansible");
+  });
+
+  it("honours explicit Ansible venv bootstrap settings", () => {
+    const settings = loadSettings({
+      PCT_ANSIBLE_CORE_VERSION: "2.17.6",
+      PCT_ANSIBLE_PLAYBOOK_SRC: "/opt/playbooks",
+    });
+    expect(settings.ansibleCoreVersion).toBe("2.17.6");
+    expect(settings.ansiblePlaybookSourceDir).toBe("/opt/playbooks");
+  });
+
+  it("rejects a non-version PCT_ANSIBLE_CORE_VERSION", () => {
+    expect(() => loadSettings({ PCT_ANSIBLE_CORE_VERSION: "latest; rm -rf /" })).toThrow(
+      /bare version/,
+    );
   });
 
   it("honours explicit SSH key paths", () => {
@@ -170,13 +217,27 @@ describe("loadSettings", () => {
   });
 
   describe("managed mode", () => {
-    it("defaults bind address and admin port", () => {
+    it("defaults bind address, admin port, and data dir (version unset)", () => {
       const settings = loadSettings({ PCT_ADGUARD_MODE: "managed" });
 
       expect(settings.adguard).toEqual({
         mode: "managed",
         bindAddr: "0.0.0.0:53",
         adminPort: 3000,
+        dataDir: "/data/adguard",
+      });
+    });
+
+    it("honours an explicit data dir and pinned version", () => {
+      const settings = loadSettings({
+        PCT_ADGUARD_MODE: "managed",
+        PCT_ADGUARD_DATA_DIR: "/srv/adguard",
+        PCT_ADGUARD_VERSION: "v0.107.65",
+      });
+
+      expect(settings.adguard).toMatchObject({
+        dataDir: "/srv/adguard",
+        version: "v0.107.65",
       });
     });
 
@@ -224,6 +285,41 @@ describe("loadSettings", () => {
       expect(() => loadSettings({ PCT_TELEMETRY_PULL_CONCURRENCY: "0" })).toThrow(SettingsError);
       expect(() => loadSettings({ PCT_TELEMETRY_PULL_CONCURRENCY: "-3" })).toThrow(SettingsError);
       expect(() => loadSettings({ PCT_TELEMETRY_PULL_CONCURRENCY: "many" })).toThrow(SettingsError);
+    });
+  });
+
+  describe("PCT_CLIENT_HEALTH_*", () => {
+    it("honours explicit probe concurrency and deadline", () => {
+      const settings = loadSettings({
+        PCT_CLIENT_HEALTH_PROBE_CONCURRENCY: "8",
+        PCT_CLIENT_HEALTH_PROBE_DEADLINE_MS: "5000",
+      });
+      expect(settings.clientHealth).toEqual({ probeConcurrency: 8, probeDeadlineMs: 5000 });
+    });
+
+    it("accepts a deadline of 0 to disable the per-list deadline", () => {
+      expect(loadSettings({ PCT_CLIENT_HEALTH_PROBE_DEADLINE_MS: "0" }).clientHealth).toEqual({
+        probeConcurrency: 4,
+        probeDeadlineMs: 0,
+      });
+    });
+
+    it("rejects a non-positive or non-numeric concurrency", () => {
+      expect(() => loadSettings({ PCT_CLIENT_HEALTH_PROBE_CONCURRENCY: "0" })).toThrow(
+        SettingsError,
+      );
+      expect(() => loadSettings({ PCT_CLIENT_HEALTH_PROBE_CONCURRENCY: "-1" })).toThrow(
+        SettingsError,
+      );
+      expect(() => loadSettings({ PCT_CLIENT_HEALTH_PROBE_CONCURRENCY: "lots" })).toThrow(
+        SettingsError,
+      );
+    });
+
+    it("rejects a negative deadline", () => {
+      expect(() => loadSettings({ PCT_CLIENT_HEALTH_PROBE_DEADLINE_MS: "-1" })).toThrow(
+        SettingsError,
+      );
     });
   });
 

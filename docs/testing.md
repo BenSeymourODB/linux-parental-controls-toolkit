@@ -219,6 +219,45 @@ and leaves closing it to the provider. So `app.db`, the `db` returned by
 `buildTestApp()`, and the handle you passed in are all the same object, and
 `close()` tears down the app and then the database.
 
+### Fixtures and the clock — avoiding time-bombs
+
+A test is a **time-bomb** when it passes today but will fail on a future
+calendar day with no code change. The classic shape (issue #254) is a fixture
+that pins one timestamp to a hardcoded date while letting *another* default to
+the wall clock, then asserts on a relationship between the two:
+
+```ts
+// ❌ time-bomb: grantedAt defaults to unixepoch() (= now), but the query date
+// is hardcoded. It composes only while "now" still falls inside 2026-06-20;
+// once the wall clock passes that day, grantOverlapsDay correctly drops the
+// grant and the assertion flips (9000 → 7200).
+db.insert(grants).values({ userId, scope: "overall", secondsGranted: 1800,
+  expiresAt: new Date("2026-12-31T00:00:00Z"), source: "admin" }).run();
+await app.inject({ url: `/api/users/${userId}/effective?date=2026-06-20` });
+```
+
+The columns that bite are the `timestampNow()` defaults in `schema.ts`
+(`grants.grantedAt`, `exceptions.createdAt`, …) — they resolve to insertion
+time, i.e. the real wall clock, which no test controls.
+
+Two safe patterns, pick by what the test is asserting:
+
+- **Pin every timestamp the assertion depends on** to a fixed instant relative
+  to the hardcoded query date (this is the #254 fix — set `grantedAt` explicitly
+  so the grant deterministically overlaps the queried day).
+- **Derive the query date from the clock**, never hardcode it, when you *want*
+  to exercise a defaulted timestamp. See the evergreen guard
+  "resolves a default-grantedAt grant by wall clock" in
+  `tests/api/policy-effective.test.ts`: it inserts a grant on the `grantedAt`
+  default and asserts against `today` / a day 30 days in the past, both computed
+  from `Date.now()`, so it pins the wall-clock semantics without ever maturing
+  into a time-bomb.
+
+Sweep technique: temporarily change `timestampNow()` in `schema.ts` to default to
+a far-future literal (`unixepoch('2030-03-15T12:00:00Z')`) and run the suite — any
+test that secretly relies on a default timestamp being "near now" fails. The unit
+suite is clean under this check; keep it that way.
+
 ---
 
 ## Coverage targets by module
@@ -316,8 +355,32 @@ The tool is dev-only: it lives in `server/scripts/` (outside `src/`, so it never
 ships in the Docker image) and runs via `node --experimental-strip-types`. Its
 logic is pure functions plus an orchestrator behind injected git/fs/script
 seams, unit-tested in `tests/scripts/rebase-migrations.test.ts` with in-memory
-fakes — no live git or drizzle-kit. Slice 2 (an opt-in CI auto-fix workflow) is
-tracked separately; see issue #199.
+fakes — no live git or drizzle-kit.
+
+### CI auto-fix (`migration-autofix.yml`, Slice 2 of #199 / #210)
+
+On a `claude/**` PR you usually do not have to run `db:rebase` by hand: the
+`Migration auto-fix` workflow (`.github/workflows/migration-autofix.yml`) does it
+for you. On every PR `synchronize`/`opened`/`reopened` it runs `drizzle-kit
+check` and — **only** when that fails *for the parent-collision reason
+specifically* — re-runs `npm run db:rebase` (never `--force`), commits the
+regenerated migration with a `[skip-regen]` marker, and pushes it back to the PR
+branch, leaving an audit comment. It deliberately does **nothing** on an
+unrelated check failure (that stays a normal red), on a green branch, or when its
+own regen commit is at `HEAD` (the loop guard). When `db:rebase` *refuses* (a
+hand-edited / multi-migration branch it will not touch without `--force`) the
+workflow comments for human attention instead of pushing.
+
+The decision logic lives in (and is unit-tested as)
+`server/scripts/ci-autofix-migrations.ts`
+(`tests/scripts/ci-autofix-migrations.test.ts`), driving the Slice-1 CLI as a
+subprocess; the YAML only wires the real seams.
+
+One caveat: the push uses the default `GITHUB_TOKEN`, whose pushes do **not**
+re-trigger workflows, so the `migrations` check does not auto re-run after a
+fix — the auto-fix comment asks you to re-run it (or it re-runs on your next
+push). Forcing that re-run via a write-scoped GitHub App / PAT is a tracked
+follow-up rather than a silently-added repo secret.
 
 ---
 
