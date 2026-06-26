@@ -14,18 +14,65 @@ describe("loadSettings", () => {
     expect(settings.databaseUrl).toBe("/data/policy.sqlite");
     expect(settings.defaultTz).toBe("UTC");
     expect(settings.logLevel).toBe("info");
+    expect(settings.trustProxy).toBe(false);
     expect(settings.secretKey).toBeUndefined();
     expect(settings.ansibleDir).toBe("/data/ansible");
+    expect(settings.ansibleCoreVersion).toBe("2.18.1");
+    expect(settings.ansiblePlaybookSourceDir).toBe("/app/ansible/playbooks");
     expect(settings.sshPublicKeyPath).toBe("/data/secrets/ssh/id_ed25519.pub");
     expect(settings.sshPrivateKeyPath).toBe("/data/secrets/ssh/id_ed25519");
     expect(settings.adguard).toEqual({ mode: "disabled" });
     expect(settings.telemetry).toEqual({ pullCron: "*/5 * * * *", pullConcurrency: 4 });
     expect(settings.reapply).toEqual({ cron: "0 * * * *", playbooks: [] });
     expect(settings.clientHealth).toEqual({ probeConcurrency: 4, probeDeadlineMs: 15000 });
+    expect(settings.preMigrationBackup).toEqual({ enabled: true, retain: 5 });
+  });
+
+  describe("pre-migration backup (#166)", () => {
+    it("defaults to enabled with retain 5 and no explicit dir", () => {
+      const { preMigrationBackup } = loadSettings({});
+      expect(preMigrationBackup).toEqual({ enabled: true, retain: 5 });
+      expect(preMigrationBackup.dir).toBeUndefined();
+    });
+
+    it("honours explicit overrides", () => {
+      const { preMigrationBackup } = loadSettings({
+        PCT_PRE_MIGRATION_BACKUP: "false",
+        PCT_PRE_MIGRATION_BACKUP_DIR: "/srv/backups",
+        PCT_PRE_MIGRATION_BACKUP_RETAIN: "3",
+      });
+      expect(preMigrationBackup).toEqual({ enabled: false, dir: "/srv/backups", retain: 3 });
+    });
+
+    it("rejects a non-positive retain count", () => {
+      expect(() => loadSettings({ PCT_PRE_MIGRATION_BACKUP_RETAIN: "0" })).toThrow(SettingsError);
+      expect(() => loadSettings({ PCT_PRE_MIGRATION_BACKUP_RETAIN: "-1" })).toThrow(SettingsError);
+    });
+
+    it("rejects a non-numeric retain count", () => {
+      expect(() => loadSettings({ PCT_PRE_MIGRATION_BACKUP_RETAIN: "lots" })).toThrow(
+        SettingsError,
+      );
+    });
   });
 
   it("honours an explicit PCT_ANSIBLE_DIR", () => {
     expect(loadSettings({ PCT_ANSIBLE_DIR: "/srv/ansible" }).ansibleDir).toBe("/srv/ansible");
+  });
+
+  it("honours explicit Ansible venv bootstrap settings", () => {
+    const settings = loadSettings({
+      PCT_ANSIBLE_CORE_VERSION: "2.17.6",
+      PCT_ANSIBLE_PLAYBOOK_SRC: "/opt/playbooks",
+    });
+    expect(settings.ansibleCoreVersion).toBe("2.17.6");
+    expect(settings.ansiblePlaybookSourceDir).toBe("/opt/playbooks");
+  });
+
+  it("rejects a non-version PCT_ANSIBLE_CORE_VERSION", () => {
+    expect(() => loadSettings({ PCT_ANSIBLE_CORE_VERSION: "latest; rm -rf /" })).toThrow(
+      /bare version/,
+    );
   });
 
   it("honours explicit SSH key paths", () => {
@@ -170,13 +217,27 @@ describe("loadSettings", () => {
   });
 
   describe("managed mode", () => {
-    it("defaults bind address and admin port", () => {
+    it("defaults bind address, admin port, and data dir (version unset)", () => {
       const settings = loadSettings({ PCT_ADGUARD_MODE: "managed" });
 
       expect(settings.adguard).toEqual({
         mode: "managed",
         bindAddr: "0.0.0.0:53",
         adminPort: 3000,
+        dataDir: "/data/adguard",
+      });
+    });
+
+    it("honours an explicit data dir and pinned version", () => {
+      const settings = loadSettings({
+        PCT_ADGUARD_MODE: "managed",
+        PCT_ADGUARD_DATA_DIR: "/srv/adguard",
+        PCT_ADGUARD_VERSION: "v0.107.65",
+      });
+
+      expect(settings.adguard).toMatchObject({
+        dataDir: "/srv/adguard",
+        version: "v0.107.65",
       });
     });
 
@@ -286,6 +347,51 @@ describe("loadSettings", () => {
       expect(() => loadSettings({ PCT_REAPPLY_PLAYBOOKS: "ok.yml,sub/dir.yml" })).toThrow(
         /bare playbook file name/,
       );
+    });
+  });
+
+  // PCT_TRUST_PROXY parses into Fastify's `trustProxy` shape (#235). Default
+  // off so a LAN deployment never trusts X-Forwarded-* from a direct caller.
+  describe("PCT_TRUST_PROXY", () => {
+    it("defaults to false when unset, empty, or whitespace-only", () => {
+      expect(loadSettings({}).trustProxy).toBe(false);
+      expect(loadSettings({ PCT_TRUST_PROXY: "" }).trustProxy).toBe(false);
+      expect(loadSettings({ PCT_TRUST_PROXY: "   " }).trustProxy).toBe(false);
+    });
+
+    it("parses boolean word-forms (case-insensitive)", () => {
+      for (const truthy of ["true", "TRUE", "yes", "On"]) {
+        expect(loadSettings({ PCT_TRUST_PROXY: truthy }).trustProxy).toBe(true);
+      }
+      for (const falsy of ["false", "FALSE", "no", "Off"]) {
+        expect(loadSettings({ PCT_TRUST_PROXY: falsy }).trustProxy).toBe(false);
+      }
+    });
+
+    it("parses a bare integer as a hop count (not a boolean), trimming whitespace", () => {
+      expect(loadSettings({ PCT_TRUST_PROXY: "2" }).trustProxy).toBe(2);
+      expect(loadSettings({ PCT_TRUST_PROXY: "0" }).trustProxy).toBe(0);
+      expect(loadSettings({ PCT_TRUST_PROXY: "  2  " }).trustProxy).toBe(2);
+    });
+
+    // Only bare non-negative integers are hop counts; anything else (e.g. a
+    // negative or mixed token) falls through to the allowlist branch, where
+    // Fastify/proxy-addr is the authority on whether it is a valid subnet. This
+    // pins the contract so the precedence can't silently change.
+    it("treats a non-bare-integer token as a single-entry allowlist", () => {
+      expect(loadSettings({ PCT_TRUST_PROXY: "-1" }).trustProxy).toEqual(["-1"]);
+    });
+
+    it("parses a comma-separated IP/CIDR/keyword allowlist, trimming entries", () => {
+      expect(loadSettings({ PCT_TRUST_PROXY: "127.0.0.1, 10.0.0.0/8" }).trustProxy).toEqual([
+        "127.0.0.1",
+        "10.0.0.0/8",
+      ]);
+      expect(loadSettings({ PCT_TRUST_PROXY: "loopback" }).trustProxy).toEqual(["loopback"]);
+    });
+
+    it("falls back to false for an allowlist that is empty after trimming", () => {
+      expect(loadSettings({ PCT_TRUST_PROXY: ", ," }).trustProxy).toBe(false);
     });
   });
 });

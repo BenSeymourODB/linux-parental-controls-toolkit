@@ -12,15 +12,30 @@ import { describe, expect, it, vi } from "vitest";
 import type { Settings } from "../../../src/config.js";
 import {
   createAdGuardService,
+  type AdGuardManagedState,
   type AdGuardServiceDeps,
   type FetchLike,
+  type ManagedInstanceSource,
   type PreflightLogger,
 } from "../../../src/transport/adguard/index.js";
 
 const URL = "http://adguard.lan";
+const MANAGED_ENDPOINT = "http://127.0.0.1:3000";
 
 function external(overrides: Record<string, unknown> = {}): Settings["adguard"] {
   return { mode: "external", url: URL, apiTokenFile: "/run/secrets/token", ...overrides };
+}
+
+function managed(): Settings["adguard"] {
+  return { mode: "managed", bindAddr: "0.0.0.0:53", adminPort: 3000, dataDir: "/data/adguard" };
+}
+
+/** A managed-instance source fake at a fixed state/endpoint. */
+function managedSource(
+  state: AdGuardManagedState,
+  detail: string | null = null,
+): ManagedInstanceSource {
+  return { status: { state, adminEndpoint: MANAGED_ENDPOINT, detail } };
 }
 
 /** A `fetch` returning a fixed JSON status body for `GET /control/status`. */
@@ -71,19 +86,100 @@ describe("AdGuardService — disabled mode", () => {
   });
 });
 
-describe("AdGuardService — managed mode", () => {
-  it("routes the mode only, deferring the instance to the supervisor (#96)", async () => {
-    const svc = createAdGuardService({ mode: "managed", bindAddr: "0.0.0.0:53", adminPort: 3000 });
+describe("AdGuardService — managed mode (#283)", () => {
+  it("with no supervisor wired: null client, preflight stays unknown", async () => {
+    const svc = createAdGuardService(managed());
     expect(svc.mode).toBe("managed");
-    expect(svc.status).toMatchObject({
-      mode: "managed",
-      configured: false,
-      health: "unknown",
-      baseUrl: null,
-    });
-    expect(svc.status.detail).toContain("#96");
+    expect(svc.status).toMatchObject({ mode: "managed", configured: false, health: "unknown" });
     expect(svc.getClient()).toBeNull();
-    await expect(svc.runPreflight()).resolves.toMatchObject({ health: "unknown" });
+    const status = await svc.runPreflight();
+    expect(status.health).toBe("unknown");
+    expect(status.detail).toContain("not wired");
+  });
+
+  it("getClient returns null while the supervisor is not running", () => {
+    const svc = createAdGuardService(managed(), { managed: managedSource("starting") });
+    expect(svc.getClient()).toBeNull();
+  });
+
+  it("getClient returns a client at the admin endpoint once running, reused across calls", () => {
+    const svc = createAdGuardService(managed(), { managed: managedSource("running") });
+    const client = svc.getClient();
+    expect(client).not.toBeNull();
+    expect(client?.baseUrl).toBe(MANAGED_ENDPOINT);
+    expect(svc.getClient()).toBe(client);
+  });
+
+  it("running + reachable + running probe → ok against the local endpoint", async () => {
+    const fetch = vi.fn(statusFetch(RUNNING));
+    const svc = createAdGuardService(managed(), { fetch, managed: managedSource("running") });
+    const status = await svc.runPreflight();
+    expect(status).toMatchObject({
+      mode: "managed",
+      configured: true,
+      health: "ok",
+      baseUrl: MANAGED_ENDPOINT,
+      detail: null,
+    });
+    expect(typeof status.checkedAt).toBe("string");
+    // The probe used the injected fetch against the managed endpoint.
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch.mock.calls[0]?.[0]).toBe(`${MANAGED_ENDPOINT}/control/status`);
+  });
+
+  it("running but the instance reports not running → unhealthy", async () => {
+    const svc = createAdGuardService(managed(), {
+      fetch: statusFetch({ ...RUNNING, running: false }),
+      managed: managedSource("running"),
+    });
+    const status = await svc.runPreflight();
+    expect(status.health).toBe("unhealthy");
+    expect(status.configured).toBe(true);
+    expect(status.detail).toContain("not running");
+  });
+
+  it("running but a thrown fetch → unreachable (still configured)", async () => {
+    const svc = createAdGuardService(managed(), {
+      fetch: () => Promise.reject(new Error("ECONNREFUSED")),
+      managed: managedSource("running"),
+    });
+    const status = await svc.runPreflight();
+    expect(status.health).toBe("unreachable");
+    expect(status.configured).toBe(true);
+  });
+
+  it("running but a malformed status body → error", async () => {
+    const svc = createAdGuardService(managed(), {
+      fetch: statusFetch({ not: "a status" }),
+      managed: managedSource("running"),
+    });
+    const status = await svc.runPreflight();
+    expect(status.health).toBe("error");
+  });
+
+  it.each([
+    ["idle", "unknown"],
+    ["fetching", "unknown"],
+    ["starting", "unknown"],
+    ["stopped", "unreachable"],
+    ["failed", "error"],
+  ] as const)("non-running state %s maps to health %s without a probe", async (state, health) => {
+    const fetch = vi.fn(statusFetch(RUNNING));
+    const svc = createAdGuardService(managed(), { fetch, managed: managedSource(state) });
+    const status = await svc.runPreflight();
+    expect(status.health).toBe(health);
+    expect(status.configured).toBe(false);
+    expect(status.baseUrl).toBe(MANAGED_ENDPOINT);
+    expect(fetch).not.toHaveBeenCalled(); // non-running never hits the network
+  });
+
+  it("surfaces the supervisor's own detail for a failed state", async () => {
+    const svc = createAdGuardService(managed(), {
+      managed: managedSource("failed", "exceeded the restart cap (5)"),
+    });
+    const status = await svc.runPreflight();
+    expect(status.health).toBe("error");
+    expect(status.detail).toBe("exceeded the restart cap (5)");
   });
 });
 

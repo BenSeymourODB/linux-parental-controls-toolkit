@@ -23,8 +23,8 @@
  *   nothing left to enforce here.
  *
  * **Unmanage branch** (#253): a `link.deleted` action whose `detail` carries the
- * `linux_username` the route captured before the link cascaded away. The link
- * row is gone, but the dashboard still owes the client one push — it pushes the
+ * `os_username` the route captured before the link cascaded away. The link row
+ * is gone, but the dashboard still owes the client one push — it pushes the
  * fully-{@link unrestrictedPolicyPush unrestricted} config so a now-unlinked
  * account isn't left enforced by whatever limits/allowed-hours were last pushed.
  *
@@ -58,12 +58,12 @@ import { resolvePolicyPush, unrestrictedPolicyPush, type ResolvedPolicyPush } fr
 const LINK_DELETED_REASON = "link.deleted";
 
 /**
- * The `link.deleted` detail the route attaches: the Linux account name captured
+ * The `link.deleted` detail the route attaches: the OS account name captured
  * before the link row cascaded away. Validated here because a queued payload is
  * external-at-rest (`CLAUDE.md` → "Validate all external input"); a row without
  * a usable name skips the unmanage push rather than throwing.
  */
-const unlinkDetailSchema = z.object({ linuxUsername: z.string().min(1) });
+const unlinkDetailSchema = z.object({ osUsername: z.string().min(1) });
 
 /**
  * The slice of {@link import("../timekpr/client.js").TimekprClient} the executor
@@ -184,7 +184,7 @@ export function createPolicyPushExecutor(options: PolicyPushExecutorOptions): Ac
       if (reason !== LINK_DELETED_REASON) return;
       const unlink = unlinkDetailSchema.safeParse(detail);
       if (!unlink.success) return;
-      const timekpr = buildClient({ client, username: unlink.data.linuxUsername, userId, reason });
+      const timekpr = buildClient({ client, username: unlink.data.osUsername, userId, reason });
       await applyResolvedPush(timekpr, unrestrictedPolicyPush(), action.clientId, userId);
       return;
     }
@@ -199,7 +199,7 @@ export function createPolicyPushExecutor(options: PolicyPushExecutorOptions): Ac
 
     const resolved = resolvePolicyPush({ tz, schedules, budgets, now: now() });
 
-    const timekpr = buildClient({ client, username: link.linuxUsername, userId, reason });
+    const timekpr = buildClient({ client, username: link.osUsername, userId, reason });
 
     await applyResolvedPush(timekpr, resolved, action.clientId, userId);
   };

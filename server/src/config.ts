@@ -37,6 +37,47 @@ function splitPlaybookList(value: unknown): unknown {
     .filter((name) => name.length > 0);
 }
 
+/** Boolean word-forms accepted for `PCT_TRUST_PROXY` (case-insensitive). */
+const TRUST_PROXY_TRUE = new Set(["true", "yes", "on"]);
+const TRUST_PROXY_FALSE = new Set(["false", "no", "off"]);
+
+/**
+ * Parse `PCT_TRUST_PROXY` into the shape Fastify's `trustProxy` option takes
+ * (Fastify hands it to `proxy-addr`): a boolean, a hop count, or an
+ * IP/CIDR/keyword allowlist.
+ *
+ * Precedence is deliberate and documented (`docs/reverse-proxy-tls.md`):
+ *
+ * - boolean **words** (`true`/`false`/`yes`/`no`/`on`/`off`, case-insensitive)
+ *   → `true` / `false`;
+ * - a bare non-negative integer → a **hop count** (so `"1"`/`"0"` mean one/zero
+ *   hops, not true/false);
+ * - anything else → a comma-separated **allowlist** (`127.0.0.1,10.0.0.0/8`,
+ *   or a keyword like `loopback`) → `string[]`;
+ * - unset / empty / whitespace-only → `false`, preserving the safe LAN default
+ *   of never trusting `X-Forwarded-*` from an untrusted direct caller.
+ *
+ * An allowlist that is empty after trimming (e.g. `","`) also falls back to
+ * `false`.
+ */
+function parseTrustProxy(value: unknown): boolean | number | string[] {
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  if (trimmed === "") return false;
+
+  const lower = trimmed.toLowerCase();
+  if (TRUST_PROXY_TRUE.has(lower)) return true;
+  if (TRUST_PROXY_FALSE.has(lower)) return false;
+
+  if (/^\d+$/.test(trimmed)) return Number(trimmed);
+
+  const entries = trimmed
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+  return entries.length > 0 ? entries : false;
+}
+
 /**
  * Normalize a `DATABASE_URL` value to a bare filesystem path.
  *
@@ -73,6 +114,18 @@ const adguardSchema = z.discriminatedUnion("mode", [
     mode: z.literal("managed"),
     bindAddr: z.string().min(1).default("0.0.0.0:53"),
     adminPort: z.coerce.number().int().positive().default(3000),
+    /**
+     * Data-volume directory the managed AdGuard Home binary, seed config, and
+     * work dir live under (`PCT_ADGUARD_DATA_DIR`). Defaults to the documented
+     * `/data/adguard` layout (`docs/server-deployment.md` → "Volume layout").
+     */
+    dataDir: z.string().min(1).default("/data/adguard"),
+    /**
+     * Optional pinned AdGuard Home release tag (`PCT_ADGUARD_VERSION`, e.g.
+     * `v0.107.65`). When unset, the managed supervisor fetches the latest stable
+     * release on first run and then leaves the installed binary in place (#96).
+     */
+    version: z.string().min(1).optional(),
   }),
 ]);
 
@@ -118,6 +171,25 @@ const settingsSchema = z
      */
     logPretty: z.stringbool().default(false),
     /**
+     * Fastify's `trustProxy` setting (`PCT_TRUST_PROXY`, #235), default off.
+     *
+     * When the dashboard runs behind a reverse proxy (the recommended non-LAN
+     * topology, `docs/reverse-proxy-tls.md`), every request arrives from the
+     * proxy's address, so the per-IP failed-attempt limiter on admin login and
+     * `POST /api/clients/enrol` collapses into one global bucket. Enabling this
+     * lets Fastify derive `request.ip` from a trusted `X-Forwarded-For` so the
+     * limiter keys on the real client IP again. Default **off** never trusts
+     * `X-Forwarded-*` from an untrusted direct caller (safe LAN behaviour). See
+     * {@link parseTrustProxy} for the accepted forms (boolean / hop count /
+     * IP-CIDR allowlist).
+     */
+    trustProxy: z
+      .preprocess(
+        parseTrustProxy,
+        z.union([z.boolean(), z.number().int().nonnegative(), z.array(z.string().min(1)).min(1)]),
+      )
+      .default(false),
+    /**
      * Signs the admin session cookie (#52) and, later, integration tokens.
      * Optional so dev/CI can build the app without it; auth endpoints and the
      * admin guard return `503 auth_not_configured` until it is set, since a
@@ -143,6 +215,28 @@ const settingsSchema = z
      * `/data/ansible` layout (`docs/server-deployment.md` → "Volume layout").
      */
     ansibleDir: z.string().min(1).default("/data/ansible"),
+    /**
+     * Pinned `ansible-core` version installed into the first-run venv
+     * (`PCT_ANSIBLE_CORE_VERSION`). The boot-time bootstrap (#39) runs
+     * `pip install ansible-core==<version>` and records it in a sentinel under
+     * the venv so an image upgrade that bumps this default reconciles the venv
+     * (`docs/server-deployment.md` → "Upgrade path"). A bare version string so
+     * the install is reproducible; validated here so a typo fails fast.
+     */
+    ansibleCoreVersion: z
+      .string()
+      .regex(/^[0-9][0-9A-Za-z.-]*$/, {
+        message: "must be a bare version like 2.18.1",
+      })
+      .default("2.18.1"),
+    /**
+     * Read-only, in-image source directory the first-run bootstrap (#39) syncs
+     * playbooks from into `<ansibleDir>/playbooks/` (`PCT_ANSIBLE_PLAYBOOK_SRC`).
+     * Defaults to the path the image is expected to ship them at. A missing
+     * source is a logged no-op (the venv still bootstraps), so the dashboard
+     * starts cleanly before the playbooks are packaged into the image.
+     */
+    ansiblePlaybookSourceDir: z.string().min(1).default("/app/ansible/playbooks"),
     /**
      * Path to the dashboard's SSH **public** key (`PCT_SSH_PUBLIC_KEY_PATH`).
      * The client-enrolment response (#77) returns this so the client can
@@ -218,6 +312,32 @@ const settingsSchema = z
       ),
     }),
     /**
+     * Automatic pre-migration policy-store snapshot (#166). Before the
+     * in-process migrator runs on boot (`policy/db.ts`), an existing
+     * `policy.sqlite` with pending migrations is snapshotted via `VACUUM INTO`
+     * so a regretted upgrade is recoverable — the automatic counterpart to the
+     * manual `scripts/pct-data-backup.sh` (#120). A fresh DB (nothing yet to
+     * protect) is skipped regardless.
+     */
+    preMigrationBackup: z.object({
+      /**
+       * Master switch (`PCT_PRE_MIGRATION_BACKUP`). Defaults on; an operator who
+       * snapshots `/data` externally (e.g. dataset snapshots) can disable it.
+       */
+      enabled: z.stringbool().default(true),
+      /**
+       * Where snapshots are written (`PCT_PRE_MIGRATION_BACKUP_DIR`). Optional;
+       * when unset, `createDb` derives `<dirname(DATABASE_URL)>/backups` (i.e.
+       * the documented `/data/backups`).
+       */
+      dir: z.string().min(1).optional(),
+      /**
+       * How many snapshots to retain (`PCT_PRE_MIGRATION_BACKUP_RETAIN`); older
+       * ones are pruned after each new snapshot. Defaults to 5.
+       */
+      retain: z.coerce.number().int().positive().default(5),
+    }),
+    /**
      * Phase-3 client health probe (#198): how the `GET /api/clients/health`
      * list walk bounds its live SSH fan-out. Parsed-and-ready ahead of the
      * prober wiring (#39) — like the `telemetry`/`reapply` blocks above — so the
@@ -291,10 +411,13 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
     defaultTz: env.PCT_DEFAULT_TZ,
     logLevel: env.PCT_LOG_LEVEL,
     logPretty: env.PCT_LOG_PRETTY,
+    trustProxy: env.PCT_TRUST_PROXY,
     secretKey: env.PCT_SECRET_KEY,
     adminUsername: env.PCT_ADMIN_USERNAME,
     adminPassword: env.PCT_ADMIN_PASSWORD,
     ansibleDir: env.PCT_ANSIBLE_DIR,
+    ansibleCoreVersion: env.PCT_ANSIBLE_CORE_VERSION,
+    ansiblePlaybookSourceDir: env.PCT_ANSIBLE_PLAYBOOK_SRC,
     sshPublicKeyPath: env.PCT_SSH_PUBLIC_KEY_PATH,
     sshPrivateKeyPath: env.PCT_SSH_PRIVATE_KEY_PATH,
     telemetry: {
@@ -304,6 +427,11 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
     reapply: {
       cron: env.PCT_REAPPLY_CRON,
       playbooks: env.PCT_REAPPLY_PLAYBOOKS,
+    },
+    preMigrationBackup: {
+      enabled: env.PCT_PRE_MIGRATION_BACKUP,
+      dir: env.PCT_PRE_MIGRATION_BACKUP_DIR,
+      retain: env.PCT_PRE_MIGRATION_BACKUP_RETAIN,
     },
     clientHealth: {
       probeConcurrency: env.PCT_CLIENT_HEALTH_PROBE_CONCURRENCY,
@@ -317,6 +445,8 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
       apiTokenFile: env.PCT_ADGUARD_API_TOKEN_FILE,
       bindAddr: env.PCT_ADGUARD_BIND_ADDR,
       adminPort: env.PCT_ADGUARD_ADMIN_PORT,
+      dataDir: env.PCT_ADGUARD_DATA_DIR,
+      version: env.PCT_ADGUARD_VERSION,
     },
   });
 

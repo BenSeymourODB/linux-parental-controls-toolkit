@@ -1,7 +1,7 @@
 /**
  * Unit tests for the enrolment data access (#77) against a hermetic in-memory
  * policy DB. Covers token insert/lookup, the consume+enrol transaction, and its
- * atomicity (a duplicate Linux UID rolls the whole thing back — no half-created
+ * atomicity (a duplicate OS account reference rolls the whole thing back — no half-created
  * client, no consumed token).
  */
 import { eq } from "drizzle-orm";
@@ -30,12 +30,12 @@ describe("enrolment repository", () => {
     const created = enrolmentRepo.createEnrolmentToken(db, {
       tokenHash: "deadbeef",
       hostname: "mint-01",
-      supervisedUsers: [{ userId, linuxUsername: "alice" }],
+      supervisedUsers: [{ userId, osUsername: "alice" }],
       expiresAt: new Date("2026-12-31T00:00:00Z"),
     });
     expect(created.id).toBeGreaterThan(0);
     expect(created.consumedAt).toBeNull();
-    expect(created.supervisedUsers).toEqual([{ userId, linuxUsername: "alice" }]);
+    expect(created.supervisedUsers).toEqual([{ userId, osUsername: "alice" }]);
 
     const found = enrolmentRepo.findEnrolmentTokenByHash(db, "deadbeef");
     expect(found?.id).toBe(created.id);
@@ -46,7 +46,7 @@ describe("enrolment repository", () => {
     const userId = seedUser();
     const token = enrolmentRepo.createEnrolmentToken(db, {
       tokenHash: "hash-1",
-      supervisedUsers: [{ userId, linuxUsername: "alice" }],
+      supervisedUsers: [{ userId, osUsername: "alice" }],
       expiresAt: new Date("2026-12-31T00:00:00Z"),
     });
 
@@ -54,13 +54,13 @@ describe("enrolment repository", () => {
       hostname: "mint-01",
       sshUser: "pct-agent",
       bearerTokenHash: "bearer-hash",
-      links: [{ userId, linuxUsername: "alice", linuxUid: 1000 }],
+      links: [{ userId, osUsername: "alice", osUserRef: "1000" }],
     });
 
     expect(result.client.hostname).toBe("mint-01");
     expect(result.client.bearerTokenHash).toBe("bearer-hash");
     expect(result.links).toHaveLength(1);
-    expect(result.links[0]).toMatchObject({ userId, linuxUid: 1000 });
+    expect(result.links[0]).toMatchObject({ userId, osUserRef: "1000" });
 
     const reloaded = enrolmentRepo.findEnrolmentTokenByHash(db, "hash-1");
     expect(reloaded?.consumedAt).toBeInstanceOf(Date);
@@ -71,7 +71,7 @@ describe("enrolment repository", () => {
     const userId = seedUser();
     const token = enrolmentRepo.createEnrolmentToken(db, {
       tokenHash: "hash-noversions",
-      supervisedUsers: [{ userId, linuxUsername: "alice" }],
+      supervisedUsers: [{ userId, osUsername: "alice" }],
       expiresAt: new Date("2026-12-31T00:00:00Z"),
     });
 
@@ -79,7 +79,7 @@ describe("enrolment repository", () => {
       hostname: "mint-01",
       sshUser: "pct-agent",
       bearerTokenHash: "bearer-hash",
-      links: [{ userId, linuxUsername: "alice", linuxUid: 1000 }],
+      links: [{ userId, osUsername: "alice", osUserRef: "1000" }],
     });
 
     expect(result.client.agentVersion).toBeNull();
@@ -91,7 +91,7 @@ describe("enrolment repository", () => {
     const userId = seedUser();
     const token = enrolmentRepo.createEnrolmentToken(db, {
       tokenHash: "hash-versions",
-      supervisedUsers: [{ userId, linuxUsername: "alice" }],
+      supervisedUsers: [{ userId, osUsername: "alice" }],
       expiresAt: new Date("2026-12-31T00:00:00Z"),
     });
     const reportedAt = new Date("2026-06-19T12:00:00.000Z");
@@ -100,7 +100,7 @@ describe("enrolment repository", () => {
       hostname: "mint-01",
       sshUser: "pct-agent",
       bearerTokenHash: "bearer-hash",
-      links: [{ userId, linuxUsername: "alice", linuxUid: 1000 }],
+      links: [{ userId, osUsername: "alice", osUserRef: "1000" }],
       agentVersion: "1.4.0",
       componentVersions: { timekpr: "0.5.3", e2guardian: "5.5.8~git", activitywatch: "0.13.2" },
       versionsReportedAt: reportedAt,
@@ -123,10 +123,10 @@ describe("enrolment repository", () => {
     const userId = seedUser();
     const token = enrolmentRepo.createEnrolmentToken(db, {
       tokenHash: "hash-guard",
-      supervisedUsers: [{ userId, linuxUsername: "alice" }],
+      supervisedUsers: [{ userId, osUsername: "alice" }],
       expiresAt: new Date("2026-12-31T00:00:00Z"),
     });
-    const links = [{ userId, linuxUsername: "alice", linuxUid: 1000 }];
+    const links = [{ userId, osUsername: "alice", osUserRef: "1000" }];
     enrolmentRepo.consumeTokenAndEnrol(db, token.id, {
       hostname: "mint-01",
       sshUser: "pct-agent",
@@ -152,11 +152,11 @@ describe("enrolment repository", () => {
     const userId = seedUser();
     const token = enrolmentRepo.createEnrolmentToken(db, {
       tokenHash: "hash-2",
-      supervisedUsers: [{ userId, linuxUsername: "alice" }],
+      supervisedUsers: [{ userId, osUsername: "alice" }],
       expiresAt: new Date("2026-12-31T00:00:00Z"),
     });
 
-    // Two links sharing one UID trips the (client, linux_uid) unique index
+    // Two links sharing one ref trips the (client, os_user_ref) unique index
     // mid-transaction; the client insert + token-consume must roll back with it.
     expect(() =>
       enrolmentRepo.consumeTokenAndEnrol(db, token.id, {
@@ -164,8 +164,8 @@ describe("enrolment repository", () => {
         sshUser: "pct-agent",
         bearerTokenHash: "bearer-hash",
         links: [
-          { userId, linuxUsername: "alice", linuxUid: 1000 },
-          { userId, linuxUsername: "alice2", linuxUid: 1000 },
+          { userId, osUsername: "alice", osUserRef: "1000" },
+          { userId, osUsername: "alice2", osUserRef: "1000" },
         ],
       }),
     ).toThrow();

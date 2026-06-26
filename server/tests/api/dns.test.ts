@@ -34,6 +34,7 @@ function sessionCookie(res: { headers: Record<string, unknown> }): string {
 }
 
 const URL = "http://adguard.lan";
+const MANAGED_ENDPOINT = "http://127.0.0.1:3000";
 
 function external(): Settings["adguard"] {
   return { mode: "external", url: URL, apiTokenFile: "/run/secrets/token" };
@@ -134,10 +135,34 @@ describe("GET /api/dns", () => {
     expect(body.detail).toBeTypeOf("string");
   });
 
-  it("surfaces managed mode as unknown, deferring to the supervisor (#96)", async () => {
-    const built = await harnessWith(
-      createAdGuardService({ mode: "managed", bindAddr: "0.0.0.0:53", adminPort: 3000 }),
+  it("surfaces a running managed instance as ok after the startup preflight (#283)", async () => {
+    const adguard = createAdGuardService(
+      { mode: "managed", bindAddr: "0.0.0.0:53", adminPort: 3000, dataDir: "/data/adguard" },
+      {
+        fetch: statusFetch(true),
+        managed: { status: { state: "running", adminEndpoint: MANAGED_ENDPOINT, detail: null } },
+      },
     );
+    const built = await harnessWith(adguard);
+    harness = built.harness;
+    const res = await harness.app.inject({
+      method: "GET",
+      url: "/api/dns",
+      headers: { cookie: built.cookie },
+    });
+    const body = res.json();
+    expect(body.mode).toBe("managed");
+    expect(body.configured).toBe(true);
+    expect(body.health).toBe("ok");
+    expect(body.baseUrl).toBe(MANAGED_ENDPOINT);
+  });
+
+  it("surfaces a not-yet-running managed instance as unknown (#283)", async () => {
+    const adguard = createAdGuardService(
+      { mode: "managed", bindAddr: "0.0.0.0:53", adminPort: 3000, dataDir: "/data/adguard" },
+      { managed: { status: { state: "fetching", adminEndpoint: MANAGED_ENDPOINT, detail: null } } },
+    );
+    const built = await harnessWith(adguard);
     harness = built.harness;
     const res = await harness.app.inject({
       method: "GET",
@@ -147,6 +172,5 @@ describe("GET /api/dns", () => {
     const body = res.json();
     expect(body.mode).toBe("managed");
     expect(body.health).toBe("unknown");
-    expect(body.detail).toContain("#96");
   });
 });

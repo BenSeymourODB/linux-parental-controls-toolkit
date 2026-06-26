@@ -22,14 +22,18 @@
   import LoginForm from "$lib/components/LoginForm.svelte";
   import DashboardView from "$lib/views/DashboardView.svelte";
   import UsersView from "$lib/views/UsersView.svelte";
+  import UserGroupsView from "$lib/views/UserGroupsView.svelte";
   import ClientsView from "$lib/views/ClientsView.svelte";
   import ClientHealthView from "$lib/views/ClientHealthView.svelte";
   import ActivitiesView from "$lib/views/ActivitiesView.svelte";
   import ActivityGroupsView from "$lib/views/ActivityGroupsView.svelte";
   import BudgetsView from "$lib/views/BudgetsView.svelte";
   import SchedulesView from "$lib/views/SchedulesView.svelte";
+  import GroupSchedulesView from "$lib/views/GroupSchedulesView.svelte";
   import ExceptionsView from "$lib/views/ExceptionsView.svelte";
+  import NotificationsView from "$lib/views/NotificationsView.svelte";
   import LinksView from "$lib/views/LinksView.svelte";
+  import IntegrationTokensView from "$lib/views/IntegrationTokensView.svelte";
   import AuditLogView from "$lib/views/AuditLogView.svelte";
 
   // `null` while the initial session probe is in flight.
@@ -42,6 +46,7 @@
   const navItems: NavItem[] = [
     { id: "dashboard", label: "Dashboard" },
     { id: "users", label: "Users" },
+    { id: "user-groups", label: "User Groups" },
     { id: "clients", label: "Clients" },
     { id: "client-health", label: "Client Health" },
     { id: "links", label: "User ↔ Client links" },
@@ -49,7 +54,10 @@
     { id: "activity-groups", label: "Activity Groups" },
     { id: "budgets", label: "Budgets" },
     { id: "schedules", label: "Schedules" },
+    { id: "group-schedules", label: "Group Schedules" },
     { id: "exceptions", label: "Exceptions" },
+    { id: "notifications", label: "Notifications" },
+    { id: "integrations", label: "Integrations" },
     { id: "audit", label: "Audit log" },
   ];
   let activeView = $state<string>("dashboard");
@@ -121,6 +129,8 @@
   >
     {#if activeView === "users"}
       <UsersView />
+    {:else if activeView === "user-groups"}
+      <UserGroupsView />
     {:else if activeView === "clients"}
       <ClientsView />
     {:else if activeView === "client-health"}
@@ -135,8 +145,14 @@
       <BudgetsView />
     {:else if activeView === "schedules"}
       <SchedulesView />
+    {:else if activeView === "group-schedules"}
+      <GroupSchedulesView />
     {:else if activeView === "exceptions"}
       <ExceptionsView />
+    {:else if activeView === "notifications"}
+      <NotificationsView />
+    {:else if activeView === "integrations"}
+      <IntegrationTokensView />
     {:else if activeView === "audit"}
       <AuditLogView />
     {:else}

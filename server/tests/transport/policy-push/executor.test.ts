@@ -73,13 +73,13 @@ function action(clientId: number, userId: number | null): QueuedAction {
 
 /**
  * A `link.deleted` (unmanage) `policy.push` action, mirroring what the DELETE
- * link route enqueues: the captured Linux account name travels in `detail`
+ * link route enqueues: the captured OS account name travels in `detail`
  * because the link row has already cascaded away (#253).
  */
 function unlinkAction(
   clientId: number,
   userId: number,
-  detail: Record<string, unknown> = { linuxUsername: "alice", linuxUid: 1001 },
+  detail: Record<string, unknown> = { osUsername: "alice", osUserRef: "1001" },
 ): QueuedAction {
   return {
     clientId,
@@ -96,7 +96,7 @@ describe("createPolicyPushExecutor", () => {
     db = testDb();
     const userId = createUser(db, { displayName: "Alice", tz: "UTC" }).id;
     const clientId = createClient(db, { hostname: "mint-01", sshUser: "pct-agent" }).id;
-    upsertLink(db, userId, clientId, { linuxUsername: "alice", linuxUid: 1001 });
+    upsertLink(db, userId, clientId, { osUsername: "alice", osUserRef: "1001" });
     return { userId, clientId };
   }
 
@@ -187,7 +187,7 @@ describe("createPolicyPushExecutor", () => {
     db = testDb();
     const userId = createUser(db, { displayName: "Bob", tz: null }).id;
     const clientId = createClient(db, { hostname: "mint-02", sshUser: "pct-agent" }).id;
-    upsertLink(db, userId, clientId, { linuxUsername: "bob", linuxUid: 1002 });
+    upsertLink(db, userId, clientId, { osUsername: "bob", osUserRef: "1002" });
     createSchedule(db, {
       userId,
       targetKind: "overall",
@@ -304,7 +304,7 @@ describe("createPolicyPushExecutor", () => {
       const executor = createPolicyPushExecutor({ db, defaultTz: "UTC", buildClient: build });
 
       await executor(unlinkAction(clientId, userId, {}));
-      await executor(unlinkAction(clientId, userId, { linuxUsername: "" }));
+      await executor(unlinkAction(clientId, userId, { osUsername: "" }));
       expect(build).not.toHaveBeenCalled();
     });
 
@@ -318,7 +318,7 @@ describe("createPolicyPushExecutor", () => {
         clientId,
         coalesceKey: `user:${userId}`,
         kind: "policy.push",
-        payload: { userId, reason: "budget.updated", detail: { linuxUsername: "alice" } },
+        payload: { userId, reason: "budget.updated", detail: { osUsername: "alice" } },
       });
       expect(build).not.toHaveBeenCalled();
     });

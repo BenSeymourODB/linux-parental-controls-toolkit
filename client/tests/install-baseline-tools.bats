@@ -118,6 +118,47 @@ plan() { # run the script in dry-run with the given args, capture the plan
   [[ "$output" == *"systemctl enable --now e2guardian.service"* ]]
 }
 
+@test "tunes Timekpr-nExT warning lead times generously for Alpha-1" {
+  plan --supervised-user alice
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"set TIMEKPR_FINAL_NOTIFICATION_TIME = 300"* ]]
+  [[ "$output" == *"set TIMEKPR_FINAL_WARNING_TIME = 60"* ]]
+}
+
+@test "enables the timekpr client indicator autostart for each supervised user" {
+  plan --supervised-user alice --supervised-user bob
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"enable timekpr client indicator autostart for alice"* ]]
+  [[ "$output" == *"enable timekpr client indicator autostart for bob"* ]]
+  [[ "$output" == *"timekpr-client.desktop"* ]]
+}
+
+@test "client autostart copies the package entry and force-enables it (real write)" {
+  # A package autostart entry that is DISABLED by a stale Hidden=true; the copy
+  # must keep its Exec but flip it back on.
+  local src="${TMP}/timekpr-client.desktop"
+  cat >"$src" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Timekpr-nExT Client
+Exec=timekprc --indicator
+Hidden=true
+X-GNOME-Autostart-enabled=false
+EOF
+  local dest="${TMP}/home/.config/autostart/timekpr-client.desktop"
+  run env -u PCT_DRY_RUN bash -c \
+    '. "$1"; pct_timekpr_write_user_autostart "$2" "$3"' _ "$SCRIPT" "$src" "$dest"
+  [ "$status" -eq 0 ]
+  [ -f "$dest" ]
+  # Exec is preserved from the package entry...
+  grep -qxF 'Exec=timekprc --indicator' "$dest"
+  # ...and the entry is forced enabled (no leftover disabling lines).
+  grep -qxF 'Hidden=false' "$dest"
+  grep -qxF 'X-GNOME-Autostart-enabled=true' "$dest"
+  ! grep -qiE '^[[:space:]]*Hidden[[:space:]]*=[[:space:]]*true' "$dest"
+  ! grep -qiE '^[[:space:]]*X-GNOME-Autostart-enabled[[:space:]]*=[[:space:]]*false' "$dest"
+}
+
 @test "does no iptables work (deferred to Phase 6 Ansible)" {
   plan --supervised-user alice
   # No iptables command should appear anywhere in the executed plan.

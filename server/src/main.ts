@@ -12,6 +12,7 @@
  */
 import { loadSettings } from "./config.js";
 import { ensureServerSshKeyPair } from "./setup/ssh-keys.js";
+import { startAdGuardHealthPoll } from "./transport/adguard/index.js";
 import { buildApp } from "./web/app.js";
 
 const HOST = "0.0.0.0";
@@ -58,6 +59,27 @@ async function main(): Promise<void> {
   } catch (err) {
     app.log.error(err);
     process.exit(1);
+  }
+
+  // Bootstrap the first-run Ansible venv (#39, Phase-6 step) in the background,
+  // after listen so a slow `pip install ansible-core` never delays the dashboard
+  // becoming reachable. `bootstrap()` never throws — a network-less first run
+  // records `unavailable` and the reason is surfaced at GET /api/system/ansible
+  // (docs/server-deployment.md → "First-run setup") — so a bare `void` is safe.
+  void app.ansibleVenv.bootstrap(app.log);
+
+  // Bootstrap the managed AdGuard Home instance (#96, Phase-7 step) in the
+  // background too, for the same reason — a first-run release download must not
+  // delay startup. Present only when PCT_ADGUARD_MODE=managed; `bootstrap()`
+  // never throws (a failed fetch records `failed`, surfaced at
+  // GET /api/system/adguard-managed), so a bare `void` is safe. It is stopped
+  // on shutdown by the onClose hook in buildApp.
+  if (app.adguardManaged !== null) {
+    void app.adguardManaged.bootstrap(app.log);
+    // Poll the supervised instance's health on a cadence (#283) so a crash/
+    // restart surfaces at GET /api/dns. Wired here (not in buildApp) so building
+    // the app starts no timer; buildApp's onClose hook stops it on shutdown.
+    app.adguardHealthPoll = startAdGuardHealthPoll({ service: app.adguard, log: app.log });
   }
 }
 

@@ -20,7 +20,15 @@
 import { and, eq } from "drizzle-orm";
 
 import type { PolicyDb } from "./db.js";
-import type { ActivityKind, BudgetWindow, MatchType, ScheduleAction, Scope } from "./enums.js";
+import type {
+  ActivityKind,
+  BudgetWindow,
+  MatchType,
+  ScheduleAction,
+  Scope,
+  SoundProfile,
+} from "./enums.js";
+import { reorder } from "./schedule-precedence.js";
 import {
   activities,
   activitiesToGroups,
@@ -30,6 +38,7 @@ import {
   exceptions,
   groupExceptions,
   groupSchedules,
+  notificationPolicies,
   schedules,
   userGroupMemberships,
   userGroups,
@@ -71,8 +80,9 @@ export interface ClientUpdate {
 
 /** The link's own attributes (the user/client pair comes from the route). */
 export interface LinkUpsert {
-  linuxUsername: string;
-  linuxUid: number;
+  osUsername: string;
+  /** OS account reference: a uid on Linux, a SID on Windows (#230). */
+  osUserRef: string;
 }
 
 // --- Users -----------------------------------------------------------------
@@ -199,12 +209,23 @@ export function listUserLinks(db: PolicyDb, userId: number): UserOnClientRow[] {
     .all();
 }
 
+/** All links for a client, ascending by user id (inverse of {@link listUserLinks}). */
+export function listClientLinks(db: PolicyDb, clientId: number): UserOnClientRow[] {
+  return db
+    .select()
+    .from(usersOnClients)
+    .where(eq(usersOnClients.clientId, clientId))
+    .orderBy(usersOnClients.userId)
+    .all();
+}
+
 /**
  * Create or replace the link between `userId` and `clientId` (idempotent on the
- * composite key). Throws on the `(client, linux_uid)` uniqueness collision —
- * i.e. another user already mapped to that UID on the same client (see
- * {@link isUniqueViolation}). The caller is responsible for confirming the user
- * and client exist first (FK violations otherwise surface as opaque errors).
+ * composite key). Throws on the `(client, os_user_ref)` uniqueness collision —
+ * i.e. another user already mapped to that OS account reference on the same
+ * client (see {@link isUniqueViolation}). The caller is responsible for
+ * confirming the user and client exist first (FK violations otherwise surface
+ * as opaque errors).
  */
 export function upsertLink(
   db: PolicyDb,
@@ -214,10 +235,10 @@ export function upsertLink(
 ): UserOnClientRow {
   return db
     .insert(usersOnClients)
-    .values({ userId, clientId, linuxUsername: input.linuxUsername, linuxUid: input.linuxUid })
+    .values({ userId, clientId, osUsername: input.osUsername, osUserRef: input.osUserRef })
     .onConflictDoUpdate({
       target: [usersOnClients.userId, usersOnClients.clientId],
-      set: { linuxUsername: input.linuxUsername, linuxUid: input.linuxUid },
+      set: { osUsername: input.osUsername, osUserRef: input.osUserRef },
     })
     .returning()
     .get();
@@ -241,7 +262,7 @@ export function listUserClientIds(db: PolicyDb, userId: number): number[] {
 /**
  * Delete a link, returning the **removed** row, or `undefined` if there was no
  * such link. Returning the row (rather than a bare boolean) lets the caller read
- * the `linux_username` it carried *before* it cascaded away — the unlink push
+ * the `os_username` it carried *before* it cascaded away — the unlink push
  * (#253) needs that name to "unmanage" the account's `timekpra` config on the
  * client, where there is no longer a link row to resolve it from.
  */
@@ -759,6 +780,30 @@ export function deleteSchedule(db: PolicyDb, id: number): boolean {
   );
 }
 
+/**
+ * Atomically reorder a user's schedules to match `orderedIds`, the persistence
+ * step behind the drag-to-reorder editor (#63). `orderedIds` must be a
+ * permutation of exactly that user's schedule ids; {@link reorder} validates
+ * this and throws {@link import("./schedule-precedence.js").ReorderMismatchError}
+ * before any write, so a stale or garbled request can never partially apply or
+ * drop a rule's position. The dense `0..n-1` ordinals are written in a single
+ * transaction; the rows are then re-read in the new evaluation order.
+ */
+export function reorderUserSchedules(
+  db: PolicyDb,
+  userId: number,
+  orderedIds: readonly number[],
+): ScheduleRow[] {
+  // Validate the permutation and compute dense ordinals up front (may throw).
+  const reordered = reorder(listUserSchedules(db, userId), orderedIds);
+  db.transaction((tx) => {
+    for (const rule of reordered) {
+      tx.update(schedules).set({ ordinal: rule.ordinal }).where(eq(schedules.id, rule.id)).run();
+    }
+  });
+  return listUserSchedules(db, userId);
+}
+
 // --- Exceptions ------------------------------------------------------------
 
 /** A persisted {@link exceptions} row. */
@@ -848,6 +893,79 @@ export function deleteException(db: PolicyDb, id: number): boolean {
   return (
     db.delete(exceptions).where(eq(exceptions.id, id)).returning({ id: exceptions.id }).get() !==
     undefined
+  );
+}
+
+// --- Notification policies (#104) ------------------------------------------
+
+/** A persisted {@link notificationPolicies} row. */
+export type NotificationPolicyRow = typeof notificationPolicies.$inferSelect;
+
+/**
+ * Fields accepted when upserting a {@link notificationPolicies} row. All
+ * optional: an omitted field takes the column default on insert (the
+ * documented `subtle` / `15` / `true`), or is left unchanged on update — the
+ * route layer resolves the full effective policy from the merged row. A
+ * `cadenceOverrides` of `null` clears any override back to the built-in cadence.
+ */
+export interface NotificationPolicyUpsert {
+  enabled?: boolean | undefined;
+  soundProfile?: SoundProfile | undefined;
+  graceSeconds?: number | undefined;
+  cadenceOverrides?: Record<string, unknown> | null | undefined;
+}
+
+/** The persisted notification policy for a user, or `undefined` if unset. */
+export function getNotificationPolicy(
+  db: PolicyDb,
+  userId: number,
+): NotificationPolicyRow | undefined {
+  return db
+    .select()
+    .from(notificationPolicies)
+    .where(eq(notificationPolicies.userId, userId))
+    .get();
+}
+
+/**
+ * Create or replace the user's notification policy (idempotent on the
+ * `user_id` primary key) and return the stored row. The caller confirms the
+ * user exists first (an FK violation otherwise surfaces opaquely). Only the
+ * fields present in `input` are written; on conflict the same fields are
+ * updated, so a partial upsert leaves the rest at their stored (or default)
+ * values. `cadenceOverrides` maps to the `cadence_overrides_json` column.
+ */
+export function upsertNotificationPolicy(
+  db: PolicyDb,
+  userId: number,
+  input: NotificationPolicyUpsert,
+): NotificationPolicyRow {
+  // Build the column set from only the provided fields so omitted keys fall to
+  // the column default (insert) or stay unchanged (the on-conflict update).
+  const set: Partial<typeof notificationPolicies.$inferInsert> = {};
+  if (input.enabled !== undefined) set.enabled = input.enabled;
+  if (input.soundProfile !== undefined) set.soundProfile = input.soundProfile;
+  if (input.graceSeconds !== undefined) set.graceSeconds = input.graceSeconds;
+  if (input.cadenceOverrides !== undefined) set.cadenceOverridesJson = input.cadenceOverrides;
+  return db
+    .insert(notificationPolicies)
+    .values({ userId, ...set })
+    .onConflictDoUpdate({ target: notificationPolicies.userId, set })
+    .returning()
+    .get();
+}
+
+/**
+ * Delete a user's notification policy (reverting them to the documented
+ * defaults). Returns whether a row was removed.
+ */
+export function deleteNotificationPolicy(db: PolicyDb, userId: number): boolean {
+  return (
+    db
+      .delete(notificationPolicies)
+      .where(eq(notificationPolicies.userId, userId))
+      .returning({ userId: notificationPolicies.userId })
+      .get() !== undefined
   );
 }
 
@@ -953,6 +1071,34 @@ export function deleteGroupSchedule(db: PolicyDb, id: number): boolean {
       .returning({ id: groupSchedules.id })
       .get() !== undefined
   );
+}
+
+/**
+ * Atomically reorder a group's schedules to match `orderedIds` — the group
+ * counterpart of {@link reorderUserSchedules} (#270), the persistence step
+ * behind the group drag-to-reorder editor. `orderedIds` must be a permutation
+ * of exactly that group's schedule ids; {@link reorder} validates this and
+ * throws {@link import("./schedule-precedence.js").ReorderMismatchError} before
+ * any write, so a stale or garbled request can never partially apply or drop a
+ * rule's position. The dense `0..n-1` ordinals are written in a single
+ * transaction; the rows are then re-read in the new evaluation order.
+ */
+export function reorderGroupSchedules(
+  db: PolicyDb,
+  groupId: number,
+  orderedIds: readonly number[],
+): GroupScheduleRow[] {
+  // Validate the permutation and compute dense ordinals up front (may throw).
+  const reordered = reorder(listGroupSchedules(db, groupId), orderedIds);
+  db.transaction((tx) => {
+    for (const rule of reordered) {
+      tx.update(groupSchedules)
+        .set({ ordinal: rule.ordinal })
+        .where(eq(groupSchedules.id, rule.id))
+        .run();
+    }
+  });
+  return listGroupSchedules(db, groupId);
 }
 
 // --- Group exceptions (#182) -----------------------------------------------
