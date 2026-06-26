@@ -48,6 +48,9 @@ export type {
   ReorderSchedulesRequest,
   ShadowFindingDto,
   ScheduleOrderView,
+  GroupScheduleResponse,
+  CreateGroupScheduleRequest,
+  GroupScheduleOrderView,
   ExceptionResponse,
   CreateExceptionRequest,
   UpdateExceptionRequest,
@@ -57,6 +60,11 @@ export type {
   NotificationPolicyResponse,
   UpsertNotificationPolicyRequest,
 } from "../../../../src/api/policy/dtos.js";
+export type {
+  PolicyPreviewRequest,
+  PolicyPreviewResponse,
+  PreviewAffectedClient,
+} from "../../../../src/api/policy/preview-dtos.js";
 export type { AuditEntryResponse, AuditListResponse } from "../../../../src/api/audit/dtos.js";
 export type {
   CreateIntegrationTokenRequest,
@@ -92,3 +100,4 @@ export type {
   AuditOutcome,
 } from "../../../../src/policy/enums.js";
 export type { ErrorEnvelope, ErrorDetail } from "../../../../src/api/errors.js";
+export type { AnsibleVenvStatusResponse } from "../../../../src/api/system/dtos.js";
