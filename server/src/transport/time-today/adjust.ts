@@ -27,10 +27,13 @@
  * `timekpra` client that execs over the existing SSH subprocess facade. No GPL
  * code is linked in-process (`CLAUDE.md` → "License boundaries").
  */
+import { localCalendarDate } from "../../policy/budget-window.js";
 import type { PolicyDb } from "../../policy/db.js";
-import { getClient, listUserLinks, type ClientRow } from "../../policy/repository.js";
+import { getClient, getUser, listUserLinks, type ClientRow } from "../../policy/repository.js";
+import { enqueue } from "../queue/repository.js";
 import { isRetriable } from "../queue/types.js";
 import type { TimeLeftOperation } from "../timekpr/commands.js";
+import { formatCalendarDate, queuedActionForOfflineAdjustment } from "./queued.js";
 
 /**
  * The slice of {@link import("../timekpr/client.js").TimekprClient} the service
@@ -74,8 +77,14 @@ export interface TimeTodayAdjustment {
   readonly clientId?: number;
 }
 
-/** Per-client outcome of an adjustment attempt. */
-export type ClientAdjustmentStatus = "applied" | "unreachable" | "failed";
+/**
+ * Per-client outcome of an adjustment attempt. `queued` is reported only when
+ * {@link AdjustTimeTodayOptions} is supplied (the offline-queue variant, #274):
+ * a client unreachable at request time has the adjustment durably queued for
+ * idempotent replay on reconnect, instead of the bare `unreachable` the
+ * online-only #257 path returns.
+ */
+export type ClientAdjustmentStatus = "applied" | "queued" | "unreachable" | "failed";
 
 /** What happened on one client for an adjustment. */
 export interface ClientAdjustmentResult {
@@ -92,6 +101,19 @@ export interface ClientAdjustmentResult {
 /** The outcome of an adjustment across all targeted clients. */
 export interface TimeTodayResult {
   readonly results: ClientAdjustmentResult[];
+}
+
+/**
+ * Enables the offline-queue variant (#274). When supplied, a client that is
+ * unreachable at request time has the adjustment **durably queued** (resolved to
+ * an idempotent absolute target on reconnect) and reported as `queued`; omitted,
+ * the adjustment is online-only (#257) and an unreachable client is `unreachable`.
+ */
+export interface AdjustTimeTodayOptions {
+  /** Server-default timezone for users with no `tz` (for the rollover `targetDate`). */
+  readonly defaultTz: string;
+  /** Clock for the `targetDate`; overridable in tests. Defaults to `new Date()`. */
+  readonly now?: () => Date;
 }
 
 /** Distinguishes "no such link" (a caller error) from a per-client push failure. */
@@ -122,6 +144,7 @@ export async function adjustTimeToday(
   db: PolicyDb,
   buildClient: TimeTodayClientFactory,
   adjustment: TimeTodayAdjustment,
+  options?: AdjustTimeTodayOptions,
 ): Promise<TimeTodayResult> {
   const { userId, operation, seconds, clientId } = adjustment;
 
@@ -155,6 +178,28 @@ export async function adjustTimeToday(
       await timekpr.setTimeLeft(operation, seconds);
       results.push({ clientId: link.clientId, osUsername: link.osUsername, status: "applied" });
     } catch (error) {
+      // A retriable (host-unreachable) failure is the queue's normal path: when
+      // the offline variant is enabled, durably queue an idempotent absolute
+      // adjustment for replay on reconnect rather than dropping the nudge. A
+      // non-retriable failure (the command itself is wrong) is never queued.
+      if (options !== undefined && isRetriable(error)) {
+        const now = options.now ?? ((): Date => new Date());
+        const tz = getUser(db, userId)?.tz ?? options.defaultTz;
+        const targetDate = formatCalendarDate(localCalendarDate(now(), tz));
+        enqueue(
+          db,
+          queuedActionForOfflineAdjustment({
+            clientId: link.clientId,
+            userId,
+            osUsername: link.osUsername,
+            targetDate,
+            operation,
+            seconds,
+          }),
+        );
+        results.push({ clientId: link.clientId, osUsername: link.osUsername, status: "queued" });
+        continue;
+      }
       results.push({
         clientId: link.clientId,
         osUsername: link.osUsername,

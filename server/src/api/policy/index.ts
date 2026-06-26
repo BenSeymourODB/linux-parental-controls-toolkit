@@ -98,6 +98,11 @@ export {
   type ExceptionResponse,
   type CreateExceptionRequest,
   type UpdateExceptionRequest,
+  // Notification policy (#104)
+  notificationPolicyResponseSchema,
+  upsertNotificationPolicySchema,
+  type NotificationPolicyResponse,
+  type UpsertNotificationPolicyRequest,
   // Group-targeted schedules + exceptions (#182). The PATCH bodies reuse the
   // user-keyed `updateScheduleSchema` / `updateExceptionSchema` above.
   createGroupScheduleSchema,
