@@ -259,15 +259,23 @@ export function listUserClientIds(db: PolicyDb, userId: number): number[] {
     .map((row) => row.clientId);
 }
 
-/** Delete a link. Returns whether a row was removed. */
-export function deleteLink(db: PolicyDb, userId: number, clientId: number): boolean {
-  return (
-    db
-      .delete(usersOnClients)
-      .where(and(eq(usersOnClients.userId, userId), eq(usersOnClients.clientId, clientId)))
-      .returning({ userId: usersOnClients.userId })
-      .get() !== undefined
-  );
+/**
+ * Delete a link, returning the **removed** row, or `undefined` if there was no
+ * such link. Returning the row (rather than a bare boolean) lets the caller read
+ * the `os_username` it carried *before* it cascaded away — the unlink push
+ * (#253) needs that name to "unmanage" the account's `timekpra` config on the
+ * client, where there is no longer a link row to resolve it from.
+ */
+export function deleteLink(
+  db: PolicyDb,
+  userId: number,
+  clientId: number,
+): UserOnClientRow | undefined {
+  return db
+    .delete(usersOnClients)
+    .where(and(eq(usersOnClients.userId, userId), eq(usersOnClients.clientId, clientId)))
+    .returning()
+    .get();
 }
 
 // --- User groups -----------------------------------------------------------
@@ -1063,6 +1071,34 @@ export function deleteGroupSchedule(db: PolicyDb, id: number): boolean {
       .returning({ id: groupSchedules.id })
       .get() !== undefined
   );
+}
+
+/**
+ * Atomically reorder a group's schedules to match `orderedIds` — the group
+ * counterpart of {@link reorderUserSchedules} (#270), the persistence step
+ * behind the group drag-to-reorder editor. `orderedIds` must be a permutation
+ * of exactly that group's schedule ids; {@link reorder} validates this and
+ * throws {@link import("./schedule-precedence.js").ReorderMismatchError} before
+ * any write, so a stale or garbled request can never partially apply or drop a
+ * rule's position. The dense `0..n-1` ordinals are written in a single
+ * transaction; the rows are then re-read in the new evaluation order.
+ */
+export function reorderGroupSchedules(
+  db: PolicyDb,
+  groupId: number,
+  orderedIds: readonly number[],
+): GroupScheduleRow[] {
+  // Validate the permutation and compute dense ordinals up front (may throw).
+  const reordered = reorder(listGroupSchedules(db, groupId), orderedIds);
+  db.transaction((tx) => {
+    for (const rule of reordered) {
+      tx.update(groupSchedules)
+        .set({ ordinal: rule.ordinal })
+        .where(eq(groupSchedules.id, rule.id))
+        .run();
+    }
+  });
+  return listGroupSchedules(db, groupId);
 }
 
 // --- Group exceptions (#182) -----------------------------------------------

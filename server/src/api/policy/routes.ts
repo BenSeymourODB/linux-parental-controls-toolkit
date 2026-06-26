@@ -396,11 +396,20 @@ export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushSt
     { ...guard, schema: { params: userClientParamsSchema } },
     async (request, reply) => {
       const { userId, clientId } = request.params;
-      assertRemoved(
-        repo.deleteLink(scope.db, userId, clientId),
-        `No link between user ${userId} and client ${clientId}`,
+      const removed = repo.deleteLink(scope.db, userId, clientId);
+      if (removed === undefined) {
+        throw notFound(`No link between user ${userId} and client ${clientId}`);
+      }
+      // Carry the now-cascaded-away OS account name so the executor can
+      // "unmanage" it on the client (lift stale timekpra limits back to
+      // unrestricted), #253 — the link row is gone, so the name can only come
+      // from here. Mirrors the `link.upserted` detail.
+      pushStub.push(
+        linkPushCommands("link.deleted", userId, clientId, {
+          osUsername: removed.osUsername,
+          osUserRef: removed.osUserRef,
+        }),
       );
-      pushStub.push(linkPushCommands("link.deleted", userId, clientId, {}));
       return reply.code(204).send();
     },
   );
