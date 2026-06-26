@@ -35,9 +35,8 @@ const CAPTIONS = {
   login: "Single-admin login (Argon2id, signed session cookie).",
   "admin-dashboard": "The landing view — a welcome panel today; KPI tiles and burndown rings are still on the roadmap.",
   "admin-users": "Supervised user accounts (display name + effective timezone) that limits attach to.",
-  "admin-clients": "Basic CRUD for the enrolled Linux desktops (hostname + SSH user).",
-  "admin-client-health": "Per-machine reachability and five-component health, plus queued-change state for offline clients.",
-  "admin-client-health-enrol": "Minting an enrolment token produces the `curl … | sudo bash` install one-liner for a fresh Mint box.",
+  "admin-clients": "The enrolled Linux desktops in one view — reachability, five-component health, and queued-change state for offline clients, with inline edit/delete.",
+  "admin-clients-enrol": "Minting an enrolment token produces the `curl … | sudo bash` install one-liner for a fresh Mint box.",
   "admin-user-client-links": "Maps a policy user to an OS account on a client, with a one-off \"Add time today\" lever.",
   "admin-activities": "App/domain matchers (exact/substring/glob/regex) that budgets and schedules target.",
   "admin-activity-groups": "Named bundles of activities so one limit can cover a whole set; expand to manage members.",
@@ -52,8 +51,8 @@ const CAPTIONS = {
 // The handful of shots the root README embeds. Used only to warn if one stops
 // being produced (e.g. a highlighted view was renamed/removed).
 const ROOT_README_HIGHLIGHTS = [
-  "admin-client-health",
-  "admin-client-health-enrol",
+  "admin-clients",
+  "admin-clients-enrol",
   "admin-budgets",
   "admin-integrations",
   "app-pwa",
@@ -167,7 +166,7 @@ async function enhance(slug, page, shot) {
       log("activity-groups enhance skipped:", e.message);
     }
   }
-  if (slug === "admin-client-health") {
+  if (slug === "admin-clients") {
     // Capture the view first, then drive the enrol flow into its own shot.
     try {
       await page.locator("select").first().selectOption({ label: "Chloe" });
@@ -176,7 +175,7 @@ async function enhance(slug, page, shot) {
       await page.waitForTimeout(200);
       await page.getByRole("button", { name: /Generate enrolment token/i }).first().click({ timeout: 5000 });
       await page.waitForTimeout(1000);
-      await shot("admin-client-health-enrol");
+      await shot("admin-clients-enrol");
     } catch (e) {
       log("enrol enhance skipped:", e.message);
     }
