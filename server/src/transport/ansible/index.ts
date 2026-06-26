@@ -37,6 +37,19 @@ export const moduleName = "transport/ansible";
 export * from "./errors.js";
 export { buildInventory, INVENTORY_GROUP, type AnsibleHost } from "./inventory.js";
 
+export {
+  E2GUARDIAN_PLAYBOOK,
+  DEFAULT_PROXY_PORT,
+  e2guardianPlanSchema,
+  e2guardianUserFilterSchema,
+  buildE2guardianPlan,
+  pushE2guardianFiltering,
+  type E2guardianPlan,
+  type E2guardianUserFilter,
+  type BuildE2guardianPlanOptions,
+  type PushE2guardianFilteringOptions,
+} from "./e2guardian.js";
+
 /**
  * Ansible's `TaskQueueManager` encodes the run outcome as an OR-able bit set
  * in the process exit code: `2` = one or more hosts failed, `4` = one or more
