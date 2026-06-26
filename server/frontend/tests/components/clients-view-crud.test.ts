@@ -1,29 +1,41 @@
 /**
- * CRUD smoke test for `ClientsView` (#53 follow-through).
+ * Inventory CRUD smoke test for `ClientsView` (#53 follow-through, merged
+ * surface #305).
  *
- * `ClientsView` repeats the canonical `UsersView` editor pattern verbatim
- * (list → create → inline edit → delete + the shared `role="alert"` surface),
- * just over a two-field record. This test confirms the pattern generalises to
- * the clone editor; the logic-heavy editors (Budgets, Schedules, Exceptions,
- * Activity Groups, Client Health, Audit Log, Links) are covered by their own
- * follow-up issue. Runs against a mocked `$lib/api/clients` — no live backend.
+ * `ClientsView` keeps the canonical inline edit + delete editor (plus the shared
+ * `role="alert"` surface), now over a card-based merged view that joins
+ * inventory with health. Adding a client is done through the enrol-token flow
+ * (covered by `clients-view-health.test.ts`); the manual `POST /api/clients`
+ * create is deliberately off the admin surface (#305), so there is no create
+ * form here. `$app/environment` is mocked so `browser` is true (the view guards
+ * its fetches on it); the `$lib/api/*` wrappers are mocked — no live backend.
  */
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/svelte";
+import { fireEvent, render, screen, waitFor } from "@testing-library/svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { ClientResponse } from "../../src/lib/api/contract.js";
+import type {
+  ClientResponse,
+  ClientHealthResponse,
+  UserResponse,
+} from "../../src/lib/api/contract.js";
+
+vi.mock("$app/environment", () => ({ browser: true }));
 
 const listClients = vi.fn<() => Promise<ClientResponse[]>>();
-const createClient = vi.fn<(input: unknown) => Promise<ClientResponse>>();
 const updateClient = vi.fn<(id: number, input: unknown) => Promise<ClientResponse>>();
 const deleteClient = vi.fn<(id: number) => Promise<void>>();
+const mintEnrolmentToken = vi.fn<(input: unknown) => Promise<unknown>>();
+const listClientHealth = vi.fn<() => Promise<ClientHealthResponse[]>>();
+const listUsers = vi.fn<() => Promise<UserResponse[]>>();
 
 vi.mock("$lib/api/clients", () => ({
   listClients: () => listClients(),
-  createClient: (input: unknown) => createClient(input),
   updateClient: (id: number, input: unknown) => updateClient(id, input),
   deleteClient: (id: number) => deleteClient(id),
+  mintEnrolmentToken: (input: unknown) => mintEnrolmentToken(input),
 }));
+vi.mock("$lib/api/client-health", () => ({ listClientHealth: () => listClientHealth() }));
+vi.mock("$lib/api/users", () => ({ listUsers: () => listUsers() }));
 
 const { default: ClientsView } = await import("../../src/lib/views/ClientsView.svelte");
 
@@ -34,22 +46,26 @@ function client(overrides: Partial<ClientResponse> = {}): ClientResponse {
     sshUser: "pct-agent",
     enrolledAt: "2026-01-01T00:00:00.000Z",
     lastSeen: null,
+    enrolled: true,
+    platform: "linux",
     ...overrides,
   } as ClientResponse;
 }
 
 beforeEach(() => {
   listClients.mockReset();
-  createClient.mockReset();
   updateClient.mockReset();
   deleteClient.mockReset();
+  mintEnrolmentToken.mockReset();
+  listClientHealth.mockReset().mockResolvedValue([]);
+  listUsers.mockReset().mockResolvedValue([]);
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("ClientsView CRUD", () => {
+describe("ClientsView inventory CRUD", () => {
   it("renders the rows returned by the API", async () => {
     listClients.mockResolvedValue([client({ id: 1, hostname: "mint-01" })]);
 
@@ -59,34 +75,24 @@ describe("ClientsView CRUD", () => {
     expect(listClients).toHaveBeenCalledOnce();
   });
 
+  it("flags a manually-created client as not enrolled", async () => {
+    listClients.mockResolvedValue([client({ id: 1, hostname: "mint-manual", enrolled: false })]);
+
+    render(ClientsView);
+
+    await screen.findByText("mint-manual");
+    expect(screen.getByText("manual · not enrolled")).toBeInTheDocument();
+  });
+
   it("shows the empty state when there are no clients", async () => {
     listClients.mockResolvedValue([]);
 
     render(ClientsView);
 
-    expect(await screen.findByText("No clients yet. Add one above.")).toBeInTheDocument();
+    expect(await screen.findByText("No clients yet. Enrol one below.")).toBeInTheDocument();
   });
 
-  it("creates a client and appends the new row", async () => {
-    listClients.mockResolvedValue([]);
-    createClient.mockResolvedValue(client({ id: 7, hostname: "mint-07", sshUser: "pct-agent" }));
-
-    render(ClientsView);
-    await screen.findByText("No clients yet. Add one above.");
-
-    await fireEvent.input(screen.getByLabelText("New client hostname"), {
-      target: { value: "mint-07" },
-    });
-    await fireEvent.input(screen.getByLabelText("New client SSH user"), {
-      target: { value: "pct-agent" },
-    });
-    await fireEvent.click(screen.getByRole("button", { name: "Add client" }));
-
-    expect(await screen.findByText("mint-07")).toBeInTheDocument();
-    expect(createClient).toHaveBeenCalledWith({ hostname: "mint-07", sshUser: "pct-agent" });
-  });
-
-  it("saves an inline edit and replaces the row", async () => {
+  it("saves an inline edit and replaces the card", async () => {
     listClients.mockResolvedValue([client({ id: 1, hostname: "mint-01" })]);
     updateClient.mockResolvedValue(client({ id: 1, hostname: "mint-renamed" }));
 
@@ -103,7 +109,7 @@ describe("ClientsView CRUD", () => {
     expect(updateClient).toHaveBeenCalledWith(1, { hostname: "mint-renamed", sshUser: "pct-agent" });
   });
 
-  it("deletes a client after confirmation and drops the row", async () => {
+  it("deletes a client after confirmation and drops the card", async () => {
     listClients.mockResolvedValue([client({ id: 1, hostname: "mint-01" })]);
     deleteClient.mockResolvedValue(undefined);
     vi.spyOn(window, "confirm").mockReturnValue(true);
@@ -138,27 +144,5 @@ describe("ClientsView CRUD", () => {
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("The server exploded.");
-  });
-
-  it("keeps a create error inline without losing the existing rows", async () => {
-    const { ApiError } = await import("../../src/lib/api/client.js");
-    listClients.mockResolvedValue([client({ id: 1, hostname: "mint-01" })]);
-    createClient.mockRejectedValue(new ApiError(409, "conflict", "That hostname is taken."));
-
-    render(ClientsView);
-    await screen.findByText("mint-01");
-
-    await fireEvent.input(screen.getByLabelText("New client hostname"), {
-      target: { value: "mint-01" },
-    });
-    await fireEvent.input(screen.getByLabelText("New client SSH user"), {
-      target: { value: "pct-agent" },
-    });
-    await fireEvent.click(screen.getByRole("button", { name: "Add client" }));
-
-    const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("That hostname is taken.");
-    const table = screen.getByRole("table");
-    expect(within(table).getByText("mint-01")).toBeInTheDocument();
   });
 });

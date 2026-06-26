@@ -120,6 +120,15 @@ export const clientResponseSchema = z.object({
   enrolledAt: z.string(),
   lastSeen: z.string().nullable(),
   /**
+   * Whether this client has been through the enrolment exchange
+   * (`POST /api/clients/enrol`) — true once it holds a bearer token. A client
+   * created through the admin CRUD escape hatch (`POST /api/clients`) has not,
+   * so it carries no event-stream credential and no supervised-user links until
+   * a real enrolment claims it. Read-only; surfaced so the admin UI can mark a
+   * manual record as not-yet-enrolled.
+   */
+  enrolled: z.boolean(),
+  /**
    * The client's OS family (#229) — `linux` today, `windows` reserved. Read-only
    * and always `linux` until a Windows enforcement client exists (epic #233);
    * surfaced so the admin UI can render a per-client OS badge.
@@ -139,6 +148,7 @@ export function toClientResponse(row: ClientRow): ClientResponse {
     sshUser: row.sshUser,
     enrolledAt: row.enrolledAt.toISOString(),
     lastSeen: row.lastSeen === null ? null : row.lastSeen.toISOString(),
+    enrolled: row.bearerTokenHash !== null,
     platform: row.platform,
   };
 }

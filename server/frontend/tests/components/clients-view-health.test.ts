@@ -1,17 +1,20 @@
 /**
- * Smoke test for `ClientHealthView` — the operational view whose logic lives in
- * the enrol flow and the queue surface (#266): minting an enrolment token gates
- * on `enrolReady` (every supervised-user row complete + usernames distinct),
- * add/remove supervised-user rows, the install one-liner generated from the
- * minted token + the dashboard origin, the clipboard copy, and the collapsible
- * per-client queue. The health list itself is read-only. `$app/environment` is
- * mocked so `browser` is true (the view guards its fetches + clipboard on it),
- * and the three `$lib/api/*` wrappers are mocked — no live backend.
+ * Health-list + enrol-flow smoke test for `ClientsView` (#266, merged into the
+ * single Clients surface in #305). The view joins the client inventory
+ * (`listClients`) with health (`listClientHealth`) keyed by id, so a card only
+ * renders when both an inventory row and — for health detail — a matching health
+ * record are present. Minting an enrolment token gates on `enrolReady` (every
+ * supervised-user row complete + usernames distinct), supports add/remove rows,
+ * generates the install one-liner from the minted token + dashboard origin,
+ * copies it, and the per-client queue is collapsible. `$app/environment` is
+ * mocked so `browser` is true; the `$lib/api/*` wrappers are mocked — no live
+ * backend. The CRUD half is covered by `clients-view-crud.test.ts`.
  */
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/svelte";
+import { fireEvent, render, screen, waitFor } from "@testing-library/svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
+  ClientResponse,
   ClientHealthResponse,
   EnrolmentTokenResponse,
   UserResponse,
@@ -19,17 +22,22 @@ import type {
 
 vi.mock("$app/environment", () => ({ browser: true }));
 
-const listClientHealth = vi.fn<() => Promise<ClientHealthResponse[]>>();
+const listClients = vi.fn<() => Promise<ClientResponse[]>>();
 const mintEnrolmentToken = vi.fn<(input: unknown) => Promise<EnrolmentTokenResponse>>();
+const listClientHealth = vi.fn<() => Promise<ClientHealthResponse[]>>();
 const listUsers = vi.fn<() => Promise<UserResponse[]>>();
 
-vi.mock("$lib/api/client-health", () => ({ listClientHealth: () => listClientHealth() }));
 vi.mock("$lib/api/clients", () => ({
+  listClients: () => listClients(),
+  createClient: vi.fn(),
+  updateClient: vi.fn(),
+  deleteClient: vi.fn(),
   mintEnrolmentToken: (input: unknown) => mintEnrolmentToken(input),
 }));
+vi.mock("$lib/api/client-health", () => ({ listClientHealth: () => listClientHealth() }));
 vi.mock("$lib/api/users", () => ({ listUsers: () => listUsers() }));
 
-const { default: ClientHealthView } = await import("../../src/lib/views/ClientHealthView.svelte");
+const { default: ClientsView } = await import("../../src/lib/views/ClientsView.svelte");
 
 function user(overrides: Partial<UserResponse> = {}): UserResponse {
   return {
@@ -39,6 +47,19 @@ function user(overrides: Partial<UserResponse> = {}): UserResponse {
     createdAt: "2026-01-01T00:00:00.000Z",
     ...overrides,
   } as UserResponse;
+}
+
+function client(overrides: Partial<ClientResponse> = {}): ClientResponse {
+  return {
+    id: 5,
+    hostname: "mint-box",
+    sshUser: "pct-agent",
+    enrolledAt: "2026-06-01T00:00:00.000Z",
+    lastSeen: "2026-06-20T10:00:00.000Z",
+    enrolled: true,
+    platform: "linux",
+    ...overrides,
+  } as ClientResponse;
 }
 
 function health(overrides: Partial<ClientHealthResponse> = {}): ClientHealthResponse {
@@ -56,6 +77,7 @@ function health(overrides: Partial<ClientHealthResponse> = {}): ClientHealthResp
 }
 
 beforeEach(() => {
+  listClients.mockReset().mockResolvedValue([]);
   listClientHealth.mockReset().mockResolvedValue([]);
   mintEnrolmentToken.mockReset();
   listUsers.mockReset().mockResolvedValue([user()]);
@@ -66,11 +88,12 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("ClientHealthView health list + queue", () => {
+describe("ClientsView health list + queue", () => {
   it("renders a client card with reachability and component health", async () => {
+    listClients.mockResolvedValue([client()]);
     listClientHealth.mockResolvedValue([health()]);
 
-    render(ClientHealthView);
+    render(ClientsView);
 
     expect(await screen.findByText("mint-box")).toBeInTheDocument();
     expect(screen.getByText("online")).toBeInTheDocument();
@@ -78,6 +101,7 @@ describe("ClientHealthView health list + queue", () => {
   });
 
   it("expands and collapses the queued-actions detail", async () => {
+    listClients.mockResolvedValue([client()]);
     listClientHealth.mockResolvedValue([
       health({
         queue: {
@@ -99,7 +123,7 @@ describe("ClientHealthView health list + queue", () => {
       }),
     ]);
 
-    render(ClientHealthView);
+    render(ClientsView);
     await screen.findByText("mint-box");
 
     // Queue detail is collapsed until toggled.
@@ -114,21 +138,31 @@ describe("ClientHealthView health list + queue", () => {
     );
   });
 
-  it("shows the empty state when no clients are enrolled", async () => {
-    listClientHealth.mockResolvedValue([]);
+  it("renders inventory even when the health fetch fails (degraded)", async () => {
+    listClients.mockResolvedValue([client()]);
+    listClientHealth.mockRejectedValue(new Error("probe unavailable"));
 
-    render(ClientHealthView);
+    render(ClientsView);
 
-    expect(
-      await screen.findByText("No clients enrolled yet. Enrol one below."),
-    ).toBeInTheDocument();
+    expect(await screen.findByText("mint-box")).toBeInTheDocument();
+    // No probe data → the card still renders, marked unknown / awaiting probe.
+    expect(screen.getByText("unknown")).toBeInTheDocument();
+    expect(screen.getByText("Awaiting first health probe.")).toBeInTheDocument();
+  });
+
+  it("shows the empty state when there are no clients", async () => {
+    listClients.mockResolvedValue([]);
+
+    render(ClientsView);
+
+    expect(await screen.findByText("No clients yet. Enrol one below.")).toBeInTheDocument();
   });
 });
 
-describe("ClientHealthView enrol flow", () => {
+describe("ClientsView enrol flow", () => {
   it("keeps mint disabled until every row is complete", async () => {
-    render(ClientHealthView);
-    await screen.findByRole("heading", { name: "Enrol a new client" });
+    render(ClientsView);
+    await screen.findByRole("heading", { name: "Enrol a client" });
 
     const mint = screen.getByRole("button", { name: "Generate enrolment token" });
     expect(mint).toBeDisabled();
@@ -142,10 +176,13 @@ describe("ClientHealthView enrol flow", () => {
   });
 
   it("blocks mint when two rows share an OS username", async () => {
-    listUsers.mockResolvedValue([user({ id: 1, displayName: "Chloe" }), user({ id: 2, displayName: "Dana" })]);
+    listUsers.mockResolvedValue([
+      user({ id: 1, displayName: "Chloe" }),
+      user({ id: 2, displayName: "Dana" }),
+    ]);
 
-    render(ClientHealthView);
-    await screen.findByRole("heading", { name: "Enrol a new client" });
+    render(ClientsView);
+    await screen.findByRole("heading", { name: "Enrol a client" });
 
     await fireEvent.click(screen.getByRole("button", { name: "+ Add another user" }));
 
@@ -164,8 +201,8 @@ describe("ClientHealthView enrol flow", () => {
   });
 
   it("removes an added supervised-user row", async () => {
-    render(ClientHealthView);
-    await screen.findByRole("heading", { name: "Enrol a new client" });
+    render(ClientsView);
+    await screen.findByRole("heading", { name: "Enrol a client" });
 
     await fireEvent.click(screen.getByRole("button", { name: "+ Add another user" }));
     expect(screen.getAllByLabelText("OS username")).toHaveLength(2);
@@ -182,8 +219,8 @@ describe("ClientHealthView enrol flow", () => {
       expiresAt: "2026-06-23T12:00:00.000Z",
     });
 
-    render(ClientHealthView);
-    await screen.findByRole("heading", { name: "Enrol a new client" });
+    render(ClientsView);
+    await screen.findByRole("heading", { name: "Enrol a client" });
 
     await fireEvent.change(screen.getByLabelText("Supervised user"), { target: { value: "1" } });
     await fireEvent.input(screen.getByLabelText("OS username"), { target: { value: "chloe" } });
@@ -211,8 +248,8 @@ describe("ClientHealthView enrol flow", () => {
       expiresAt: "2026-06-23T12:00:00.000Z",
     });
 
-    render(ClientHealthView);
-    await screen.findByRole("heading", { name: "Enrol a new client" });
+    render(ClientsView);
+    await screen.findByRole("heading", { name: "Enrol a client" });
 
     await fireEvent.change(screen.getByLabelText("Supervised user"), { target: { value: "1" } });
     await fireEvent.input(screen.getByLabelText("OS username"), { target: { value: "chloe" } });
@@ -241,8 +278,8 @@ describe("ClientHealthView enrol flow", () => {
     // `navigator` — a bare `Object.assign` would leak the stub into later tests.
     vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
 
-    render(ClientHealthView);
-    await screen.findByRole("heading", { name: "Enrol a new client" });
+    render(ClientsView);
+    await screen.findByRole("heading", { name: "Enrol a client" });
 
     await fireEvent.change(screen.getByLabelText("Supervised user"), { target: { value: "1" } });
     await fireEvent.input(screen.getByLabelText("OS username"), { target: { value: "chloe" } });
@@ -260,8 +297,8 @@ describe("ClientHealthView enrol flow", () => {
     const { ApiError } = await import("../../src/lib/api/client.js");
     mintEnrolmentToken.mockRejectedValue(new ApiError(409, "conflict", "Token mint failed."));
 
-    render(ClientHealthView);
-    await screen.findByRole("heading", { name: "Enrol a new client" });
+    render(ClientsView);
+    await screen.findByRole("heading", { name: "Enrol a client" });
 
     await fireEvent.change(screen.getByLabelText("Supervised user"), { target: { value: "1" } });
     await fireEvent.input(screen.getByLabelText("OS username"), { target: { value: "chloe" } });
