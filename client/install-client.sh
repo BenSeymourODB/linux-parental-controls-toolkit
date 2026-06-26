@@ -240,13 +240,18 @@ pct_orch_build_component_versions_json() {
 # Build the JSON body for POST /api/clients/enrol from the hostname, ssh user,
 # the detected agent version + componentVersions JSON (either may be empty, in
 # which case the field is omitted), and a flat list of (username uid) pairs,
-# matching the zod DTO (#77/#164):
-# {hostname, sshUser, supervisedUsers:[{linuxUsername, linuxUid:<number>}],
+# matching the zod DTO (#77/#164/#230):
+# {hostname, sshUser, supervisedUsers:[{osUsername, osUserRef:"<string>"}],
 #  agentVersion?, componentVersions?}.
 #
+# `osUserRef` is the OS-neutral account reference (#230): a uid on Linux, a SID
+# on Windows. It is a JSON **string** — on Linux this is the numeric uid in its
+# decimal-string form (e.g. "1001").
+#
 # Built in pure bash (no JSON library): safe here because every interpolated
-# value is a constrained token — a Linux username (validated [<=32], the usual
-# [a-z_][a-z0-9_-]* charset), a hostname (RFC-1035 charset), an integer UID, or
+# value is a constrained token — an OS username (validated [<=32], the usual
+# [a-z_][a-z0-9_-]* charset), a hostname (RFC-1035 charset), the account
+# reference (the numeric uid from `id -u` on Linux), or
 # a version string already reduced to the [A-Za-z0-9._+~:-] charset by
 # pct_orch_version_token — none of which can contain a '"' or '\' to break out
 # of the JSON string. The orchestrator's CLI parsing and the version tokeniser
@@ -257,7 +262,7 @@ pct_orch_build_enrol_body() {
   shift 4
   local users_json="" sep=""
   while [ "$#" -ge 2 ]; do
-    users_json="${users_json}${sep}{\"linuxUsername\":\"$1\",\"linuxUid\":$2}"
+    users_json="${users_json}${sep}{\"osUsername\":\"$1\",\"osUserRef\":\"$2\"}"
     sep=","
     shift 2
   done

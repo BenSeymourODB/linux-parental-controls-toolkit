@@ -61,6 +61,29 @@ dashboard, has a short TTL, and is single-use.
 4. **Configure Timekpr-nExT**
    - Enable the daemon. Initial policy is empty; the server will push
      policy via `timekpra` after enrolment completes.
+   - **Tune the native warning lead times** in `/etc/timekpr/timekpr.conf`
+     (only these keys are edited in place; the rest of the upstream config
+     is preserved): `TIMEKPR_FINAL_NOTIFICATION_TIME = 300` (a single
+     "time's almost up" heads-up five minutes before a cutoff) and
+     `TIMEKPR_FINAL_WARNING_TIME = 60` (a final-minute countdown). Both are
+     overridable via `PCT_TIMEKPR_FINAL_NOTIFICATION_TIME` /
+     `PCT_TIMEKPR_FINAL_WARNING_TIME`.
+   - **Autostart the client indicator** for each supervised user: copy the
+     package's `/etc/xdg/autostart/timekpr-client.desktop` into the user's
+     `~/.config/autostart/` and force it enabled (`Hidden=false`,
+     `X-GNOME-Autostart-enabled=true`), so the tray icon and time-left
+     notifications appear on Cinnamon login even if a stale per-user override
+     had disabled it.
+
+   > **Alpha-1 warning UX.** Timekpr-nExT's *own* client indicator is the
+   > warning mechanism for Alpha-1 — it is the only pre-cutoff warning a
+   > supervised user gets while the richer `pct-client-agent` experience
+   > (escalating time-remaining cadence, grace-period countdown, per-app
+   > force-close toasts and sounds — see
+   > [`client-notifications.md`](client-notifications.md)) is still Phase 8b /
+   > the Alpha-2 gate. That is why the warning lead times above are
+   > deliberately generous and the self-test (step 9) fails the enrol if the
+   > indicator is not set to autostart.
 5. **Configure ActivityWatch**
    - Install `aw-server`, `aw-watcher-window`, `aw-watcher-afk` as
      systemd `--user` units enabled for each supervised user.
@@ -113,7 +136,10 @@ dashboard, has a short TTL, and is single-use.
      round-trip itself needs the dashboard's private key, so it is verified
      server-side); the `pct-agent` sudoers drop-in is scoped to exactly
      `timekpra`; the Timekpr-nExT daemon is active and `timekpra --userinfo
-     <user>` answers for each supervised user; `aw-server` is reachable on
+     <user>` answers for each supervised user; the Timekpr-nExT client
+     indicator is set to autostart for each supervised user (the Alpha-1
+     warning UX — a missing/disabled indicator fails the enrol rather than
+     producing a silent cold cutoff); `aw-server` is reachable on
      `localhost:5600` and returns buckets; e2guardian is active; and the
      dashboard enrolment record (`/etc/pct/pct-client.env`) is present and
      `0600`.

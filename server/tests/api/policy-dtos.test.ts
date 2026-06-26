@@ -48,6 +48,7 @@ describe("policy DTO mappers", () => {
       agentVersion: null,
       componentVersions: null,
       versionsReportedAt: null,
+      platform: "linux",
     };
     expect(toClientResponse(row)).toEqual({
       id: 2,
@@ -55,6 +56,7 @@ describe("policy DTO mappers", () => {
       sshUser: "pct-agent",
       enrolledAt: "2026-06-17T00:00:00.000Z",
       lastSeen: "2026-06-17T08:30:00.000Z",
+      platform: "linux",
     });
   });
 
@@ -69,8 +71,25 @@ describe("policy DTO mappers", () => {
       agentVersion: null,
       componentVersions: null,
       versionsReportedAt: null,
+      platform: "linux",
     };
     expect(toClientResponse(row).lastSeen).toBeNull();
+  });
+
+  it("surfaces the reserved platform discriminator on the wire (#229)", () => {
+    const row: ClientRow = {
+      id: 4,
+      hostname: "win-01",
+      sshUser: "pct-agent",
+      bearerTokenHash: null,
+      enrolledAt: new Date("2026-06-17T00:00:00.000Z"),
+      lastSeen: null,
+      agentVersion: null,
+      componentVersions: null,
+      versionsReportedAt: null,
+      platform: "windows",
+    };
+    expect(toClientResponse(row).platform).toBe("windows");
   });
 
   it("maps a budget row, preserving the polymorphic target", () => {

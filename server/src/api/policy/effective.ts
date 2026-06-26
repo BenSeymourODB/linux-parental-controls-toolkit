@@ -22,6 +22,7 @@ import { z } from "zod";
 import type { Settings } from "../../config.js";
 import { resolveEffectiveTz, localCalendarDate } from "../../policy/budget-window.js";
 import { scheduleActionSchema, scopeSchema } from "../../policy/enums.js";
+import { gatherUserScheduleRules } from "../../policy/group-resolution.js";
 import * as repo from "../../policy/repository.js";
 import {
   effectivePolicy,
@@ -29,8 +30,7 @@ import {
   type EffectivePolicy,
   type GrantInput,
 } from "../../policy/resolve.js";
-import { budgets, grants, schedules } from "../../policy/schema.js";
-import type { ScheduleRule } from "../../policy/schedule-precedence.js";
+import { budgets, grants } from "../../policy/schema.js";
 import { ApiError } from "../errors.js";
 import type { ZodTypeProvider } from "../validation.js";
 
@@ -160,11 +160,9 @@ export function registerEffectiveRoutes(scope: FastifyInstance, settings: Settin
       // Default to "today" in the user's effective zone when no date is given.
       const date = request.query.date ?? localCalendarDate(new Date(), tz);
 
-      const scheduleRules: ScheduleRule[] = scope.db
-        .select()
-        .from(schedules)
-        .where(eq(schedules.userId, userId))
-        .all();
+      // Own rules first (they win), then inherited group rules, merged and
+      // re-sequenced into one precedence-ordered list (#182, ADR 0007).
+      const scheduleRules = gatherUserScheduleRules(scope.db, userId);
       const budgetRows: BudgetInput[] = scope.db
         .select()
         .from(budgets)

@@ -73,6 +73,8 @@ const EXPECTED_TABLES = [
   "enrolment_tokens",
   "exceptions",
   "grants",
+  "group_exceptions",
+  "group_schedules",
   "integration_tokens",
   "notification_policies",
   "schedules",
@@ -139,6 +141,52 @@ describe("policy migrations", () => {
     sqlite.close();
   });
 
+  it("materialises the group-targeted schedule/exception tables (#182)", () => {
+    // ADR 0007: group rules live in their own tables (keyed by user_group_id),
+    // mirroring the user-keyed shape rather than relaxing schedules.user_id.
+    const sqlite = new Database(":memory:");
+    const db = drizzle(sqlite);
+
+    migrate(db, { migrationsFolder });
+
+    // group_schedules mirrors schedules but is keyed by user_group_id, not user_id.
+    const groupScheduleColumns = columnNames(sqlite, "group_schedules");
+    expect(groupScheduleColumns).toEqual(
+      expect.arrayContaining([
+        "user_group_id",
+        "target_kind",
+        "target_id",
+        "recurrence_days",
+        "recurrence_start_minute",
+        "recurrence_end_minute",
+        "effective_from",
+        "effective_to",
+        "action",
+        "ordinal",
+      ]),
+    );
+    expect(groupScheduleColumns).not.toContain("user_id");
+
+    // group_exceptions mirrors exceptions, keyed by user_group_id.
+    const groupExceptionColumns = columnNames(sqlite, "group_exceptions");
+    expect(groupExceptionColumns).toEqual(
+      expect.arrayContaining([
+        "user_group_id",
+        "target_kind",
+        "target_id",
+        "action",
+        "reason",
+        "effective_from",
+        "expires_at",
+        "created_at",
+      ]),
+    );
+    expect(groupExceptionColumns).not.toContain("user_id");
+    expect(groupExceptionColumns).not.toContain("effective_to");
+
+    sqlite.close();
+  });
+
   it("adds activities.match_type defaulting to 'exact' (#178, ADR 0006)", () => {
     // Locks the hand-fixed recreate migration: the new matcher-grammar
     // discriminator must exist and carry the degenerate v1 default so any
@@ -164,6 +212,32 @@ describe("policy migrations", () => {
       match_type: string;
     };
     expect(row.match_type).toBe("exact");
+
+    sqlite.close();
+  });
+
+  it("reserves clients.platform defaulting to 'linux' (#229)", () => {
+    // Locks the hand-fixed recreate migration: the OS-family discriminator must
+    // exist and carry the degenerate `linux` default so any client predating it
+    // (and every current enrolment) keeps platform `linux` with no backfill.
+    const sqlite = new Database(":memory:");
+    const db = drizzle(sqlite);
+
+    migrate(db, { migrationsFolder });
+
+    const column = sqlite
+      .prepare(`SELECT name, "notnull", dflt_value FROM pragma_table_info('clients')`)
+      .all() as { name: string; notnull: number; dflt_value: string | null }[];
+    const platform = column.find((c) => c.name === "platform");
+    expect(platform).toBeDefined();
+    expect(platform?.notnull).toBe(1);
+    expect(platform?.dflt_value).toBe("'linux'");
+
+    // A client inserted without platform lands on the default, so the recreate's
+    // column-copy hand-fix preserved pre-existing rows.
+    sqlite.prepare(`INSERT INTO clients (hostname, ssh_user) VALUES ('box', 'pct-agent')`).run();
+    const row = sqlite.prepare(`SELECT platform FROM clients`).get() as { platform: string };
+    expect(row.platform).toBe("linux");
 
     sqlite.close();
   });

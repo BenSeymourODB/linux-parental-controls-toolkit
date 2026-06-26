@@ -12,7 +12,7 @@ import { join } from "node:path";
 import type { InjectOptions } from "fastify";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { ENROL_RATE_LIMIT_MAX_ATTEMPTS, parseBearer } from "../../src/api/clients/routes.js";
+import { ENROL_RATE_LIMIT_MAX_ATTEMPTS } from "../../src/api/clients/routes.js";
 import { hashToken } from "../../src/auth/secret-token.js";
 import { SESSION_COOKIE } from "../../src/auth/session.js";
 import { loadSettings, type Settings } from "../../src/config.js";
@@ -36,16 +36,6 @@ function sessionCookie(res: { headers: Record<string, unknown> }): string {
   if (match === undefined) throw new Error("no session cookie set");
   return match.split(";")[0] ?? "";
 }
-
-describe("parseBearer", () => {
-  it("extracts a bearer token, and rejects missing/malformed/empty headers", () => {
-    expect(parseBearer("Bearer abc123")).toBe("abc123");
-    expect(parseBearer(undefined)).toBeNull();
-    expect(parseBearer("Basic abc123")).toBeNull();
-    expect(parseBearer("Bearer ")).toBeNull();
-    expect(parseBearer("Bearer    ")).toBeNull();
-  });
-});
 
 describe("client enrolment routes", () => {
   let harness: TestApp;
@@ -84,12 +74,12 @@ describe("client enrolment routes", () => {
     return res.json().id as number;
   }
 
-  /** Mint a token for one user mapped to `linuxUsername`; returns the plaintext token. */
-  async function mintFor(userId: number, linuxUsername = "alice"): Promise<string> {
+  /** Mint a token for one user mapped to `osUsername`; returns the plaintext token. */
+  async function mintFor(userId: number, osUsername = "alice"): Promise<string> {
     const res = await admin({
       method: "POST",
       url: "/api/clients/enrolment-tokens",
-      payload: { supervisedUsers: [{ userId, linuxUsername }] },
+      payload: { supervisedUsers: [{ userId, osUsername }] },
     });
     expect(res.statusCode).toBe(201);
     return res.json().token as string;
@@ -107,7 +97,7 @@ describe("client enrolment routes", () => {
     const res = await harness.app.inject({
       method: "POST",
       url: "/api/clients/enrolment-tokens",
-      payload: { supervisedUsers: [{ userId: 1, linuxUsername: "alice" }] },
+      payload: { supervisedUsers: [{ userId: 1, osUsername: "alice" }] },
     });
     expect(res.statusCode).toBe(401);
     expect(res.json().error.code).toBe("unauthorized");
@@ -117,7 +107,7 @@ describe("client enrolment routes", () => {
     const res = await admin({
       method: "POST",
       url: "/api/clients/enrolment-tokens",
-      payload: { supervisedUsers: [{ userId: 9999, linuxUsername: "ghost" }] },
+      payload: { supervisedUsers: [{ userId: 9999, osUsername: "ghost" }] },
     });
     expect(res.statusCode).toBe(404);
     expect(res.json().error.code).toBe("not_found");
@@ -130,8 +120,8 @@ describe("client enrolment routes", () => {
       url: "/api/clients/enrolment-tokens",
       payload: {
         supervisedUsers: [
-          { userId, linuxUsername: "alice" },
-          { userId, linuxUsername: "alice" },
+          { userId, osUsername: "alice" },
+          { userId, osUsername: "alice" },
         ],
       },
     });
@@ -144,7 +134,7 @@ describe("client enrolment routes", () => {
     const res = await admin({
       method: "POST",
       url: "/api/clients/enrolment-tokens",
-      payload: { supervisedUsers: [{ userId, linuxUsername: "alice" }] },
+      payload: { supervisedUsers: [{ userId, osUsername: "alice" }] },
     });
     expect(res.statusCode).toBe(201);
     const body = res.json();
@@ -165,7 +155,7 @@ describe("client enrolment routes", () => {
     const res = await enrol(null, {
       hostname: "mint-01",
       sshUser: "pct-agent",
-      supervisedUsers: [{ linuxUsername: "alice", linuxUid: 1000 }],
+      supervisedUsers: [{ osUsername: "alice", osUserRef: "1000" }],
     });
     expect(res.statusCode).toBe(401);
     expect(res.json().error.code).toBe("unauthorized");
@@ -175,7 +165,7 @@ describe("client enrolment routes", () => {
     const res = await enrol("not-a-real-token", {
       hostname: "mint-01",
       sshUser: "pct-agent",
-      supervisedUsers: [{ linuxUsername: "alice", linuxUid: 1000 }],
+      supervisedUsers: [{ osUsername: "alice", osUserRef: "1000" }],
     });
     expect(res.statusCode).toBe(401);
     expect(res.json().error.code).toBe("enrolment_token_invalid");
@@ -188,19 +178,21 @@ describe("client enrolment routes", () => {
     const res = await enrol(token, {
       hostname: "mint-01",
       sshUser: "pct-agent",
-      supervisedUsers: [{ linuxUsername: "alice", linuxUid: 1000 }],
+      supervisedUsers: [{ osUsername: "alice", osUserRef: "1000" }],
     });
     expect(res.statusCode).toBe(201);
     const body = res.json();
     expect(typeof body.clientId).toBe("number");
     expect(typeof body.bearerToken).toBe("string");
     expect(body.sshPublicKey).toBeNull(); // no key file configured here
-    expect(body.supervisedUsers).toEqual([{ userId, linuxUsername: "alice", linuxUid: 1000 }]);
+    expect(body.supervisedUsers).toEqual([{ userId, osUsername: "alice", osUserRef: "1000" }]);
+    // Every enrolment is `linux` for now (#229); the request never sets platform.
+    expect(body.platform).toBe("linux");
 
     // The client now shows up in the admin inventory with its link.
     const links = await admin({ method: "GET", url: `/api/users/${userId}/clients` });
     expect(links.json()).toEqual([
-      { userId, clientId: body.clientId, linuxUsername: "alice", linuxUid: 1000 },
+      { userId, clientId: body.clientId, osUsername: "alice", osUserRef: "1000" },
     ]);
   });
 
@@ -211,7 +203,7 @@ describe("client enrolment routes", () => {
     const res = await enrol(token, {
       hostname: "mint-01",
       sshUser: "pct-agent",
-      supervisedUsers: [{ linuxUsername: "alice", linuxUid: 1000 }],
+      supervisedUsers: [{ osUsername: "alice", osUserRef: "1000" }],
       agentVersion: "1.4.0",
       componentVersions: { timekpr: "0.5.3", activitywatch: "0.13.2" },
     });
@@ -235,7 +227,7 @@ describe("client enrolment routes", () => {
     const res = await enrol(token, {
       hostname: "mint-01",
       sshUser: "pct-agent",
-      supervisedUsers: [{ linuxUsername: "alice", linuxUid: 1000 }],
+      supervisedUsers: [{ osUsername: "alice", osUserRef: "1000" }],
     });
     expect(res.statusCode).toBe(201);
     const body = res.json();
@@ -253,7 +245,7 @@ describe("client enrolment routes", () => {
     const res = await enrol(token, {
       hostname: "mint-01",
       sshUser: "pct-agent",
-      supervisedUsers: [{ linuxUsername: "alice", linuxUid: 1000 }],
+      supervisedUsers: [{ osUsername: "alice", osUserRef: "1000" }],
       componentVersions: { timekpr: 'bad" version' },
     });
     expect(res.statusCode).toBe(400);
@@ -266,7 +258,7 @@ describe("client enrolment routes", () => {
     const payload = {
       hostname: "mint-01",
       sshUser: "pct-agent",
-      supervisedUsers: [{ linuxUsername: "alice", linuxUid: 1000 }],
+      supervisedUsers: [{ osUsername: "alice", osUserRef: "1000" }],
     };
     expect((await enrol(token, payload)).statusCode).toBe(201);
 
@@ -282,7 +274,7 @@ describe("client enrolment routes", () => {
     const res = await enrol(token, {
       hostname: "mint-01",
       sshUser: "pct-agent",
-      supervisedUsers: [{ linuxUsername: "bob", linuxUid: 1000 }],
+      supervisedUsers: [{ osUsername: "bob", osUserRef: "1000" }],
     });
     expect(res.statusCode).toBe(400);
     expect(res.json().error.code).toBe("enrolment_user_mismatch");
@@ -294,7 +286,7 @@ describe("client enrolment routes", () => {
     const payload = {
       hostname: "mint-01",
       sshUser: "pct-agent",
-      supervisedUsers: [{ linuxUsername: "alice", linuxUid: 1000 }],
+      supervisedUsers: [{ osUsername: "alice", osUserRef: "1000" }],
     };
     expect((await enrol(t1, payload)).statusCode).toBe(201);
 
@@ -316,7 +308,7 @@ describe("client enrolment routes", () => {
     const res = await enrol(token, {
       hostname: "mint-01",
       sshUser: "pct-agent",
-      supervisedUsers: [{ linuxUsername: "alice", linuxUid: 1000 }],
+      supervisedUsers: [{ osUsername: "alice", osUserRef: "1000" }],
     });
     expect(res.statusCode).toBe(201);
     expect(res.json().sshPublicKey).toBe("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5 dashboard@pct");
@@ -334,7 +326,7 @@ describe("client enrolment routes", () => {
     const res = await enrol(token, {
       hostname: "mint-01",
       sshUser: "pct-agent",
-      supervisedUsers: [{ linuxUsername: "alice", linuxUid: 1000 }],
+      supervisedUsers: [{ osUsername: "alice", osUserRef: "1000" }],
     });
     expect(res.statusCode).toBe(201);
     expect(res.json().sshPublicKey).toBeNull();
@@ -349,7 +341,7 @@ describe("client enrolment routes", () => {
     const res = await enrol(token, {
       hostname: "mint-01",
       sshUser: "pct-agent",
-      supervisedUsers: [{ linuxUsername: "alice", linuxUid: 1000 }],
+      supervisedUsers: [{ osUsername: "alice", osUserRef: "1000" }],
     });
     expect(res.statusCode).toBe(409);
     expect(res.json().error.code).toBe("user_no_longer_exists");
@@ -361,7 +353,7 @@ describe("client enrolment routes", () => {
       method: "POST",
       url: "/api/clients/enrolment-tokens",
       payload: {
-        supervisedUsers: [{ userId, linuxUsername: "alice" }],
+        supervisedUsers: [{ userId, osUsername: "alice" }],
         ttlSeconds: 24 * 60 * 60 + 1,
       },
     });
@@ -375,7 +367,7 @@ describe("client enrolment routes", () => {
     const res = await admin({
       method: "POST",
       url: "/api/clients/enrolment-tokens",
-      payload: { supervisedUsers: [{ userId, linuxUsername: "alice" }] },
+      payload: { supervisedUsers: [{ userId, osUsername: "alice" }] },
     });
     const expiresAt = new Date(res.json().expiresAt as string).getTime();
     // ~1h out (allow a generous window for execution + second-granularity).
@@ -405,8 +397,8 @@ describe("client enrolment routes", () => {
         url: "/api/clients/enrolment-tokens",
         payload: {
           supervisedUsers: [
-            { userId: aliceId, linuxUsername: "alice" },
-            { userId: bobId, linuxUsername: "bob" },
+            { userId: aliceId, osUsername: "alice" },
+            { userId: bobId, osUsername: "bob" },
           ],
         },
       });
@@ -420,14 +412,14 @@ describe("client enrolment routes", () => {
         hostname: "mint-01",
         sshUser: "pct-agent",
         supervisedUsers: [
-          { linuxUsername: "alice", linuxUid: 1000 },
-          { linuxUsername: "bob", linuxUid: 1001 },
+          { osUsername: "alice", osUserRef: "1000" },
+          { osUsername: "bob", osUserRef: "1001" },
         ],
       });
       expect(res.statusCode).toBe(201);
       expect(res.json().supervisedUsers).toEqual([
-        { userId: aliceId, linuxUsername: "alice", linuxUid: 1000 },
-        { userId: bobId, linuxUsername: "bob", linuxUid: 1001 },
+        { userId: aliceId, osUsername: "alice", osUserRef: "1000" },
+        { userId: bobId, osUsername: "bob", osUserRef: "1001" },
       ]);
     });
 
@@ -436,7 +428,7 @@ describe("client enrolment routes", () => {
       const res = await enrol(token, {
         hostname: "mint-01",
         sshUser: "pct-agent",
-        supervisedUsers: [{ linuxUsername: "alice", linuxUid: 1000 }],
+        supervisedUsers: [{ osUsername: "alice", osUserRef: "1000" }],
       });
       expect(res.statusCode).toBe(400);
       expect(res.json().error.code).toBe("enrolment_user_mismatch");
@@ -448,8 +440,8 @@ describe("client enrolment routes", () => {
         hostname: "mint-01",
         sshUser: "pct-agent",
         supervisedUsers: [
-          { linuxUsername: "alice", linuxUid: 1000 },
-          { linuxUsername: "carol", linuxUid: 1002 },
+          { osUsername: "alice", osUserRef: "1000" },
+          { osUsername: "carol", osUserRef: "1002" },
         ],
       });
       expect(res.statusCode).toBe(400);
@@ -469,7 +461,7 @@ describe("client enrolment routes", () => {
     const res = await enrol(token, {
       hostname: "mint-01",
       sshUser: "pct-agent",
-      supervisedUsers: [{ linuxUsername: "alice", linuxUid: 1000 }],
+      supervisedUsers: [{ osUsername: "alice", osUserRef: "1000" }],
     });
     expect(res.statusCode).toBe(401);
     expect(res.json().error.code).toBe("enrolment_token_expired");
@@ -481,7 +473,7 @@ describe("client enrolment routes", () => {
     const validPayload = {
       hostname: "mint-rl",
       sshUser: "pct-agent",
-      supervisedUsers: [{ linuxUsername: "alice", linuxUid: 1000 }],
+      supervisedUsers: [{ osUsername: "alice", osUserRef: "1000" }],
     };
 
     it("429s once the failed-attempt budget is exhausted (missing-bearer failures)", async () => {
@@ -565,7 +557,7 @@ describe("client enrolment routes", () => {
       const mismatch = {
         hostname: "mint-rl",
         sshUser: "pct-agent",
-        supervisedUsers: [{ linuxUsername: "bob", linuxUid: 1000 }],
+        supervisedUsers: [{ osUsername: "bob", osUserRef: "1000" }],
       };
 
       for (let i = 0; i < ENROL_RATE_LIMIT_MAX_ATTEMPTS + 2; i += 1) {

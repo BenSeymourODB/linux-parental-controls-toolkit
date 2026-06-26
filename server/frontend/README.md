@@ -30,11 +30,15 @@ stage (#6) runs this build and copies the output into the runtime image
 landed in Phase 2, #40 — see `server/src/web/frontend.ts`).
 
 The mount root is `PCT_FRONTEND_ROOT` (default `/app/frontend`), so local dev
-can point it at `server/frontend/build`. The slash-free surface URLs
-(`/admin`, `/app`) serve `admin.html` / `app.html`; the trailing-slash forms
-redirect to them so the pages' relative asset paths (`./_app/…`) resolve
-correctly. If the directory is absent the mount is skipped (the surfaces 404)
-rather than failing startup. `/` and `/api/*` stay owned by the backend.
+can point it at `server/frontend/build`. The surface URLs (`/admin`, `/app`)
+serve `admin.html` / `app.html`, and each surface also owns a `…/*` fallback so
+a deep client-side route on a hard refresh (e.g. `/admin/settings`) serves the
+entry page rather than 404ing — letting the client router take over (#59). That
+works because asset references are **root-absolute** (`/_app/…`, via
+`kit.paths.relative = false`), so they resolve at any document depth; the
+trailing-slash form just falls through the same fallback (no redirect). If the
+directory is absent the mount is skipped (the surfaces 404) rather than failing
+startup. `/`, `/healthz`, and `/api/*` stay owned by the backend.
 
 `build/` is git-ignored (by both the repo-root `.gitignore` and the local
 `server/frontend/.gitignore`) — it is a build artefact, produced at
@@ -72,7 +76,44 @@ npm run dev      # vite dev server with HMR (http://localhost:5173)
 npm run build    # svelte-check + vite build → ./build
 npm run preview  # serve the built ./build locally
 npm run check    # svelte-check only (svelte-kit sync + tsc at the boundary)
+npm test         # vitest: api wrappers + component/flow smoke tests
 ```
+
+## Testing
+
+`npm test` runs Vitest across two projects (`vitest.config.ts`), all against a
+**mocked `/api` — never a live backend**:
+
+- **`api`** (`tests/api/**`, `node` environment) — the pure `/api` layer: the
+  typed `fetch` client and the per-entity wrappers. Mocks `globalThis.fetch`
+  and asserts the right method/URL/body crosses the wire.
+- **`components`** (`tests/components/**`, `jsdom` environment) — Svelte
+  component / flow smoke tests rendered with
+  [`@testing-library/svelte`](https://testing-library.com/docs/svelte-testing-library/intro/).
+  The SvelteKit plugin compiles the components and resolves their `$lib` /
+  `$app` imports; the relevant `$lib/api/*` wrapper is `vi.mock`ed so the test
+  drives real component behaviour over canned responses. Current coverage:
+  - `admin-auth-flow.test.ts` — the `/admin` orchestrator
+    (`routes/admin/+page.svelte`): the unauthenticated-probe redirect to the
+    login form, a successful login swapping to the authenticated shell, a
+    failed login surfaced inline, and logout returning to the form.
+  - `users-view-crud.test.ts` — `UsersView` end to end (the canonical editor
+    pattern the other editors repeat): list → create → inline edit → delete,
+    plus the shared inline error surface (`role="alert"`).
+  - `clients-view-crud.test.ts` / `activities-view-crud.test.ts` — the two
+    editors that are straight repeats of the `UsersView` pattern, confirming it
+    generalises (Activities adds the enum `<select>` create flow).
+
+The logic-heavy editors (Budgets, Schedules, Exceptions, Activity Groups,
+Client Health, Audit Log, Links) carry real client-side behaviour beyond the
+CRUD skeleton — duration/bitmask/`datetime-local` conversions, membership
+management, conditional target pickers, pagination — and are covered by their
+own follow-up issue rather than this slice.
+
+Deeper in-browser E2E (Playwright) is intentionally **out of scope** — these
+headless component tests cover the highest-value flows without a heavyweight
+browser harness. CI runs `npm test` in the `SvelteKit build` job alongside
+`npm run check` and `npm run build`.
 
 The frontend has its own toolchain and is intentionally **excluded from the
 backend's ESLint / Prettier / tsc scope** (see `server/eslint.config.js`,
