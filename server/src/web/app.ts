@@ -20,6 +20,7 @@ import { createAnsibleVenvSupervisor, type AnsibleVenvSupervisor } from "../setu
 import {
   createAdGuardManagedSupervisor,
   createAdGuardService,
+  type AdGuardHealthPollHandle,
   type AdGuardManagedSupervisor,
   type AdGuardService,
 } from "../transport/adguard/index.js";
@@ -61,6 +62,14 @@ declare module "fastify" {
      * `stop()`ped on `app.close()`.
      */
     adguardManaged: AdGuardManagedSupervisor | null;
+    /**
+     * The managed-mode AdGuard health poller handle (#283), or `null` until
+     * wired. Like the other schedulers it is **not** started by `buildApp` (so
+     * building the app — including tests — starts no timer); `main.ts` assigns
+     * it after `listen` in `managed` mode. `buildApp` only owns its teardown: an
+     * `onClose` hook stops it if set.
+     */
+    adguardHealthPoll: AdGuardHealthPollHandle | null;
   }
 }
 
@@ -166,34 +175,13 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   const eventHub = new EventHub();
   app.decorate("eventHub", eventHub);
 
-  // Route the configured AdGuard mode (#95) and decorate it so the /api/dns
-  // route reads one snapshot. The external-mode preflight runs once the app is
-  // ready (after listen/inject triggers onReady); disabled/managed are no-ops.
-  const adguard = options.adguard ?? createAdGuardService(settings.adguard);
-  app.decorate("adguard", adguard);
-  app.addHook("onReady", async () => {
-    await adguard.runPreflight(app.log);
-  });
-
-  // The first-run Ansible venv bootstrap supervisor (#39), read by
-  // GET /api/system/ansible. Built (or injected) here so the route has a status
-  // to serialise, but NOT run here: `main.ts` fires `bootstrap()` after `listen`
-  // so a slow `pip install` never delays startup, and constructing the app —
-  // including every test that builds it — spawns no subprocess.
-  const ansibleVenv =
-    options.ansibleVenv ??
-    createAnsibleVenvSupervisor({
-      ansibleDir: settings.ansibleDir,
-      coreVersion: settings.ansibleCoreVersion,
-      playbookSourceDir: settings.ansiblePlaybookSourceDir,
-    });
-  app.decorate("ansibleVenv", ansibleVenv);
-
   // The managed-mode AdGuard Home supervisor (#96), read by
   // GET /api/system/adguard-managed. Built only in `managed` mode (else null);
   // like ansibleVenv it is decorated here but bootstrapped by main.ts after
   // listen, so constructing the app — including tests — spawns no process. An
-  // explicitly-injected value (including null) is honoured as-is.
+  // explicitly-injected value (including null) is honoured as-is. Built before
+  // the AdGuard service so it can be wired in as the service's managed-instance
+  // source (#283).
   const adguardManaged =
     options.adguardManaged !== undefined
       ? options.adguardManaged
@@ -213,6 +201,44 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
       await adguardManaged.stop();
     });
   }
+
+  // Route the configured AdGuard mode (#95) and decorate it so the /api/dns
+  // route reads one snapshot. In `managed` mode the supervisor above is wired in
+  // as the service's running-instance source (#283), so getClient()/runPreflight
+  // target the supervised endpoint. The preflight runs once the app is ready
+  // (after listen/inject triggers onReady); disabled is a no-op.
+  const adguard =
+    options.adguard ??
+    createAdGuardService(
+      settings.adguard,
+      adguardManaged !== null ? { managed: adguardManaged } : {},
+    );
+  app.decorate("adguard", adguard);
+  app.addHook("onReady", async () => {
+    await adguard.runPreflight(app.log);
+  });
+
+  // The managed-mode health poller (#283) is started by main.ts after listen
+  // (not here, so building the app starts no timer); buildApp owns only its
+  // teardown. Initialised null and stopped on close if main.ts wired it.
+  app.decorate("adguardHealthPoll", null);
+  app.addHook("onClose", async () => {
+    app.adguardHealthPoll?.stop();
+  });
+
+  // The first-run Ansible venv bootstrap supervisor (#39), read by
+  // GET /api/system/ansible. Built (or injected) here so the route has a status
+  // to serialise, but NOT run here: `main.ts` fires `bootstrap()` after `listen`
+  // so a slow `pip install` never delays startup, and constructing the app —
+  // including every test that builds it — spawns no subprocess.
+  const ansibleVenv =
+    options.ansibleVenv ??
+    createAnsibleVenvSupervisor({
+      ansibleDir: settings.ansibleDir,
+      coreVersion: settings.ansibleCoreVersion,
+      playbookSourceDir: settings.ansiblePlaybookSourceDir,
+    });
+  app.decorate("ansibleVenv", ansibleVenv);
 
   app.get("/", async (_request, reply) => {
     return reply.type("text/plain").send("hello, no policy yet");
