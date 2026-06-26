@@ -347,6 +347,52 @@ describe("stub transport push on policy change (#54)", () => {
     expect(exc[0]).toMatchObject({ clientId, userId, reason: "exception.created" });
   });
 
+  it("logs a notification.upserted push to each linked client (#104)", async () => {
+    const { userId, clientId } = await linkedUser();
+
+    await auth({
+      method: "PUT",
+      url: `/api/users/${userId}/notification-policy`,
+      payload: {
+        enabled: false,
+        soundProfile: "prominent",
+        graceSeconds: 0,
+        cadenceOverrides: { homework: { suppressSub5: true } },
+      },
+    });
+
+    const pushed = pushLines("notification.upserted");
+    expect(pushed).toHaveLength(1);
+    expect(pushed[0]).toMatchObject({
+      clientId,
+      userId,
+      reason: "notification.upserted",
+      // The full effective policy is carried so the cached client copy isn't
+      // missing the cadence override the user just changed (#100/#103).
+      detail: {
+        enabled: false,
+        soundProfile: "prominent",
+        graceSeconds: 0,
+        cadenceOverrides: { homework: { suppressSub5: true } },
+      },
+    });
+  });
+
+  it("logs a notification.deleted push (clients resolved before the row is gone)", async () => {
+    const { userId, clientId } = await linkedUser();
+    await auth({
+      method: "PUT",
+      url: `/api/users/${userId}/notification-policy`,
+      payload: { enabled: false },
+    });
+
+    await auth({ method: "DELETE", url: `/api/users/${userId}/notification-policy` });
+
+    const pushed = pushLines("notification.deleted");
+    expect(pushed).toHaveLength(1);
+    expect(pushed[0]).toMatchObject({ clientId, userId, reason: "notification.deleted" });
+  });
+
   it("does not push for activity/group definitions (no per-client effect)", async () => {
     await auth({ method: "POST", url: "/api/activities", payload: { kind: "app", matcher: "x" } });
     await auth({ method: "POST", url: "/api/activity-groups", payload: { name: "G" } });

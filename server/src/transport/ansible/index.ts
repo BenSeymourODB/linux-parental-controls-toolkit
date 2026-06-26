@@ -58,7 +58,12 @@ export {
  */
 const UNREACHABLE_BIT = 4;
 
-/** Generous cap so a verbose playbook run is not truncated mid-capture. */
+/**
+ * Cap on captured stdout/stderr (10 MiB). Generous enough that a verbose
+ * playbook run is not truncated mid-capture, while bounding memory so a runaway
+ * run can't exhaust it (`execFile` rejects with
+ * `ERR_CHILD_PROCESS_STDIO_MAXBUFFER` past this — see {@link classifyFailure}).
+ */
 const DEFAULT_MAX_BUFFER = 10 * 1024 * 1024;
 
 /**

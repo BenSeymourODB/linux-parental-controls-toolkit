@@ -29,7 +29,9 @@
   import BudgetsView from "$lib/views/BudgetsView.svelte";
   import SchedulesView from "$lib/views/SchedulesView.svelte";
   import ExceptionsView from "$lib/views/ExceptionsView.svelte";
+  import NotificationsView from "$lib/views/NotificationsView.svelte";
   import LinksView from "$lib/views/LinksView.svelte";
+  import IntegrationTokensView from "$lib/views/IntegrationTokensView.svelte";
   import AuditLogView from "$lib/views/AuditLogView.svelte";
 
   // `null` while the initial session probe is in flight.
@@ -50,6 +52,8 @@
     { id: "budgets", label: "Budgets" },
     { id: "schedules", label: "Schedules" },
     { id: "exceptions", label: "Exceptions" },
+    { id: "notifications", label: "Notifications" },
+    { id: "integrations", label: "Integrations" },
     { id: "audit", label: "Audit log" },
   ];
   let activeView = $state<string>("dashboard");
@@ -137,6 +141,10 @@
       <SchedulesView />
     {:else if activeView === "exceptions"}
       <ExceptionsView />
+    {:else if activeView === "notifications"}
+      <NotificationsView />
+    {:else if activeView === "integrations"}
+      <IntegrationTokensView />
     {:else if activeView === "audit"}
       <AuditLogView />
     {:else}

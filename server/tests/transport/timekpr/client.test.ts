@@ -127,6 +127,19 @@ describe("TimekprClient setters", () => {
     ]);
   });
 
+  it("routes a same-day time-left adjustment through execChecked (#257)", async () => {
+    const client = clientFor();
+    await client.setTimeLeft("+", 1800);
+    expect(transport.checked).toHaveLength(1);
+    expect(transport.checked[0]?.argv).toEqual([
+      ...DEFAULT_TIMEKPRA_BINARY,
+      "--settimeleft",
+      "alice",
+      "+",
+      "1800",
+    ]);
+  });
+
   it("honours a binary override and forwarded exec options", async () => {
     const client = new TimekprClient(transport, TARGET, "alice", {
       binary: ["/usr/bin/timekpra"],

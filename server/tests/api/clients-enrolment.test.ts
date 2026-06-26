@@ -186,6 +186,8 @@ describe("client enrolment routes", () => {
     expect(typeof body.bearerToken).toBe("string");
     expect(body.sshPublicKey).toBeNull(); // no key file configured here
     expect(body.supervisedUsers).toEqual([{ userId, osUsername: "alice", osUserRef: "1000" }]);
+    // Every enrolment is `linux` for now (#229); the request never sets platform.
+    expect(body.platform).toBe("linux");
 
     // The client now shows up in the admin inventory with its link.
     const links = await admin({ method: "GET", url: `/api/users/${userId}/clients` });
