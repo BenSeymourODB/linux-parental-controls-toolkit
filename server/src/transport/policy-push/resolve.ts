@@ -29,10 +29,23 @@ import { localCalendarDate } from "../../policy/budget-window.js";
 import { effectivePolicy, type BudgetInput } from "../../policy/resolve.js";
 import type { ScheduleRule } from "../../policy/schedule-precedence.js";
 import { resolveWeeklyAllowedWindows } from "../../policy/weekly-windows.js";
-import type { WeeklyAllowedWindows } from "../timekpr/allowed-hours.js";
+import type { TimeWindow, WeeklyAllowedWindows } from "../timekpr/allowed-hours.js";
+import type { IsoWeekday } from "../timekpr/commands.js";
 
 /** Number of weekdays in the per-day `--settimelimits` list (Mon..Sun). */
 const DAYS_PER_WEEK = 7;
+/** Minutes in one local day — the end of a whole-day allowed window. */
+const MINUTES_PER_DAY = 1440;
+/** Seconds in one whole day — the maximal daily allowance. */
+const SECONDS_PER_DAY = 86_400;
+/**
+ * Days in the longest month, for the rolling monthly cap. Using 31 (not 30/28)
+ * guarantees the unrestricted monthly limit never *under*-allows in a long
+ * month — the point is to stop limiting, so round up.
+ */
+const DAYS_PER_MONTH_MAX = 31;
+/** Every ISO weekday, ascending — the keys of a full-week allowed grid. */
+const ALL_ISO_WEEKDAYS: readonly IsoWeekday[] = [1, 2, 3, 4, 5, 6, 7];
 
 /** Inputs to {@link resolvePolicyPush}; all rows already loaded for the user. */
 export interface PolicyPushResolveInput {
@@ -101,6 +114,37 @@ export function resolvePolicyPush(input: PolicyPushResolveInput): ResolvedPolicy
     perWeekdaySeconds,
     weeklySeconds: rollingOverallSeconds(budgets, "weekly"),
     monthlySeconds: rollingOverallSeconds(budgets, "monthly"),
+    weekly,
+  };
+}
+
+/**
+ * The fully-**unrestricted** push (#253): the maximal limits and an all-hours,
+ * every-day allowed grid. The executor uses this to *unmanage* a supervised
+ * account on a client when its user↔client link is removed — lifting whatever
+ * `timekpra` limits/allowed-hours the dashboard last pushed back to "no
+ * restriction" so a now-unlinked account isn't left enforced by stale policy.
+ *
+ * Timekpr-nExT always tracks every login user and the admin CLI has no "stop
+ * tracking" verb, so "unrestricted" is expressed as the maximal allowance:
+ * the whole day every day, with the rolling caps set to their per-period
+ * maxima. This is deliberately **not** a session-kill or a zero limit — full
+ * lockout is a Phase-8c concern, the opposite intent.
+ *
+ * Pure, like {@link resolvePolicyPush}: it returns the same {@link ResolvedPolicyPush}
+ * shape so the executor drives it through the identical setter sequence (and so
+ * the all-hours grid is non-empty, the full-lockout allowed-hours skip never
+ * applies here).
+ */
+export function unrestrictedPolicyPush(): ResolvedPolicyPush {
+  const allDay: readonly TimeWindow[] = [{ start: 0, end: MINUTES_PER_DAY }];
+  const weekly: WeeklyAllowedWindows = new Map(
+    ALL_ISO_WEEKDAYS.map((day) => [day, allDay] as const),
+  );
+  return {
+    perWeekdaySeconds: Array.from({ length: DAYS_PER_WEEK }, () => SECONDS_PER_DAY),
+    weeklySeconds: SECONDS_PER_DAY * DAYS_PER_WEEK,
+    monthlySeconds: SECONDS_PER_DAY * DAYS_PER_MONTH_MAX,
     weekly,
   };
 }

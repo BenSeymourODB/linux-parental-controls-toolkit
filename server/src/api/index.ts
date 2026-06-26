@@ -93,6 +93,11 @@ export {
   type ExceptionResponse,
   type CreateExceptionRequest,
   type UpdateExceptionRequest,
+  // Notification policy (#104)
+  notificationPolicyResponseSchema,
+  upsertNotificationPolicySchema,
+  type NotificationPolicyResponse,
+  type UpsertNotificationPolicyRequest,
   // Group-targeted schedules + exceptions (#182)
   createGroupScheduleSchema,
   groupScheduleResponseSchema,
@@ -151,6 +156,19 @@ export {
   type ListAuditQuery,
 } from "./audit/index.js";
 
+// Retention-config DTOs (#136): the admin read/write contract for data-
+// retention windows. Schemas live in `./retention/dtos.ts` next to the routes.
+export {
+  retentionCategoryParamsSchema,
+  setRetentionOverrideSchema,
+  retentionEntryResponseSchema,
+  retentionConfigResponseSchema,
+  type RetentionCategoryParams,
+  type SetRetentionOverrideRequest,
+  type RetentionEntryResponse,
+  type RetentionConfigResponse,
+} from "./retention/index.js";
+
 // Usage-views DTOs (#62): the read-only contract for the admin burndown chart
 // and per-activity timeline. Schemas live in `./usage/dtos.ts` next to the route.
 export {
@@ -186,6 +204,9 @@ export {
   ansibleVenvStateSchema,
   ansibleVenvStatusResponseSchema,
   type AnsibleVenvStatusResponse,
+  adGuardManagedStateSchema,
+  adGuardManagedStatusResponseSchema,
+  type AdGuardManagedStatusResponse,
 } from "./system/index.js";
 
 // Auth DTOs (#52). Re-exported here so the frontend imports the auth contract

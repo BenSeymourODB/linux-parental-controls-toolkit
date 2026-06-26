@@ -34,6 +34,9 @@ export type {
   ActivityGroupResponse,
   CreateActivityGroupRequest,
   UpdateActivityGroupRequest,
+  UserGroupResponse,
+  CreateUserGroupRequest,
+  UpdateUserGroupRequest,
   BudgetResponse,
   CreateBudgetRequest,
   UpdateBudgetRequest,
@@ -42,14 +45,34 @@ export type {
   ScheduleResponse,
   CreateScheduleRequest,
   UpdateScheduleRequest,
+  ReorderSchedulesRequest,
+  ShadowFindingDto,
+  ScheduleOrderView,
+  GroupScheduleResponse,
+  CreateGroupScheduleRequest,
+  GroupScheduleOrderView,
   ExceptionResponse,
   CreateExceptionRequest,
   UpdateExceptionRequest,
   AdjustTimeTodayRequest,
   TimeTodayResponse,
   ClientAdjustmentResultDto,
+  NotificationPolicyResponse,
+  UpsertNotificationPolicyRequest,
 } from "../../../../src/api/policy/dtos.js";
+export type {
+  PolicyPreviewRequest,
+  PolicyPreviewResponse,
+  PreviewAffectedClient,
+} from "../../../../src/api/policy/preview-dtos.js";
 export type { AuditEntryResponse, AuditListResponse } from "../../../../src/api/audit/dtos.js";
+export type {
+  CreateIntegrationTokenRequest,
+  IntegrationTokenCreatedResponse,
+  IntegrationTokenSummaryResponse,
+  IntegrationTokenListResponse,
+} from "../../../../src/api/integrations/dtos.js";
+export type { IntegrationScope } from "../../../../src/integrations/scopes.js";
 export type {
   MintEnrolmentTokenRequest,
   EnrolmentTokenResponse,
@@ -73,6 +96,8 @@ export type {
   Scope,
   BudgetWindow,
   ScheduleAction,
+  SoundProfile,
   AuditOutcome,
 } from "../../../../src/policy/enums.js";
 export type { ErrorEnvelope, ErrorDetail } from "../../../../src/api/errors.js";
+export type { AnsibleVenvStatusResponse } from "../../../../src/api/system/dtos.js";

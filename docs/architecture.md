@@ -256,6 +256,14 @@ overall policy and pushes it over the SSH + `timekpra` transport:
 - recorded in the **audit log** (#85): every issued command, with attribution,
   for the admin Clients/audit views.
 
+Removing a user↔client link is an **unmanage** push (#253): the deleting route
+captures the supervised account's `os_username` before the link cascades
+away and the executor pushes a fully-**unrestricted** `timekpra` config (the
+whole day every day, rolling caps at their maxima) so an unlinked account isn't
+left enforced by whatever limits were last pushed. This is deliberately *not* a
+session-kill or a zero limit — full lockout is a Phase-8c concern, the opposite
+intent — and it rides the same offline queue + audit log as every other push.
+
 The push is **fire-and-forget** from the HTTP handler — a mutation does not block
 on SSH round-trips to (possibly offline) clients; durability for offline clients
 comes from the queue + the periodic drainer. The live transport needs the

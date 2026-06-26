@@ -21,9 +21,11 @@ import { registerMetaRoute } from "./meta.js";
 import {
   registerEffectiveRoutes,
   registerPolicyRoutes,
+  registerScheduleOrderRoutes,
   registerPreviewRoutes,
   registerTimeTodayRoutes,
 } from "./policy/index.js";
+import { registerRetentionRoutes } from "./retention/index.js";
 import { registerSystemRoutes } from "./system/index.js";
 import { registerUsageRoutes } from "./usage/index.js";
 import { installApiConventions } from "./validation.js";
@@ -80,6 +82,10 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (scope, opt
   // Effective-policy preview (#143): GET /users/:userId/effective. Needs
   // `settings` for the server-default timezone of users with no `tz`.
   registerEffectiveRoutes(scope, opts.settings);
+  // Schedule drag-to-reorder editor support (#63): GET/PUT
+  // /users/:userId/schedules/order. Needs `settings` for the server-default
+  // timezone used to resolve which rule is in effect "right now".
+  registerScheduleOrderRoutes(scope, opts.settings);
   // Usage views (#62): admin-only read of per-budget burndown + the
   // per-activity timeline, the data source for the Phase-5 chart components.
   // Needs `settings` for the server-default timezone of users with no `tz`.
@@ -105,6 +111,9 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (scope, opt
   });
   // Transport audit log (#85): admin-only read of every command issued to a client.
   registerAuditRoutes(scope);
+  // Retention config (#136): admin-only read/write of data-retention windows.
+  // Needs `settings` for the global default window.
+  registerRetentionRoutes(scope, opts.settings);
   // DNS status (#95): admin-only read of the active AdGuard mode + health.
   registerDnsRoutes(scope);
   // System status (#39): admin-only read of first-run subsystem health (the

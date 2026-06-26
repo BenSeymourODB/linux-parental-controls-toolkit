@@ -28,6 +28,7 @@ structural GPL license boundary — see `CLAUDE.md` → "License boundaries" and
 playbooks/
   activitywatch.yml          # #91 — deploy/upgrade AW as systemd --user units
   apparmor-profiles.yml      # #92 — per-app hard-deny AppArmor profiles
+  e2guardian-filtering.yml   # #90 — per-UID web filter + iptables OUTPUT redirect
   templates/                 # Jinja templates, resolved relative to the playbook
 molecule/
   default/                   # Molecule scenario (docker driver)
@@ -88,6 +89,35 @@ root (`CLAUDE.md` → "Tamper resistance is deliberately bounded").
 > split for e2guardian). `ansible-lint` (production profile) and YAML/Jinja
 > parse cover it structurally today.
 
+### `e2guardian-filtering.yml` (#90)
+
+Renders one managed e2guardian filter group per supervised user and the
+**paired** iptables OUTPUT redirect that sends each user's `:80`/`:443` traffic
+to that user's e2guardian listen port — the e2guardian half of
+`docs/architecture.md` → "Per-website filter | e2guardian | Ansible-deployed
+config". The filter is inert without the redirect, so the two deploy together.
+Per-user banned-site lists + group config land under `/etc/e2guardian/pct.d/`
+(the namespace the Phase-3 baseline reserved); group 1 stays the permissive
+baseline.
+
+The dashboard's `transport/ansible/e2guardian.ts` builds the plan from policy
+(the always-on `deny` schedules targeting `domain` activities) and passes it
+whole as the `e2guardian` `--extra-vars` object:
+
+| Variable     | Default | Purpose                                                                                              |
+| ------------ | ------- | ---------------------------------------------------------------------------------------------------- |
+| `e2guardian` | _(req)_ | `{proxyPort, redirectPorts[], users[].{osUsername,osUserRef,filterGroup,listenPort,bannedSites[]}}` |
+
+> **Filtering is not yet live end-to-end.** The playbook renders the per-group
+> config + banned-site lists and installs the per-UID iptables redirect, but the
+> e2guardian directive set that actually *selects* a filter group by listen port
+> (the `filtergroups` count + the port→group auth-plugin binding) is **not yet
+> in place** — so redirected traffic is still filtered by the permissive group 1
+> until that lands. Completing that binding and proving live filtering is the
+> Molecule follow-up (#215); this PR `Addresses #90` rather than closing it.
+> `ansible-lint` (production profile) + YAML/Jinja parse cover the rendering
+> structurally today.
+
 ## Tests
 
 - **`ansible-lint`** runs over this directory in CI (`.github/workflows/ci.yml`
@@ -102,4 +132,5 @@ root (`CLAUDE.md` → "Tamper resistance is deliberately bounded").
 
   The scenario stands up a systemd-enabled Debian/Ubuntu container, creates
   supervised test users, applies `activitywatch.yml`, and verifies the bundle,
-  the loopback-only config, and the rendered units.
+  the loopback-only config, and the rendered units. The e2guardian
+  filter/redirect convergence (#215) extends this scenario.
