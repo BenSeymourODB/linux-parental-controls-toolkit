@@ -98,6 +98,8 @@ describe("ClientsView health list + queue", () => {
     expect(await screen.findByText("mint-box")).toBeInTheDocument();
     expect(screen.getByText("online")).toBeInTheDocument();
     expect(screen.getByText("Timekpr-nExT")).toBeInTheDocument(); // friendly label
+    // Health loaded fine → no "unavailable" notice.
+    expect(screen.queryByText(/Health data unavailable/)).not.toBeInTheDocument();
   });
 
   it("expands and collapses the queued-actions detail", async () => {
@@ -148,6 +150,8 @@ describe("ClientsView health list + queue", () => {
     // No probe data → the card still renders, marked unknown / awaiting probe.
     expect(screen.getByText("unknown")).toBeInTheDocument();
     expect(screen.getByText("Awaiting first health probe.")).toBeInTheDocument();
+    // The lost health signal is surfaced non-blockingly (#312 review).
+    expect(screen.getByText(/Health data unavailable/)).toBeInTheDocument();
   });
 
   it("shows the empty state when there are no clients", async () => {

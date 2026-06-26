@@ -49,6 +49,10 @@
   let health = $state<ClientHealthResponse[]>([]);
   let loading = $state(true);
   let error = $state<string | null>(null);
+  // Non-blocking: set when the health fetch fails so the admin can tell
+  // "health service is down" apart from "clients genuinely un-probed". The
+  // inventory still renders regardless.
+  let healthError = $state<string | null>(null);
 
   // Per-client queue-detail expand/collapse, keyed by clientId.
   let expanded = $state<Record<number, boolean>>({});
@@ -98,12 +102,17 @@
     }
     loading = true;
     error = null;
+    healthError = null;
     try {
       // Inventory is required; a health-fetch failure degrades to "unknown"
-      // rather than blanking the whole list.
+      // rather than blanking the whole list, but is surfaced non-blockingly
+      // (below) so the lost signal isn't silently swallowed.
       const [inv, h] = await Promise.all([
         listClients(),
-        listClientHealth().catch(() => [] as ClientHealthResponse[]),
+        listClientHealth().catch((err) => {
+          healthError = messageOf(err);
+          return [] as ClientHealthResponse[];
+        }),
       ]);
       clients = inv;
       health = h;
@@ -151,10 +160,6 @@
         sshUser: editSshUser.trim(),
       });
       clients = clients.map((c) => (c.id === id ? updated : c));
-      // Keep the joined health card's hostname in step with the rename.
-      health = health.map((h) =>
-        h.clientId === id ? { ...h, hostname: updated.hostname } : h,
-      );
       editingId = null;
     } catch (err) {
       error = messageOf(err);
@@ -172,6 +177,9 @@
       await deleteClient(client.id);
       clients = clients.filter((c) => c.id !== client.id);
       health = health.filter((h) => h.clientId !== client.id);
+      // Drop any queue-expand state so it can't go stale / leak for a reused id.
+      const { [client.id]: _removed, ...rest } = expanded;
+      expanded = rest;
     } catch (err) {
       error = messageOf(err);
     }
@@ -313,6 +321,13 @@
     <p class="error" role="alert">{error}</p>
   {/if}
 
+  {#if healthError !== null}
+    <p class="notice" role="status">
+      Health data unavailable — showing inventory only. Reachability and
+      component status will read "unknown" until it's reachable again.
+    </p>
+  {/if}
+
   <div class="toolbar">
     <button class="ghost" onclick={() => load()} disabled={loading}>
       {loading ? "Refreshing…" : "Refresh"}
@@ -347,7 +362,10 @@
                   {/if}
                 </div>
               {/if}
-              <div class="muted small">enrolled {formatDateTime(client.enrolledAt)}</div>
+              <div class="muted small">
+                {client.enrolled ? "enrolled" : "added"}
+                {formatDateTime(client.enrolledAt)}
+              </div>
             </div>
             <span class="pill {reachabilityClass(h?.reachability ?? 'unknown')}">
               {h?.reachability ?? "unknown"}
@@ -789,6 +807,14 @@
     border-radius: 0.4rem;
     background: #fef2f2;
     color: #b91c1c;
+    font-size: 0.85rem;
+  }
+  .notice {
+    margin: 0 0 1rem;
+    padding: 0.5rem 0.6rem;
+    border-radius: 0.4rem;
+    background: #fffbeb;
+    color: #92400e;
     font-size: 0.85rem;
   }
 </style>

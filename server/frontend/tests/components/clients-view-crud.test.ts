@@ -73,15 +73,20 @@ describe("ClientsView inventory CRUD", () => {
 
     expect(await screen.findByText("mint-01")).toBeInTheDocument();
     expect(listClients).toHaveBeenCalledOnce();
+    // An enrolled client labels its date line "enrolled …".
+    expect(screen.getByText(/^enrolled\b/)).toBeInTheDocument();
   });
 
-  it("flags a manually-created client as not enrolled", async () => {
+  it("flags a manually-created client as not enrolled and labels its date 'added'", async () => {
     listClients.mockResolvedValue([client({ id: 1, hostname: "mint-manual", enrolled: false })]);
 
     render(ClientsView);
 
     await screen.findByText("mint-manual");
     expect(screen.getByText("manual · not enrolled")).toBeInTheDocument();
+    // The date line reads "added …", not "enrolled …", to match the badge (#312 review).
+    expect(screen.getByText(/^added\b/)).toBeInTheDocument();
+    expect(screen.queryByText(/^enrolled\b/)).not.toBeInTheDocument();
   });
 
   it("shows the empty state when there are no clients", async () => {
