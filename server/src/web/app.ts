@@ -14,7 +14,7 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import { registerApi } from "../api/index.js";
 import { loadSettings, type Settings } from "../config.js";
-import { EventHub } from "../events/index.js";
+import { EventHub, type EventStreamOptions } from "../events/index.js";
 import { createDb, type PolicyDb } from "../policy/db.js";
 import { createAnsibleVenvSupervisor, type AnsibleVenvSupervisor } from "../setup/ansible-venv.js";
 import {
@@ -119,6 +119,12 @@ export interface BuildAppOptions {
    * without SSH. An injected transport is left for its provider to dispose.
    */
   policyPush?: PolicyPushTransport;
+  /**
+   * Tuning/test seam for the `/api/events/stream` handshake (heartbeat
+   * interval, hello timeout, negotiated server protocol). Omitted in
+   * production; tests use it to exercise the N-1 refusal branches.
+   */
+  eventStream?: EventStreamOptions;
 }
 
 /**
@@ -253,7 +259,14 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   // within this prefix, leaving /, /healthz, /admin and /app untouched. Auth
   // (#52) is wired inside this scope and needs the settings (PCT_SECRET_KEY,
   // first-admin bootstrap) threaded through.
-  registerApi(app, settings, eventHub, policyPush.dispatcher, policyPush.adjustTimeToday);
+  registerApi(
+    app,
+    settings,
+    eventHub,
+    policyPush.dispatcher,
+    policyPush.adjustTimeToday,
+    options.eventStream,
+  );
 
   // Serve the prerendered SvelteKit build at /admin and /app (#40). Skipped
   // (with a warning) when the build directory is absent, so /, /healthz, and

@@ -141,6 +141,13 @@ export const clients = sqliteTable(
     componentVersions: text("component_versions", { mode: "json" }).$type<ComponentVersions>(),
     versionsReportedAt: integer("versions_reported_at", { mode: "timestamp" }),
     platform: text("platform", { enum: platformValues }).notNull().default("linux"),
+    /**
+     * Set when the client's event-stream `hello` was refused for being older
+     * than the supported protocol window (ADR 0007 §5, #165); cleared once it
+     * connects compatibly again. A flag + admin signal only — remediation
+     * (pushing an agent update) is the Phase-14 update mechanism.
+     */
+    updateRequired: integer("update_required", { mode: "boolean" }).notNull().default(false),
   },
   (table) => [
     uniqueIndex("clients_hostname_unique").on(table.hostname),

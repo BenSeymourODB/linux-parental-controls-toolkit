@@ -121,6 +121,35 @@ describe("policy repository — clients", () => {
     repo.touchClientLastSeen(db, 999, at);
     expect(repo.listClients(db)).toHaveLength(1);
   });
+
+  it("records the reported agent version + versions_reported_at (#165 heartbeat)", () => {
+    const id = repo.createClient(db, { hostname: "mint-av", sshUser: "pct-agent" }).id;
+    expect(repo.getClient(db, id)?.agentVersion).toBeNull();
+
+    const at = new Date("2026-06-23T09:00:00.000Z");
+    repo.recordClientAgentVersion(db, id, "1.4.2", at);
+    const row = repo.getClient(db, id);
+    expect(row?.agentVersion).toBe("1.4.2");
+    expect(row?.versionsReportedAt).toEqual(at);
+
+    // No throw, no row touched for a missing client.
+    repo.recordClientAgentVersion(db, 999, "9.9.9", at);
+    expect(repo.listClients(db)).toHaveLength(1);
+  });
+
+  it("sets and clears update_required (and is a no-op for a missing client)", () => {
+    const id = repo.createClient(db, { hostname: "mint-ur", sshUser: "pct-agent" }).id;
+    expect(repo.getClient(db, id)?.updateRequired).toBe(false);
+
+    repo.setClientUpdateRequired(db, id, true);
+    expect(repo.getClient(db, id)?.updateRequired).toBe(true);
+
+    repo.setClientUpdateRequired(db, id, false);
+    expect(repo.getClient(db, id)?.updateRequired).toBe(false);
+
+    repo.setClientUpdateRequired(db, 999, true);
+    expect(repo.listClients(db)).toHaveLength(1);
+  });
 });
 
 describe("policy repository — user/client links", () => {

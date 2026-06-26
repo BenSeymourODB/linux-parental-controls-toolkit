@@ -70,6 +70,7 @@ function health(overrides: Partial<ClientHealthResponse> = {}): ClientHealthResp
     lastSeen: "2026-06-20T10:00:00.000Z",
     enrolledAt: "2026-06-01T00:00:00.000Z",
     probedAt: "2026-06-20T10:00:00.000Z",
+    updateRequired: false,
     components: [{ component: "timekpr-next", status: "ok", detail: "active" }],
     queue: { pending: 0, failed: 0, actions: [] },
     ...overrides,

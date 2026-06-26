@@ -49,6 +49,7 @@ describe("policy DTO mappers", () => {
       componentVersions: null,
       versionsReportedAt: null,
       platform: "linux",
+      updateRequired: false,
     };
     expect(toClientResponse(row)).toEqual({
       id: 2,
@@ -73,6 +74,7 @@ describe("policy DTO mappers", () => {
       componentVersions: null,
       versionsReportedAt: null,
       platform: "linux",
+      updateRequired: false,
     };
     expect(toClientResponse(row).enrolled).toBe(false);
   });
@@ -89,6 +91,7 @@ describe("policy DTO mappers", () => {
       componentVersions: null,
       versionsReportedAt: null,
       platform: "linux",
+      updateRequired: false,
     };
     expect(toClientResponse(row).lastSeen).toBeNull();
   });
@@ -105,6 +108,7 @@ describe("policy DTO mappers", () => {
       componentVersions: null,
       versionsReportedAt: null,
       platform: "windows",
+      updateRequired: false,
     };
     expect(toClientResponse(row).platform).toBe("windows");
   });
