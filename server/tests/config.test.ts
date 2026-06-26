@@ -14,6 +14,7 @@ describe("loadSettings", () => {
     expect(settings.databaseUrl).toBe("/data/policy.sqlite");
     expect(settings.defaultTz).toBe("UTC");
     expect(settings.logLevel).toBe("info");
+    expect(settings.trustProxy).toBe(false);
     expect(settings.secretKey).toBeUndefined();
     expect(settings.ansibleDir).toBe("/data/ansible");
     expect(settings.ansibleCoreVersion).toBe("2.18.1");
@@ -346,6 +347,51 @@ describe("loadSettings", () => {
       expect(() => loadSettings({ PCT_REAPPLY_PLAYBOOKS: "ok.yml,sub/dir.yml" })).toThrow(
         /bare playbook file name/,
       );
+    });
+  });
+
+  // PCT_TRUST_PROXY parses into Fastify's `trustProxy` shape (#235). Default
+  // off so a LAN deployment never trusts X-Forwarded-* from a direct caller.
+  describe("PCT_TRUST_PROXY", () => {
+    it("defaults to false when unset, empty, or whitespace-only", () => {
+      expect(loadSettings({}).trustProxy).toBe(false);
+      expect(loadSettings({ PCT_TRUST_PROXY: "" }).trustProxy).toBe(false);
+      expect(loadSettings({ PCT_TRUST_PROXY: "   " }).trustProxy).toBe(false);
+    });
+
+    it("parses boolean word-forms (case-insensitive)", () => {
+      for (const truthy of ["true", "TRUE", "yes", "On"]) {
+        expect(loadSettings({ PCT_TRUST_PROXY: truthy }).trustProxy).toBe(true);
+      }
+      for (const falsy of ["false", "FALSE", "no", "Off"]) {
+        expect(loadSettings({ PCT_TRUST_PROXY: falsy }).trustProxy).toBe(false);
+      }
+    });
+
+    it("parses a bare integer as a hop count (not a boolean), trimming whitespace", () => {
+      expect(loadSettings({ PCT_TRUST_PROXY: "2" }).trustProxy).toBe(2);
+      expect(loadSettings({ PCT_TRUST_PROXY: "0" }).trustProxy).toBe(0);
+      expect(loadSettings({ PCT_TRUST_PROXY: "  2  " }).trustProxy).toBe(2);
+    });
+
+    // Only bare non-negative integers are hop counts; anything else (e.g. a
+    // negative or mixed token) falls through to the allowlist branch, where
+    // Fastify/proxy-addr is the authority on whether it is a valid subnet. This
+    // pins the contract so the precedence can't silently change.
+    it("treats a non-bare-integer token as a single-entry allowlist", () => {
+      expect(loadSettings({ PCT_TRUST_PROXY: "-1" }).trustProxy).toEqual(["-1"]);
+    });
+
+    it("parses a comma-separated IP/CIDR/keyword allowlist, trimming entries", () => {
+      expect(loadSettings({ PCT_TRUST_PROXY: "127.0.0.1, 10.0.0.0/8" }).trustProxy).toEqual([
+        "127.0.0.1",
+        "10.0.0.0/8",
+      ]);
+      expect(loadSettings({ PCT_TRUST_PROXY: "loopback" }).trustProxy).toEqual(["loopback"]);
+    });
+
+    it("falls back to false for an allowlist that is empty after trimming", () => {
+      expect(loadSettings({ PCT_TRUST_PROXY: ", ," }).trustProxy).toBe(false);
     });
   });
 });
