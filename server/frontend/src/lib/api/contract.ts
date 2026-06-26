@@ -100,3 +100,4 @@ export type {
   AuditOutcome,
 } from "../../../../src/policy/enums.js";
 export type { ErrorEnvelope, ErrorDetail } from "../../../../src/api/errors.js";
+export type { AnsibleVenvStatusResponse } from "../../../../src/api/system/dtos.js";

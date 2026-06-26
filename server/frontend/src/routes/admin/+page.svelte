@@ -13,13 +13,15 @@
   the static shell.
 -->
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
   import { browser } from "$app/environment";
   import { ApiError } from "$lib/api/client.js";
   import { fetchSession, login, logout } from "$lib/api/auth.js";
-  import type { SessionResponse } from "$lib/api/contract.js";
+  import { fetchAnsibleStatus } from "$lib/api/system.js";
+  import type { SessionResponse, AnsibleVenvStatusResponse } from "$lib/api/contract.js";
   import AppShell, { type NavItem } from "$lib/components/AppShell.svelte";
   import LoginForm from "$lib/components/LoginForm.svelte";
+  import SetupProgressScreen from "$lib/components/SetupProgressScreen.svelte";
   import DashboardView from "$lib/views/DashboardView.svelte";
   import UsersView from "$lib/views/UsersView.svelte";
   import UserGroupsView from "$lib/views/UserGroupsView.svelte";
@@ -37,10 +39,61 @@
   import IntegrationTokensView from "$lib/views/IntegrationTokensView.svelte";
   import AuditLogView from "$lib/views/AuditLogView.svelte";
 
-  // `null` while the initial session probe is in flight.
+  // `null` while the initial session probe (and, if authenticated, the setup
+  // status fetch) are in flight. Both fetches complete before `session` is set,
+  // so the existing `session === null` loading state covers the whole startup
+  // sequence without an extra flicker.
   let session = $state<SessionResponse | null>(null);
   let loginError = $state<string | null>(null);
   let loginPending = $state(false);
+
+  // First-run setup gate. `setupStatus` is the last polled snapshot; once
+  // `setupGatePassed` is true the dashboard is shown regardless of setup state.
+  let setupStatus = $state<AnsibleVenvStatusResponse | null>(null);
+  let setupGatePassed = $state(false);
+  let setupPollTimer: ReturnType<typeof setInterval> | null = null;
+
+  function setupNeedsPolling(): boolean {
+    return setupStatus?.state === "bootstrapping" || setupStatus?.state === "idle";
+  }
+
+  function startSetupPolling(): void {
+    if (setupPollTimer !== null) return;
+    setupPollTimer = setInterval(async () => {
+      try {
+        const status = await fetchAnsibleStatus();
+        setupStatus = status;
+        if (status.state === "ready" || status.state === "unavailable") {
+          clearInterval(setupPollTimer!);
+          setupPollTimer = null;
+          if (status.state === "ready") setupGatePassed = true;
+        }
+      } catch {
+        // ignore transient errors during polling
+      }
+    }, 2000);
+  }
+
+  function stopSetupPolling(): void {
+    if (setupPollTimer !== null) {
+      clearInterval(setupPollTimer);
+      setupPollTimer = null;
+    }
+  }
+
+  async function checkSetupStatus(): Promise<void> {
+    try {
+      setupStatus = await fetchAnsibleStatus();
+      if (setupStatus.state === "ready") {
+        setupGatePassed = true;
+      } else if (setupNeedsPolling()) {
+        startSetupPolling();
+      }
+    } catch {
+      // Cannot reach the setup endpoint; proceed to dashboard rather than blocking.
+      setupGatePassed = true;
+    }
+  }
 
   // Only the sections actually implemented in this slice are listed, so the
   // nav never points at a not-yet-built editor.
@@ -68,13 +121,21 @@
   let username = $derived(session?.username ?? "admin");
 
   onMount(probeSession);
+  onDestroy(stopSetupPolling);
 
   async function probeSession(): Promise<void> {
     if (!browser) {
       return;
     }
     try {
-      session = await fetchSession();
+      const s = await fetchSession();
+      // Fetch setup status before surfacing the session so the dashboard is
+      // never shown before we know whether to gate it behind the setup screen.
+      // The existing `session === null` loading state covers this whole sequence.
+      if (s.authenticated) {
+        await checkSetupStatus();
+      }
+      session = s;
     } catch (err) {
       // An unconfigured-auth 500 or a 401 both mean "show the login screen".
       session = { authenticated: false };
@@ -94,7 +155,11 @@
     loginPending = true;
     loginError = null;
     try {
-      session = await login({ username: user, password });
+      const s = await login({ username: user, password });
+      if (s.authenticated) {
+        await checkSetupStatus();
+      }
+      session = s;
       activeView = "dashboard";
     } catch (err) {
       loginError = err instanceof ApiError ? err.message : "Unable to sign in. Please try again.";
@@ -104,11 +169,14 @@
   }
 
   async function handleLogout(): Promise<void> {
+    stopSetupPolling();
     try {
       await logout();
     } finally {
       session = { authenticated: false };
       loginError = null;
+      setupStatus = null;
+      setupGatePassed = false;
     }
   }
 </script>
@@ -121,6 +189,14 @@
   <main class="loading"><p>Loading…</p></main>
 {:else if !authenticated}
   <LoginForm onsubmit={handleLogin} pending={loginPending} error={loginError} />
+{:else if !setupGatePassed && setupStatus !== null}
+  <SetupProgressScreen
+    status={setupStatus}
+    oncontinue={() => {
+      stopSetupPolling();
+      setupGatePassed = true;
+    }}
+  />
 {:else}
   <AppShell
     items={navItems}
