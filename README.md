@@ -67,6 +67,31 @@ And on the supervised user's desktop:
 Telemetry from each client (ActivityWatch) flows back to the dashboard so the
 admin can see what was actually used, not just what was allowed.
 
+## Screenshots
+
+The admin dashboard, running from the local-development image with sample data.
+These show **what is built today** — the policy editors, client health, and
+enrolment flow are working; the charted dashboard, grants ledger, and PWA
+content screens from the [design studies](design/) are still on the
+[roadmap](docs/roadmap.md). A full annotated set, including every editor and
+the implemented-vs-designed breakdown, is in
+[`docs/screenshots/`](docs/screenshots/).
+
+| Client Health | Enrol a client |
+|:---:|:---:|
+| [![Client health — per-machine component status](docs/screenshots/05-client-health.png)](docs/screenshots/05-client-health.png) | [![Enrolment install one-liner](docs/screenshots/05b-client-health-enrol.png)](docs/screenshots/05b-client-health-enrol.png) |
+| Per-machine reachability + five-component health and queued changes. | Minting a token yields the `curl … \| sudo bash` install command. |
+
+| Budgets | Integrations |
+|:---:|:---:|
+| [![Per-user time budgets](docs/screenshots/09-budgets.png)](docs/screenshots/09-budgets.png) | [![Scoped integration API tokens](docs/screenshots/12-integrations.png)](docs/screenshots/12-integrations.png) |
+| Daily/weekly/monthly allowances, scoped to overall time, an activity, or a group. | Scoped, revocable API tokens for external systems like the family calendar. |
+
+<p align="center">
+  <a href="docs/screenshots/14-app-pwa.png"><img src="docs/screenshots/14-app-pwa.png" alt="Mobile PWA shell" width="280"></a>
+  <br><em>The mobile/PWA surface — currently the installable shell; live status screens land in a later phase.</em>
+</p>
+
 ## Long-term goals
 
 These are not in the initial scope but they shape the architecture today

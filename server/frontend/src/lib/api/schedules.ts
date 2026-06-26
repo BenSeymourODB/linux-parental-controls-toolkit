@@ -19,6 +19,9 @@ import type {
   CreateScheduleRequest,
   UpdateScheduleRequest,
   ScheduleOrderView,
+  GroupScheduleResponse,
+  CreateGroupScheduleRequest,
+  GroupScheduleOrderView,
 } from "./contract.js";
 
 /**
@@ -70,4 +73,57 @@ export function reorderSchedules(
     method: "PUT",
     body: { orderedIds },
   });
+}
+
+/**
+ * Fetch a group's schedules in evaluation order, plus the editor's structural
+ * shadow findings (#270). Unlike the user order view there is no "in effect
+ * now" — a group has no single timezone, so a live instant is resolved per
+ * member, not for the group. Precedence/shadowing is computed server-side.
+ */
+export function getGroupScheduleOrder(groupId: number): Promise<GroupScheduleOrderView> {
+  return apiFetch<GroupScheduleOrderView>(`/user-groups/${groupId}/schedules/order`);
+}
+
+/**
+ * Persist a new evaluation order for a group's schedules. `orderedIds` must be a
+ * permutation of exactly that group's schedule ids (the server returns a 409
+ * otherwise); the refreshed order view comes back.
+ */
+export function reorderGroupSchedules(
+  groupId: number,
+  orderedIds: number[],
+): Promise<GroupScheduleOrderView> {
+  return apiFetch<GroupScheduleOrderView>(`/user-groups/${groupId}/schedules/order`, {
+    method: "PUT",
+    body: { orderedIds },
+  });
+}
+
+/** Create a group schedule; the server validates target coherence, returns the row. */
+export function createGroupSchedule(
+  groupId: number,
+  input: CreateGroupScheduleRequest,
+): Promise<GroupScheduleResponse> {
+  return apiFetch<GroupScheduleResponse>(`/user-groups/${groupId}/schedules`, {
+    method: "POST",
+    body: input,
+  });
+}
+
+/**
+ * Patch a group schedule (flat by id, like `/group-schedules/:id`); `input` must
+ * carry at least one field (the server enforces). Reuses the user schedule PATCH
+ * body — the group rule shape is identical minus its owner.
+ */
+export function updateGroupSchedule(
+  id: number,
+  input: UpdateScheduleRequest,
+): Promise<GroupScheduleResponse> {
+  return apiFetch<GroupScheduleResponse>(`/group-schedules/${id}`, { method: "PATCH", body: input });
+}
+
+/** Delete a group schedule. Resolves on the server's `204`. */
+export function deleteGroupSchedule(id: number): Promise<void> {
+  return apiFetch<void>(`/group-schedules/${id}`, { method: "DELETE" });
 }
