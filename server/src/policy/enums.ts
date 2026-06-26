@@ -25,6 +25,21 @@ export const scopeValues = ["overall", "activity", "group"] as const;
 export const scopeSchema = z.enum(scopeValues);
 export type Scope = z.infer<typeof scopeSchema>;
 
+/**
+ * The OS family an enrolled {@link Client} runs (#229).
+ *
+ * - `linux` — the only implemented enforcement target today, and the
+ *   **default** for every existing and newly enrolled client.
+ * - `windows` — **reserved**, not yet implemented; a Windows enforcement
+ *   client is the post-Phase-14 epic (#233). Reserving the value now keeps
+ *   the discriminator a trivial defaulted column instead of a
+ *   migrate-with-data problem once a fleet exists (cf. how #146 reserved the
+ *   recurrence columns ahead of need).
+ */
+export const platformValues = ["linux", "windows"] as const;
+export const platformSchema = z.enum(platformValues);
+export type Platform = z.infer<typeof platformSchema>;
+
 /** Rollover window for a {@link Budget}; resolved in the user's effective TZ. */
 export const budgetWindowValues = ["daily", "weekly", "monthly"] as const;
 export const budgetWindowSchema = z.enum(budgetWindowValues);
@@ -60,6 +75,22 @@ export type MatchType = z.infer<typeof matchTypeSchema>;
 export const scheduleActionValues = ["allow", "deny", "extend"] as const;
 export const scheduleActionSchema = z.enum(scheduleActionValues);
 export type ScheduleAction = z.infer<typeof scheduleActionSchema>;
+
+/**
+ * The client-side sound theme for a user's notifications, per
+ * `docs/client-notifications.md` → "Sound design":
+ *
+ * - `off` — no sounds at all.
+ * - `subtle` (default) — soft cues for routine warnings.
+ * - `prominent` — louder cues routed through a higher-volume channel, for a
+ *   user who routinely misses the subtle ones.
+ *
+ * The agent (#103) reads this from the pushed `NotificationPolicy` and the
+ * admin sets it from `/admin/notifications` (#105).
+ */
+export const soundProfileValues = ["off", "subtle", "prominent"] as const;
+export const soundProfileSchema = z.enum(soundProfileValues);
+export type SoundProfile = z.infer<typeof soundProfileSchema>;
 
 /**
  * Outcome of a transport command recorded in the audit log (#85), derived from
@@ -98,3 +129,31 @@ export type AuditOutcome = z.infer<typeof auditOutcomeSchema>;
 export const transportQueueStatusValues = ["pending", "failed"] as const;
 export const transportQueueStatusSchema = z.enum(transportQueueStatusValues);
 export type TransportQueueStatus = z.infer<typeof transportQueueStatusSchema>;
+
+/**
+ * The classes of *dated* data a retention window can target (#135/#136).
+ *
+ * The vocabulary is grounded in `docs/adr/0005-recurrence-and-date-scoping.md`
+ * §4: retention purges only rows that have an "age", never the recurrence
+ * rules themselves. So the categories are the dated tables that exist today:
+ *
+ * - `usage_samples` — ActivityWatch usage history (`usage_samples.ended_at`).
+ * - `grant_ledger` — the immutable {@link grants} ledger (`granted_at`).
+ * - `audit_log` — transport audit entries (`audit_log.at`).
+ * - `date_overrides` — date-specific policy rows whose effective window lies
+ *   wholly in the past: an `exception` past `expires_at`, or a `schedule` past
+ *   `effective_to`. A purely recurring schedule (no `effective_to`) has no age
+ *   and is out of retention's scope entirely (ADR 0005 §4).
+ *
+ * The epic (#135) named `schedule_history` / `budget_history` as illustrative
+ * examples; there are no such tables (schedules/budgets are live recurrence
+ * rules, not dated history), so they are deliberately not categories here.
+ */
+export const retentionCategoryValues = [
+  "usage_samples",
+  "grant_ledger",
+  "audit_log",
+  "date_overrides",
+] as const;
+export const retentionCategorySchema = z.enum(retentionCategoryValues);
+export type RetentionCategory = z.infer<typeof retentionCategorySchema>;

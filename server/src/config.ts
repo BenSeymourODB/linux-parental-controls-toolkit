@@ -14,6 +14,7 @@
  */
 import { z } from "zod";
 import { isValidTimeZone } from "./policy/budget-window.js";
+import { DEFAULT_RETENTION_DAYS, MAX_RETENTION_DAYS } from "./policy/retention.js";
 import { isValidCronPattern } from "./transport/activitywatch/telemetry.js";
 
 /** pino log levels, in increasing severity, plus `silent`. */
@@ -35,6 +36,47 @@ function splitPlaybookList(value: unknown): unknown {
     .split(",")
     .map((name) => name.trim())
     .filter((name) => name.length > 0);
+}
+
+/** Boolean word-forms accepted for `PCT_TRUST_PROXY` (case-insensitive). */
+const TRUST_PROXY_TRUE = new Set(["true", "yes", "on"]);
+const TRUST_PROXY_FALSE = new Set(["false", "no", "off"]);
+
+/**
+ * Parse `PCT_TRUST_PROXY` into the shape Fastify's `trustProxy` option takes
+ * (Fastify hands it to `proxy-addr`): a boolean, a hop count, or an
+ * IP/CIDR/keyword allowlist.
+ *
+ * Precedence is deliberate and documented (`docs/reverse-proxy-tls.md`):
+ *
+ * - boolean **words** (`true`/`false`/`yes`/`no`/`on`/`off`, case-insensitive)
+ *   → `true` / `false`;
+ * - a bare non-negative integer → a **hop count** (so `"1"`/`"0"` mean one/zero
+ *   hops, not true/false);
+ * - anything else → a comma-separated **allowlist** (`127.0.0.1,10.0.0.0/8`,
+ *   or a keyword like `loopback`) → `string[]`;
+ * - unset / empty / whitespace-only → `false`, preserving the safe LAN default
+ *   of never trusting `X-Forwarded-*` from an untrusted direct caller.
+ *
+ * An allowlist that is empty after trimming (e.g. `","`) also falls back to
+ * `false`.
+ */
+function parseTrustProxy(value: unknown): boolean | number | string[] {
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  if (trimmed === "") return false;
+
+  const lower = trimmed.toLowerCase();
+  if (TRUST_PROXY_TRUE.has(lower)) return true;
+  if (TRUST_PROXY_FALSE.has(lower)) return false;
+
+  if (/^\d+$/.test(trimmed)) return Number(trimmed);
+
+  const entries = trimmed
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+  return entries.length > 0 ? entries : false;
 }
 
 /**
@@ -73,6 +115,18 @@ const adguardSchema = z.discriminatedUnion("mode", [
     mode: z.literal("managed"),
     bindAddr: z.string().min(1).default("0.0.0.0:53"),
     adminPort: z.coerce.number().int().positive().default(3000),
+    /**
+     * Data-volume directory the managed AdGuard Home binary, seed config, and
+     * work dir live under (`PCT_ADGUARD_DATA_DIR`). Defaults to the documented
+     * `/data/adguard` layout (`docs/server-deployment.md` → "Volume layout").
+     */
+    dataDir: z.string().min(1).default("/data/adguard"),
+    /**
+     * Optional pinned AdGuard Home release tag (`PCT_ADGUARD_VERSION`, e.g.
+     * `v0.107.65`). When unset, the managed supervisor fetches the latest stable
+     * release on first run and then leaves the installed binary in place (#96).
+     */
+    version: z.string().min(1).optional(),
   }),
 ]);
 
@@ -117,6 +171,25 @@ const settingsSchema = z
      * stays JSON.
      */
     logPretty: z.stringbool().default(false),
+    /**
+     * Fastify's `trustProxy` setting (`PCT_TRUST_PROXY`, #235), default off.
+     *
+     * When the dashboard runs behind a reverse proxy (the recommended non-LAN
+     * topology, `docs/reverse-proxy-tls.md`), every request arrives from the
+     * proxy's address, so the per-IP failed-attempt limiter on admin login and
+     * `POST /api/clients/enrol` collapses into one global bucket. Enabling this
+     * lets Fastify derive `request.ip` from a trusted `X-Forwarded-For` so the
+     * limiter keys on the real client IP again. Default **off** never trusts
+     * `X-Forwarded-*` from an untrusted direct caller (safe LAN behaviour). See
+     * {@link parseTrustProxy} for the accepted forms (boolean / hop count /
+     * IP-CIDR allowlist).
+     */
+    trustProxy: z
+      .preprocess(
+        parseTrustProxy,
+        z.union([z.boolean(), z.number().int().nonnegative(), z.array(z.string().min(1)).min(1)]),
+      )
+      .default(false),
     /**
      * Signs the admin session cookie (#52) and, later, integration tokens.
      * Optional so dev/CI can build the app without it; auth endpoints and the
@@ -204,6 +277,24 @@ const settingsSchema = z
        * (`PCT_TELEMETRY_PULL_CONCURRENCY`). Defaults to 4.
        */
       pullConcurrency: z.coerce.number().int().positive().default(4),
+    }),
+    /**
+     * Data retention (#136, epic #135). `defaultDays` is the global default
+     * window applied to every dated-data category that has no per-category
+     * override in the policy store (`PCT_RETENTION_DEFAULT_DAYS`, default 365).
+     * Per-category overrides (custom window or "keep forever") are persisted in
+     * `retention_overrides` and managed via `/api/retention`; only the default
+     * lives in the environment. Bounded by {@link MAX_RETENTION_DAYS} so an
+     * absurd value is rejected at startup — "effectively forever" is the
+     * explicit per-category keep-forever mode, not a giant day count.
+     */
+    retention: z.object({
+      defaultDays: z.coerce
+        .number()
+        .int()
+        .min(1)
+        .max(MAX_RETENTION_DAYS)
+        .default(DEFAULT_RETENTION_DAYS),
     }),
     /**
      * Phase-6 periodic re-apply / tamper-reversion scheduler (#93): the croner
@@ -339,6 +430,7 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
     defaultTz: env.PCT_DEFAULT_TZ,
     logLevel: env.PCT_LOG_LEVEL,
     logPretty: env.PCT_LOG_PRETTY,
+    trustProxy: env.PCT_TRUST_PROXY,
     secretKey: env.PCT_SECRET_KEY,
     adminUsername: env.PCT_ADMIN_USERNAME,
     adminPassword: env.PCT_ADMIN_PASSWORD,
@@ -350,6 +442,9 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
     telemetry: {
       pullCron: env.PCT_TELEMETRY_PULL_CRON,
       pullConcurrency: env.PCT_TELEMETRY_PULL_CONCURRENCY,
+    },
+    retention: {
+      defaultDays: env.PCT_RETENTION_DEFAULT_DAYS,
     },
     reapply: {
       cron: env.PCT_REAPPLY_CRON,
@@ -372,6 +467,8 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
       apiTokenFile: env.PCT_ADGUARD_API_TOKEN_FILE,
       bindAddr: env.PCT_ADGUARD_BIND_ADDR,
       adminPort: env.PCT_ADGUARD_ADMIN_PORT,
+      dataDir: env.PCT_ADGUARD_DATA_DIR,
+      version: env.PCT_ADGUARD_VERSION,
     },
   });
 

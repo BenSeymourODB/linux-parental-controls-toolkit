@@ -96,6 +96,7 @@ function assemble(
     lastSeen: client.lastSeen === null ? null : client.lastSeen.toISOString(),
     enrolledAt: client.enrolledAt.toISOString(),
     probedAt: probe === undefined ? null : probe.at.toISOString(),
+    updateRequired: client.updateRequired,
     components,
     queue: {
       pending: queueRows.filter((row) => row.status === "pending").length,

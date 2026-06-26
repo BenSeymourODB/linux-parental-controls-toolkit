@@ -20,7 +20,17 @@
 import { and, eq } from "drizzle-orm";
 
 import type { PolicyDb } from "./db.js";
-import type { ActivityKind, BudgetWindow, MatchType, ScheduleAction, Scope } from "./enums.js";
+import type {
+  ActivityKind,
+  BudgetWindow,
+  MatchType,
+  RetentionCategory,
+  ScheduleAction,
+  Scope,
+  SoundProfile,
+} from "./enums.js";
+import type { ResolvedRetention } from "./retention.js";
+import { reorder } from "./schedule-precedence.js";
 import {
   activities,
   activitiesToGroups,
@@ -31,6 +41,8 @@ import {
   groupBudgets,
   groupExceptions,
   groupSchedules,
+  notificationPolicies,
+  retentionOverrides,
   schedules,
   userGroupMemberships,
   userGroups,
@@ -189,6 +201,33 @@ export function recordClientLastSeen(db: PolicyDb, id: number, at: Date): Client
   return db.update(clients).set({ lastSeen: at }).where(eq(clients.id, id)).returning().get();
 }
 
+/**
+ * Refresh a client's reported `agent_version` + `versions_reported_at` from the
+ * value the bridge sends in its event-stream `hello` (#165/#101 heartbeat,
+ * ADR 0007). `agent_version` / `versions_reported_at` are system-observed
+ * inventory columns (#164), not admin-editable, so this writes them directly
+ * rather than going through {@link updateClient}. A no-op if no such client.
+ */
+export function recordClientAgentVersion(
+  db: PolicyDb,
+  id: number,
+  agentVersion: string,
+  at: Date,
+): void {
+  db.update(clients).set({ agentVersion, versionsReportedAt: at }).where(eq(clients.id, id)).run();
+}
+
+/**
+ * Set or clear a client's `update_required` flag (ADR 0007 §5, #165): set when
+ * its event-stream `hello` is refused for being older than the supported
+ * protocol window, cleared when it next connects compatibly. A system-observed
+ * signal (not admin-editable), written directly like the other event-stream
+ * liveness columns. A no-op if no client with `id` exists.
+ */
+export function setClientUpdateRequired(db: PolicyDb, id: number, value: boolean): void {
+  db.update(clients).set({ updateRequired: value }).where(eq(clients.id, id)).run();
+}
+
 // --- User-on-client links --------------------------------------------------
 
 /** All links for a user, ascending by client id. */
@@ -251,15 +290,23 @@ export function listUserClientIds(db: PolicyDb, userId: number): number[] {
     .map((row) => row.clientId);
 }
 
-/** Delete a link. Returns whether a row was removed. */
-export function deleteLink(db: PolicyDb, userId: number, clientId: number): boolean {
-  return (
-    db
-      .delete(usersOnClients)
-      .where(and(eq(usersOnClients.userId, userId), eq(usersOnClients.clientId, clientId)))
-      .returning({ userId: usersOnClients.userId })
-      .get() !== undefined
-  );
+/**
+ * Delete a link, returning the **removed** row, or `undefined` if there was no
+ * such link. Returning the row (rather than a bare boolean) lets the caller read
+ * the `os_username` it carried *before* it cascaded away — the unlink push
+ * (#253) needs that name to "unmanage" the account's `timekpra` config on the
+ * client, where there is no longer a link row to resolve it from.
+ */
+export function deleteLink(
+  db: PolicyDb,
+  userId: number,
+  clientId: number,
+): UserOnClientRow | undefined {
+  return db
+    .delete(usersOnClients)
+    .where(and(eq(usersOnClients.userId, userId), eq(usersOnClients.clientId, clientId)))
+    .returning()
+    .get();
 }
 
 // --- User groups -----------------------------------------------------------
@@ -764,6 +811,30 @@ export function deleteSchedule(db: PolicyDb, id: number): boolean {
   );
 }
 
+/**
+ * Atomically reorder a user's schedules to match `orderedIds`, the persistence
+ * step behind the drag-to-reorder editor (#63). `orderedIds` must be a
+ * permutation of exactly that user's schedule ids; {@link reorder} validates
+ * this and throws {@link import("./schedule-precedence.js").ReorderMismatchError}
+ * before any write, so a stale or garbled request can never partially apply or
+ * drop a rule's position. The dense `0..n-1` ordinals are written in a single
+ * transaction; the rows are then re-read in the new evaluation order.
+ */
+export function reorderUserSchedules(
+  db: PolicyDb,
+  userId: number,
+  orderedIds: readonly number[],
+): ScheduleRow[] {
+  // Validate the permutation and compute dense ordinals up front (may throw).
+  const reordered = reorder(listUserSchedules(db, userId), orderedIds);
+  db.transaction((tx) => {
+    for (const rule of reordered) {
+      tx.update(schedules).set({ ordinal: rule.ordinal }).where(eq(schedules.id, rule.id)).run();
+    }
+  });
+  return listUserSchedules(db, userId);
+}
+
 // --- Exceptions ------------------------------------------------------------
 
 /** A persisted {@link exceptions} row. */
@@ -853,6 +924,79 @@ export function deleteException(db: PolicyDb, id: number): boolean {
   return (
     db.delete(exceptions).where(eq(exceptions.id, id)).returning({ id: exceptions.id }).get() !==
     undefined
+  );
+}
+
+// --- Notification policies (#104) ------------------------------------------
+
+/** A persisted {@link notificationPolicies} row. */
+export type NotificationPolicyRow = typeof notificationPolicies.$inferSelect;
+
+/**
+ * Fields accepted when upserting a {@link notificationPolicies} row. All
+ * optional: an omitted field takes the column default on insert (the
+ * documented `subtle` / `15` / `true`), or is left unchanged on update — the
+ * route layer resolves the full effective policy from the merged row. A
+ * `cadenceOverrides` of `null` clears any override back to the built-in cadence.
+ */
+export interface NotificationPolicyUpsert {
+  enabled?: boolean | undefined;
+  soundProfile?: SoundProfile | undefined;
+  graceSeconds?: number | undefined;
+  cadenceOverrides?: Record<string, unknown> | null | undefined;
+}
+
+/** The persisted notification policy for a user, or `undefined` if unset. */
+export function getNotificationPolicy(
+  db: PolicyDb,
+  userId: number,
+): NotificationPolicyRow | undefined {
+  return db
+    .select()
+    .from(notificationPolicies)
+    .where(eq(notificationPolicies.userId, userId))
+    .get();
+}
+
+/**
+ * Create or replace the user's notification policy (idempotent on the
+ * `user_id` primary key) and return the stored row. The caller confirms the
+ * user exists first (an FK violation otherwise surfaces opaquely). Only the
+ * fields present in `input` are written; on conflict the same fields are
+ * updated, so a partial upsert leaves the rest at their stored (or default)
+ * values. `cadenceOverrides` maps to the `cadence_overrides_json` column.
+ */
+export function upsertNotificationPolicy(
+  db: PolicyDb,
+  userId: number,
+  input: NotificationPolicyUpsert,
+): NotificationPolicyRow {
+  // Build the column set from only the provided fields so omitted keys fall to
+  // the column default (insert) or stay unchanged (the on-conflict update).
+  const set: Partial<typeof notificationPolicies.$inferInsert> = {};
+  if (input.enabled !== undefined) set.enabled = input.enabled;
+  if (input.soundProfile !== undefined) set.soundProfile = input.soundProfile;
+  if (input.graceSeconds !== undefined) set.graceSeconds = input.graceSeconds;
+  if (input.cadenceOverrides !== undefined) set.cadenceOverridesJson = input.cadenceOverrides;
+  return db
+    .insert(notificationPolicies)
+    .values({ userId, ...set })
+    .onConflictDoUpdate({ target: notificationPolicies.userId, set })
+    .returning()
+    .get();
+}
+
+/**
+ * Delete a user's notification policy (reverting them to the documented
+ * defaults). Returns whether a row was removed.
+ */
+export function deleteNotificationPolicy(db: PolicyDb, userId: number): boolean {
+  return (
+    db
+      .delete(notificationPolicies)
+      .where(eq(notificationPolicies.userId, userId))
+      .returning({ userId: notificationPolicies.userId })
+      .get() !== undefined
   );
 }
 
@@ -958,6 +1102,34 @@ export function deleteGroupSchedule(db: PolicyDb, id: number): boolean {
       .returning({ id: groupSchedules.id })
       .get() !== undefined
   );
+}
+
+/**
+ * Atomically reorder a group's schedules to match `orderedIds` — the group
+ * counterpart of {@link reorderUserSchedules} (#270), the persistence step
+ * behind the group drag-to-reorder editor. `orderedIds` must be a permutation
+ * of exactly that group's schedule ids; {@link reorder} validates this and
+ * throws {@link import("./schedule-precedence.js").ReorderMismatchError} before
+ * any write, so a stale or garbled request can never partially apply or drop a
+ * rule's position. The dense `0..n-1` ordinals are written in a single
+ * transaction; the rows are then re-read in the new evaluation order.
+ */
+export function reorderGroupSchedules(
+  db: PolicyDb,
+  groupId: number,
+  orderedIds: readonly number[],
+): GroupScheduleRow[] {
+  // Validate the permutation and compute dense ordinals up front (may throw).
+  const reordered = reorder(listGroupSchedules(db, groupId), orderedIds);
+  db.transaction((tx) => {
+    for (const rule of reordered) {
+      tx.update(groupSchedules)
+        .set({ ordinal: rule.ordinal })
+        .where(eq(groupSchedules.id, rule.id))
+        .run();
+    }
+  });
+  return listGroupSchedules(db, groupId);
 }
 
 // --- Group exceptions (#182) -----------------------------------------------
@@ -1136,6 +1308,61 @@ export function deleteGroupBudget(db: PolicyDb, id: number): boolean {
       .delete(groupBudgets)
       .where(eq(groupBudgets.id, id))
       .returning({ id: groupBudgets.id })
+      .get() !== undefined
+  );
+}
+
+// --- Retention overrides (#136) --------------------------------------------
+
+/** A persisted {@link retentionOverrides} row. */
+export type RetentionOverrideRow = typeof retentionOverrides.$inferSelect;
+
+/**
+ * Every per-category retention override, ascending by category. A category
+ * absent from this list inherits the global default (see `policy/retention.ts`
+ * → {@link RetentionPolicy.fromOverrides}); the row layer never invents a
+ * default-inheriting row.
+ */
+export function listRetentionOverrides(db: PolicyDb): RetentionOverrideRow[] {
+  return db.select().from(retentionOverrides).orderBy(retentionOverrides.category).all();
+}
+
+/**
+ * Set (insert or replace) the override for one category and return the stored
+ * row. The {@link ResolvedRetention} is split onto the `keep_forever` / `days`
+ * columns the storage CHECK enforces: keep-forever rows carry no day count,
+ * custom rows carry the positive count. `updated_at` is refreshed on every
+ * write so the admin surface can show when a window last changed.
+ */
+export function upsertRetentionOverride(
+  db: PolicyDb,
+  category: RetentionCategory,
+  retention: ResolvedRetention,
+): RetentionOverrideRow {
+  const keepForever = retention.keepForever;
+  const days = retention.keepForever ? null : retention.days;
+  const now = new Date();
+  return db
+    .insert(retentionOverrides)
+    .values({ category, keepForever, days, updatedAt: now })
+    .onConflictDoUpdate({
+      target: retentionOverrides.category,
+      set: { keepForever, days, updatedAt: now },
+    })
+    .returning()
+    .get();
+}
+
+/**
+ * Clear the override for one category, reverting it to the global default.
+ * Returns whether a row was actually removed (false when none was set).
+ */
+export function deleteRetentionOverride(db: PolicyDb, category: RetentionCategory): boolean {
+  return (
+    db
+      .delete(retentionOverrides)
+      .where(eq(retentionOverrides.category, category))
+      .returning({ category: retentionOverrides.category })
       .get() !== undefined
   );
 }

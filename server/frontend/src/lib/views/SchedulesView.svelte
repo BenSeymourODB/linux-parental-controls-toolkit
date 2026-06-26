@@ -1,20 +1,22 @@
 <!--
-  Schedules editor (#189): repeats the Users/Activities/Budgets pattern (#53).
-  Loads `/api/schedules` plus the users / activities / activity-groups it needs
-  to render targets and populate the create form, all on mount (browser only —
-  the page is prerendered to a static shell). Supports create, inline edit of
-  the `action`, and delete. All calls go through the typed `$lib/api/schedules`
-  wrappers; errors surface inline.
+  Schedules editor (#189 + drag-to-order #63).
 
-  A `Schedule` is a recurring rule that `allow`/`deny`/`extend`s a `targetKind`
-  (`overall`, a single `activity`, or an activity `group`) for a user. Scope and
-  target are fixed at create time — changing what a rule applies to means
-  deleting it and adding a new one — so inline edit only exposes `action`.
+  Schedule precedence is **per user** and **first-match-wins** (ascending
+  `ordinal`; ADR 0004), so this editor is scoped to one user at a time: pick a
+  user, then see their rules in evaluation order and reorder them. Reordering is
+  available two ways — a drag handle (pointer) and per-row Move up / Move down
+  buttons (keyboard) — and persists atomically via
+  `PUT /users/:id/schedules/order`.
 
-  Recurrence is rendered read-only here ("Always" for the degenerate always-on
-  rule). Authoring day-of-week + intra-day windows is #140, and drag-to-order of
-  the `ordinal` is #63; this editor creates the always-on rule and faithfully
-  displays any recurrence those editors set later.
+  The server computes the two derived facts the editor surfaces, so precedence
+  lives in exactly one place (`policy/schedule-precedence.ts`) and the editor
+  never re-implements it: which rule is **in effect right now** per target, and
+  which rules are **shadowed** (an earlier rule makes them unreachable).
+
+  A `Schedule` allow/deny/extends a `targetKind` (`overall`, an `activity`, or a
+  `group`). Scope/target are fixed at create time; inline edit exposes `action`
+  only. Recurrence is rendered read-only ("Always" for the degenerate always-on
+  rule); authoring day/time windows is #140.
 -->
 <script lang="ts">
   import { onMount } from "svelte";
@@ -23,15 +25,17 @@
     ActivityGroupResponse,
     ActivityResponse,
     ScheduleAction,
+    ScheduleOrderView,
     ScheduleResponse,
     Scope,
     UserResponse,
   } from "$lib/api/contract.js";
   import {
-    listSchedules,
     createSchedule,
     updateSchedule,
     deleteSchedule,
+    getScheduleOrder,
+    reorderSchedules,
   } from "$lib/api/schedules.js";
   import { listUsers } from "$lib/api/users.js";
   import { listActivities } from "$lib/api/activities.js";
@@ -52,15 +56,19 @@
   // ISO weekday order, bit 0 = Monday … bit 6 = Sunday (ADR 0005 §1).
   const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
 
-  let schedules = $state<ScheduleResponse[]>([]);
   let users = $state<UserResponse[]>([]);
   let activities = $state<ActivityResponse[]>([]);
   let groups = $state<ActivityGroupResponse[]>([]);
   let loading = $state(true);
   let error = $state<string | null>(null);
 
-  // Create form.
-  let newUserId = $state<number | null>(null);
+  // The user whose ordered rules are being managed, and that user's order view.
+  let selectedUserId = $state<number | null>(null);
+  let order = $state<ScheduleOrderView | null>(null);
+  let orderLoading = $state(false);
+  let reordering = $state(false);
+
+  // Create form (the user is the selected one; only scope/target/action here).
   let newScope = $state<Scope>("overall");
   let newTargetId = $state<number | null>(null);
   let newAction = $state<ScheduleAction>("deny");
@@ -71,14 +79,16 @@
   let editAction = $state<ScheduleAction>("deny");
   let saving = $state(false);
 
+  // The rule being dragged (index into the current order), or null.
+  let dragIndex = $state<number | null>(null);
+
   onMount(load);
 
   async function load(): Promise<void> {
     loading = true;
     error = null;
     try {
-      [schedules, users, activities, groups] = await Promise.all([
-        listSchedules(),
+      [users, activities, groups] = await Promise.all([
         listUsers(),
         listActivities(),
         listActivityGroups(),
@@ -90,9 +100,35 @@
     }
   }
 
-  function userName(id: number): string {
-    return users.find((u) => u.id === id)?.displayName ?? `User ${id}`;
+  /** Load (or reload) the selected user's order view. */
+  async function loadOrder(): Promise<void> {
+    if (selectedUserId === null) {
+      order = null;
+      return;
+    }
+    orderLoading = true;
+    error = null;
+    try {
+      order = await getScheduleOrder(selectedUserId);
+    } catch (err) {
+      order = null;
+      error = messageOf(err);
+    } finally {
+      orderLoading = false;
+    }
   }
+
+  function onSelectUser(): void {
+    editingId = null;
+    void loadOrder();
+  }
+
+  // Derived lookups for the badges/warnings (recomputed when `order` changes).
+  let effectiveIds = $derived(new Set(order?.effectiveIds ?? []));
+  let shadowedBy = $derived(
+    new Map((order?.shadows ?? []).map((s) => [s.shadowedId, s.shadowedById])),
+  );
+  let schedules = $derived(order?.schedules ?? []);
 
   function scopeLabel(scope: Scope): string {
     return SCOPE_OPTIONS.find((o) => o.value === scope)?.label ?? scope;
@@ -109,7 +145,8 @@
     }
     if (schedule.targetKind === "activity") {
       return (
-        activities.find((a) => a.id === schedule.targetId)?.matcher ?? `Activity ${schedule.targetId}`
+        activities.find((a) => a.id === schedule.targetId)?.matcher ??
+        `Activity ${schedule.targetId}`
       );
     }
     return groups.find((g) => g.id === schedule.targetId)?.name ?? `Group ${schedule.targetId}`;
@@ -133,11 +170,7 @@
     return new Date(iso).toLocaleDateString();
   }
 
-  /**
-   * Render a schedule's recurrence + date scope read-only. The degenerate row
-   * (no weekday, no intra-day window, no effective bounds) is the always-on
-   * rule. Authoring these fields is #140; this editor only displays them.
-   */
+  /** Render a schedule's recurrence + date scope read-only (#140 authors these). */
   function recurrenceSummary(s: ScheduleResponse): string {
     const parts: string[] = [];
     if (s.recurrenceDays !== null) {
@@ -157,40 +190,50 @@
     return parts.join(" ");
   }
 
-  // The target picker only applies to the non-overall scopes; clear any stale
-  // selection when the scope changes so an `overall` rule can't carry a target.
+  /** The 1-based position of the rule that shadows `id`, for the warning text. */
+  function shadowerPosition(id: number): number | null {
+    const by = shadowedBy.get(id);
+    if (by === undefined) return null;
+    const index = schedules.findIndex((s) => s.id === by);
+    return index === -1 ? null : index + 1;
+  }
+
   function onScopeChange(): void {
     newTargetId = null;
   }
 
   let createDisabled = $derived(
-    creating || newUserId === null || (newScope !== "overall" && newTargetId === null),
+    creating || selectedUserId === null || (newScope !== "overall" && newTargetId === null),
   );
 
   async function handleCreate(event: SubmitEvent): Promise<void> {
     event.preventDefault();
-    if (newUserId === null) {
+    if (selectedUserId === null) {
       return;
     }
     creating = true;
     error = null;
+    // Append after the current rules: one past the largest existing ordinal, so
+    // a new rule sorts last whether or not the ordinals have been densified by a
+    // reorder (mirrors the server's `nextOrdinal`).
+    const appendOrdinal = schedules.reduce((max, s) => Math.max(max, s.ordinal + 1), 0);
     try {
-      const created = await createSchedule({
-        userId: newUserId,
+      await createSchedule({
+        userId: selectedUserId,
         targetKind: newScope,
         targetId: newScope === "overall" ? null : newTargetId,
         action: newAction,
-        // Always-on degenerate rule; day/window authoring is #140.
+        ordinal: appendOrdinal,
         recurrenceDays: null,
         recurrenceStartMinute: null,
         recurrenceEndMinute: null,
         effectiveFrom: null,
         effectiveTo: null,
       });
-      schedules = [...schedules, created];
       newScope = "overall";
       newTargetId = null;
       newAction = "deny";
+      await loadOrder();
     } catch (err) {
       error = messageOf(err);
     } finally {
@@ -212,9 +255,9 @@
     saving = true;
     error = null;
     try {
-      const updated = await updateSchedule(id, { action: editAction });
-      schedules = schedules.map((s) => (s.id === id ? updated : s));
+      await updateSchedule(id, { action: editAction });
       editingId = null;
+      await loadOrder();
     } catch (err) {
       error = messageOf(err);
     } finally {
@@ -233,10 +276,58 @@
     error = null;
     try {
       await deleteSchedule(schedule.id);
-      schedules = schedules.filter((s) => s.id !== schedule.id);
+      await loadOrder();
     } catch (err) {
       error = messageOf(err);
     }
+  }
+
+  /** Produce the id order that results from moving `from` to `to`. */
+  function moved(from: number, to: number): number[] {
+    const ids = schedules.map((s) => s.id);
+    const [m] = ids.splice(from, 1);
+    if (m === undefined) return ids;
+    ids.splice(to, 0, m);
+    return ids;
+  }
+
+  /** Persist a new id order and replace state with the server's fresh view. */
+  async function persistOrder(orderedIds: number[]): Promise<void> {
+    if (selectedUserId === null) return;
+    reordering = true;
+    error = null;
+    try {
+      order = await reorderSchedules(selectedUserId, orderedIds);
+    } catch (err) {
+      // Resync to the server's truth first (loadOrder resets `error`), then
+      // surface the reorder failure so the message survives the reload.
+      await loadOrder();
+      error = messageOf(err);
+    } finally {
+      reordering = false;
+    }
+  }
+
+  /** Keyboard-accessible reorder: move the rule at `index` by `delta` (±1). */
+  async function move(index: number, delta: number): Promise<void> {
+    const to = index + delta;
+    if (to < 0 || to >= schedules.length) return;
+    await persistOrder(moved(index, to));
+  }
+
+  function onDragStart(index: number): void {
+    dragIndex = index;
+  }
+
+  function onDragOver(event: DragEvent): void {
+    event.preventDefault(); // allow the drop
+  }
+
+  async function onDrop(index: number): Promise<void> {
+    const from = dragIndex;
+    dragIndex = null;
+    if (from === null || from === index) return;
+    await persistOrder(moved(from, index));
   }
 
   /** Render any thrown value as a UI-safe message. */
@@ -253,8 +344,10 @@
     <h1>Schedules</h1>
     <p class="hint">
       Recurring rules that allow, deny, or extend access — overall or for a
-      specific activity or activity group. New rules apply at all times; setting
-      day-of-week and time-of-day windows comes later (#140).
+      specific activity or activity group. Rules are evaluated top to bottom and
+      the first matching rule wins, so drag (or use Move up / Move down) to set
+      precedence. New rules apply at all times; day-of-week and time-of-day
+      windows come later (#140).
     </p>
   </header>
 
@@ -262,100 +355,141 @@
     <p class="error" role="alert">{error}</p>
   {/if}
 
-  {#if !loading && users.length === 0}
+  {#if loading}
+    <p class="muted">Loading…</p>
+  {:else if users.length === 0}
     <p class="muted">Add a user first — a schedule always belongs to a user.</p>
   {:else}
-    <form class="create" onsubmit={handleCreate}>
-      <select bind:value={newUserId} disabled={creating} aria-label="Schedule user" required>
+    <div class="user-picker">
+      <label for="schedule-user">Manage schedules for</label>
+      <select
+        id="schedule-user"
+        bind:value={selectedUserId}
+        onchange={onSelectUser}
+        aria-label="Manage schedules for user"
+      >
         <option value={null} disabled selected>Choose a user…</option>
         {#each users as user (user.id)}
           <option value={user.id}>{user.displayName}</option>
         {/each}
       </select>
-      <select
-        bind:value={newScope}
-        onchange={onScopeChange}
-        disabled={creating}
-        aria-label="Schedule scope"
-      >
-        {#each SCOPE_OPTIONS as option (option.value)}
-          <option value={option.value}>{option.label}</option>
-        {/each}
-      </select>
-      {#if newScope === "activity"}
-        <select bind:value={newTargetId} disabled={creating} aria-label="Target activity" required>
-          <option value={null} disabled selected>Choose an activity…</option>
-          {#each activities as activity (activity.id)}
-            <option value={activity.id}>{activity.matcher} ({activity.kind})</option>
-          {/each}
-        </select>
-      {:else if newScope === "group"}
-        <select bind:value={newTargetId} disabled={creating} aria-label="Target group" required>
-          <option value={null} disabled selected>Choose a group…</option>
-          {#each groups as group (group.id)}
-            <option value={group.id}>{group.name}</option>
-          {/each}
-        </select>
-      {/if}
-      <select bind:value={newAction} disabled={creating} aria-label="Schedule action">
-        {#each ACTION_OPTIONS as option (option.value)}
-          <option value={option.value}>{option.label}</option>
-        {/each}
-      </select>
-      <button type="submit" disabled={createDisabled}>
-        {creating ? "Adding…" : "Add schedule"}
-      </button>
-    </form>
+    </div>
 
-    {#if loading}
-      <p class="muted">Loading schedules…</p>
-    {:else if schedules.length === 0}
-      <p class="muted">No schedules yet. Add one above.</p>
+    {#if selectedUserId === null}
+      <p class="muted">Choose a user to view and order their schedule rules.</p>
     {:else}
-      <table>
-        <thead>
-          <tr>
-            <th>User</th>
-            <th>Scope</th>
-            <th>Target</th>
-            <th>Action</th>
-            <th>When</th>
-            <th class="actions-col">Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {#each schedules as schedule (schedule.id)}
-            <tr>
-              <td>{userName(schedule.userId)}</td>
-              <td>{scopeLabel(schedule.targetKind)}</td>
-              <td class="muted">{targetLabel(schedule)}</td>
-              {#if editingId === schedule.id}
-                <td>
-                  <select bind:value={editAction} aria-label="Edit action">
-                    {#each ACTION_OPTIONS as option (option.value)}
-                      <option value={option.value}>{option.label}</option>
-                    {/each}
-                  </select>
-                </td>
-                <td class="muted">{recurrenceSummary(schedule)}</td>
-                <td class="actions">
+      <form class="create" onsubmit={handleCreate}>
+        <select
+          bind:value={newScope}
+          onchange={onScopeChange}
+          disabled={creating}
+          aria-label="Schedule scope"
+        >
+          {#each SCOPE_OPTIONS as option (option.value)}
+            <option value={option.value}>{option.label}</option>
+          {/each}
+        </select>
+        {#if newScope === "activity"}
+          <select bind:value={newTargetId} disabled={creating} aria-label="Target activity" required>
+            <option value={null} disabled selected>Choose an activity…</option>
+            {#each activities as activity (activity.id)}
+              <option value={activity.id}>{activity.matcher} ({activity.kind})</option>
+            {/each}
+          </select>
+        {:else if newScope === "group"}
+          <select bind:value={newTargetId} disabled={creating} aria-label="Target group" required>
+            <option value={null} disabled selected>Choose a group…</option>
+            {#each groups as group (group.id)}
+              <option value={group.id}>{group.name}</option>
+            {/each}
+          </select>
+        {/if}
+        <select bind:value={newAction} disabled={creating} aria-label="Schedule action">
+          {#each ACTION_OPTIONS as option (option.value)}
+            <option value={option.value}>{option.label}</option>
+          {/each}
+        </select>
+        <button type="submit" disabled={createDisabled}>
+          {creating ? "Adding…" : "Add schedule"}
+        </button>
+      </form>
+
+      {#if orderLoading}
+        <p class="muted">Loading schedules…</p>
+      {:else if schedules.length === 0}
+        <p class="muted">No schedules yet. Add one above.</p>
+      {:else}
+        <ol class="rules" aria-busy={reordering}>
+          {#each schedules as schedule, index (schedule.id)}
+            {@const shadower = shadowerPosition(schedule.id)}
+            <li
+              class="rule"
+              class:shadowed={shadower !== null}
+              draggable={!reordering && editingId === null}
+              ondragstart={() => onDragStart(index)}
+              ondragover={onDragOver}
+              ondrop={() => onDrop(index)}
+              ondragend={() => (dragIndex = null)}
+            >
+              <span class="handle" aria-hidden="true" title="Drag to reorder">⠿</span>
+              <span class="pos">{index + 1}</span>
+
+              <div class="body">
+                <div class="line">
+                  <span class="scope">{scopeLabel(schedule.targetKind)}</span>
+                  {#if schedule.targetKind !== "overall"}
+                    <span class="target">{targetLabel(schedule)}</span>
+                  {/if}
+                  {#if editingId === schedule.id}
+                    <select bind:value={editAction} aria-label="Edit action">
+                      {#each ACTION_OPTIONS as option (option.value)}
+                        <option value={option.value}>{option.label}</option>
+                      {/each}
+                    </select>
+                  {:else}
+                    <span class="action action-{schedule.action}"
+                      >{actionLabel(schedule.action)}</span
+                    >
+                  {/if}
+                  {#if effectiveIds.has(schedule.id)}
+                    <span class="badge effect">In effect now</span>
+                  {/if}
+                </div>
+                <div class="when muted">{recurrenceSummary(schedule)}</div>
+                {#if shadower !== null}
+                  <p class="warn" role="note">
+                    Never applies — rule #{shadower} above always wins for this target.
+                  </p>
+                {/if}
+              </div>
+
+              <div class="controls">
+                <button
+                  class="ghost icon"
+                  aria-label="Move up"
+                  disabled={reordering || index === 0}
+                  onclick={() => move(index, -1)}>↑</button
+                >
+                <button
+                  class="ghost icon"
+                  aria-label="Move down"
+                  disabled={reordering || index === schedules.length - 1}
+                  onclick={() => move(index, 1)}>↓</button
+                >
+                {#if editingId === schedule.id}
                   <button onclick={() => saveEdit(schedule.id)} disabled={saving}>
                     {saving ? "Saving…" : "Save"}
                   </button>
                   <button class="ghost" onclick={cancelEdit} disabled={saving}>Cancel</button>
-                </td>
-              {:else}
-                <td>{actionLabel(schedule.action)}</td>
-                <td class="muted">{recurrenceSummary(schedule)}</td>
-                <td class="actions">
+                {:else}
                   <button class="ghost" onclick={() => startEdit(schedule)}>Edit</button>
                   <button class="danger" onclick={() => handleDelete(schedule)}>Delete</button>
-                </td>
-              {/if}
-            </tr>
+                {/if}
+              </div>
+            </li>
           {/each}
-        </tbody>
-      </table>
+        </ol>
+      {/if}
     {/if}
   {/if}
 </section>
@@ -371,52 +505,119 @@
     font-size: 0.9rem;
     max-width: 40rem;
   }
+  .user-picker {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+    font-size: 0.9rem;
+  }
   .create {
     display: flex;
     gap: 0.5rem;
     margin-bottom: 1.25rem;
     flex-wrap: wrap;
   }
-  .create select {
+  select {
     padding: 0.5rem 0.6rem;
     border: 1px solid #d1d5db;
     border-radius: 0.4rem;
     background: #fff;
   }
-  table {
-    width: 100%;
-    border-collapse: collapse;
+  .rules {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .rule {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.6rem;
+    padding: 0.6rem 0.75rem;
     background: #fff;
+    border: 1px solid #f3f4f6;
     border-radius: 0.5rem;
-    overflow: hidden;
     box-shadow: 0 1px 2px rgb(0 0 0 / 0.06);
   }
-  th,
-  td {
-    text-align: left;
-    padding: 0.6rem 0.75rem;
-    border-bottom: 1px solid #f3f4f6;
+  .rule.shadowed {
+    opacity: 0.85;
+    border-color: #fde68a;
+    background: #fffbeb;
+  }
+  .handle {
+    cursor: grab;
+    color: #9ca3af;
+    user-select: none;
+    line-height: 1.5;
+  }
+  .pos {
+    min-width: 1.25rem;
+    text-align: center;
+    color: #6b7280;
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+  }
+  .body {
+    flex: 1;
+    min-width: 0;
+  }
+  .line {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
     font-size: 0.9rem;
   }
-  th {
-    background: #f9fafb;
+  .scope {
     font-weight: 600;
     color: #374151;
   }
-  td select {
-    width: 100%;
-    padding: 0.35rem 0.5rem;
-    border: 1px solid #d1d5db;
+  .target {
+    color: #6b7280;
+  }
+  .action {
+    padding: 0.05rem 0.4rem;
     border-radius: 0.3rem;
-    background: #fff;
+    font-size: 0.8rem;
+    font-weight: 600;
   }
-  .actions {
+  .action-allow {
+    background: #dcfce7;
+    color: #166534;
+  }
+  .action-deny {
+    background: #fee2e2;
+    color: #991b1b;
+  }
+  .action-extend {
+    background: #dbeafe;
+    color: #1e40af;
+  }
+  .badge.effect {
+    padding: 0.05rem 0.4rem;
+    border-radius: 0.3rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    background: #ecfdf5;
+    color: #047857;
+    border: 1px solid #a7f3d0;
+  }
+  .when {
+    font-size: 0.8rem;
+    margin-top: 0.15rem;
+  }
+  .warn {
+    margin: 0.3rem 0 0;
+    font-size: 0.8rem;
+    color: #92400e;
+  }
+  .controls {
     display: flex;
-    gap: 0.4rem;
-  }
-  .actions-col {
-    width: 1%;
-    white-space: nowrap;
+    gap: 0.35rem;
+    align-items: center;
   }
   button {
     padding: 0.4rem 0.7rem;
@@ -434,6 +635,10 @@
   button.ghost {
     background: #e5e7eb;
     color: #374151;
+  }
+  button.icon {
+    padding: 0.3rem 0.55rem;
+    font-weight: 700;
   }
   button.danger {
     background: #dc2626;

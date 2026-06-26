@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "070f6774-9111-4493-84ad-94884e030f00",
+  "id": "859567a4-27a7-426c-bdc9-842489106041",
   "prevId": "9c16c988-d8c9-40e3-b4b5-828f44a192a3",
   "tables": {
     "activities": {
@@ -885,99 +885,6 @@
         }
       }
     },
-    "group_budgets": {
-      "name": "group_budgets",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "integer",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": true
-        },
-        "user_group_id": {
-          "name": "user_group_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "scope": {
-          "name": "scope",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "target_id": {
-          "name": "target_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "window": {
-          "name": "window",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "seconds_allowed": {
-          "name": "seconds_allowed",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        }
-      },
-      "indexes": {
-        "group_budgets_group_scope_window_idx": {
-          "name": "group_budgets_group_scope_window_idx",
-          "columns": [
-            "user_group_id",
-            "scope",
-            "window"
-          ],
-          "isUnique": false
-        }
-      },
-      "foreignKeys": {
-        "group_budgets_user_group_id_user_groups_id_fk": {
-          "name": "group_budgets_user_group_id_user_groups_id_fk",
-          "tableFrom": "group_budgets",
-          "tableTo": "user_groups",
-          "columnsFrom": [
-            "user_group_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {
-        "group_budgets_scope_check": {
-          "name": "group_budgets_scope_check",
-          "value": "\"group_budgets\".\"scope\" in ('overall', 'activity', 'group')"
-        },
-        "group_budgets_window_check": {
-          "name": "group_budgets_window_check",
-          "value": "\"group_budgets\".\"window\" in ('daily', 'weekly', 'monthly')"
-        },
-        "group_budgets_seconds_check": {
-          "name": "group_budgets_seconds_check",
-          "value": "\"group_budgets\".\"seconds_allowed\" >= 0"
-        },
-        "group_budgets_target_coherence_check": {
-          "name": "group_budgets_target_coherence_check",
-          "value": "(\"group_budgets\".\"scope\" = 'overall') = (\"group_budgets\".\"target_id\" is null)"
-        }
-      }
-    },
     "group_exceptions": {
       "name": "group_exceptions",
       "columns": {
@@ -1320,7 +1227,7 @@
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
-          "default": "'default'"
+          "default": "'subtle'"
         },
         "grace_seconds": {
           "name": "grace_seconds",
@@ -1328,7 +1235,7 @@
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
-          "default": 60
+          "default": 15
         },
         "cadence_overrides_json": {
           "name": "cadence_overrides_json",
@@ -1357,9 +1264,13 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "checkConstraints": {
+        "notification_policies_sound_profile_check": {
+          "name": "notification_policies_sound_profile_check",
+          "value": "\"notification_policies\".\"sound_profile\" in ('off', 'subtle', 'prominent')"
+        },
         "notification_policies_grace_check": {
           "name": "notification_policies_grace_check",
-          "value": "\"notification_policies\".\"grace_seconds\" >= 0"
+          "value": "\"notification_policies\".\"grace_seconds\" between 0 and 60"
         }
       }
     },

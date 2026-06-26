@@ -15,9 +15,18 @@ export const moduleName = "transport/policy-push";
 export { policyPushPayloadSchema, type ValidatedPolicyPushPayload } from "./payload.js";
 export {
   resolvePolicyPush,
+  unrestrictedPolicyPush,
   type PolicyPushResolveInput,
   type ResolvedPolicyPush,
 } from "./resolve.js";
+export {
+  diffResolvedPush,
+  formatDuration,
+  type PolicyPushChange,
+  type PolicyPushChangeField,
+  type PolicyPushChangeKind,
+  type PolicyPushDiff,
+} from "./diff.js";
 export {
   createPolicyPushExecutor,
   type PolicyPushClient,
@@ -36,4 +45,5 @@ export {
   type BootstrapSshTransport,
   type CreatePolicyPushTransportOptions,
   type PolicyPushTransport,
+  type TimeTodayAdjuster,
 } from "./bootstrap.js";

@@ -66,6 +66,12 @@ export const clientHealthSchema = z.object({
   enrolledAt: z.string(),
   /** When this status was probed (ISO), or null when no probe ran (degraded). */
   probedAt: z.string().nullable(),
+  /**
+   * Set when the client's event-stream `hello` was refused for running an
+   * out-of-window protocol (ADR 0007 §5, #165): the admin signal that this
+   * client needs a `pct-client` agent update before it can reconnect.
+   */
+  updateRequired: z.boolean(),
   components: z.array(componentHealthSchema),
   queue: clientQueueSchema,
 });

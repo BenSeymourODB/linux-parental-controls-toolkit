@@ -40,6 +40,7 @@ import {
   createScheduleSchema,
   createUserGroupSchema,
   createUserSchema,
+  defaultNotificationPolicyResponse,
   groupActivityParamsSchema,
   groupIdParamsSchema,
   idParamsSchema,
@@ -52,6 +53,7 @@ import {
   toGroupExceptionResponse,
   toGroupScheduleResponse,
   toLinkResponse,
+  toNotificationPolicyResponse,
   toScheduleResponse,
   toUserGroupResponse,
   toUserResponse,
@@ -64,6 +66,7 @@ import {
   updateUserGroupSchema,
   updateUserSchema,
   upsertLinkSchema,
+  upsertNotificationPolicySchema,
   userClientParamsSchema,
   userGroupMemberParamsSchema,
   userIdParamsSchema,
@@ -77,6 +80,7 @@ import {
   type GroupExceptionResponse,
   type GroupScheduleResponse,
   type LinkResponse,
+  type NotificationPolicyResponse,
   type ScheduleResponse,
   type UserGroupResponse,
   type UserResponse,
@@ -109,6 +113,42 @@ function asValidated<T>(write: () => T, message: string): T {
       throw new ApiError(400, "validation_error", message);
     }
     throw err;
+  }
+}
+
+/**
+ * Build the shared `404 not_found` envelope error. The CRUD handlers map a
+ * missing row to a 404 in ~40 places ({@link assertFound} / {@link assertRemoved});
+ * routing them all through here keeps the status + machine-readable code in one
+ * spot, so the 404 contract changes once rather than at every call site (#224).
+ */
+export function notFound(message: string): ApiError {
+  return new ApiError(404, "not_found", message);
+}
+
+/**
+ * Return `row` if present, else throw a `404 not_found` naming the entity. Used
+ * both for "GET/PATCH/DELETE a missing row → 404" (the returned row is kept) and
+ * for referenced-entity existence guards before a create/list (the return is
+ * discarded, only the guard matters), so the `${entity} ${id} not found` shape
+ * lives in one place.
+ */
+export function assertFound<T>(row: T | undefined, entity: string, id: number): T {
+  if (row === undefined) {
+    throw notFound(`${entity} ${id} not found`);
+  }
+  return row;
+}
+
+/**
+ * Throw a `404 not_found` with `message` when a delete/removal reports the row
+ * was absent (`removed === false`). The standard delete sites pass the same
+ * `${entity} ${id} not found` text {@link assertFound} builds; the relational
+ * link/membership removals pass their own message.
+ */
+export function assertRemoved(removed: boolean, message: string): void {
+  if (!removed) {
+    throw notFound(message);
   }
 }
 
@@ -211,10 +251,7 @@ export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushSt
     "/users/:id",
     { ...guard, schema: { params: idParamsSchema } },
     async (request): Promise<UserResponse> => {
-      const row = repo.getUser(scope.db, request.params.id);
-      if (row === undefined) {
-        throw new ApiError(404, "not_found", `User ${request.params.id} not found`);
-      }
+      const row = assertFound(repo.getUser(scope.db, request.params.id), "User", request.params.id);
       return toUserResponse(row);
     },
   );
@@ -223,10 +260,11 @@ export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushSt
     "/users/:id",
     { ...guard, schema: { params: idParamsSchema, body: updateUserSchema } },
     async (request): Promise<UserResponse> => {
-      const row = repo.updateUser(scope.db, request.params.id, request.body);
-      if (row === undefined) {
-        throw new ApiError(404, "not_found", `User ${request.params.id} not found`);
-      }
+      const row = assertFound(
+        repo.updateUser(scope.db, request.params.id, request.body),
+        "User",
+        request.params.id,
+      );
       pushStub.push(
         userPushCommands("user.updated", row.id, repo.listUserClientIds(scope.db, row.id), {
           ...request.body,
@@ -243,9 +281,10 @@ export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushSt
       // Resolve the affected clients before deleting — the links cascade away
       // with the user.
       const clientIds = repo.listUserClientIds(scope.db, request.params.id);
-      if (!repo.deleteUser(scope.db, request.params.id)) {
-        throw new ApiError(404, "not_found", `User ${request.params.id} not found`);
-      }
+      assertRemoved(
+        repo.deleteUser(scope.db, request.params.id),
+        `User ${request.params.id} not found`,
+      );
       pushStub.push(userPushCommands("user.deleted", request.params.id, clientIds, {}));
       return reply.code(204).send();
     },
@@ -282,10 +321,11 @@ export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushSt
     "/clients/:id",
     { ...guard, schema: { params: idParamsSchema } },
     async (request): Promise<ClientResponse> => {
-      const row = repo.getClient(scope.db, request.params.id);
-      if (row === undefined) {
-        throw new ApiError(404, "not_found", `Client ${request.params.id} not found`);
-      }
+      const row = assertFound(
+        repo.getClient(scope.db, request.params.id),
+        "Client",
+        request.params.id,
+      );
       return toClientResponse(row);
     },
   );
@@ -294,13 +334,14 @@ export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushSt
     "/clients/:id",
     { ...guard, schema: { params: idParamsSchema, body: updateClientSchema } },
     async (request): Promise<ClientResponse> => {
-      const row = asConflict(
-        () => repo.updateClient(scope.db, request.params.id, request.body),
-        "That hostname is already in use by another client",
+      const row = assertFound(
+        asConflict(
+          () => repo.updateClient(scope.db, request.params.id, request.body),
+          "That hostname is already in use by another client",
+        ),
+        "Client",
+        request.params.id,
       );
-      if (row === undefined) {
-        throw new ApiError(404, "not_found", `Client ${request.params.id} not found`);
-      }
       pushStub.push(clientPushCommands("client.updated", row.id, { ...request.body }));
       return toClientResponse(row);
     },
@@ -310,9 +351,10 @@ export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushSt
     "/clients/:id",
     { ...guard, schema: { params: idParamsSchema } },
     async (request, reply) => {
-      if (!repo.deleteClient(scope.db, request.params.id)) {
-        throw new ApiError(404, "not_found", `Client ${request.params.id} not found`);
-      }
+      assertRemoved(
+        repo.deleteClient(scope.db, request.params.id),
+        `Client ${request.params.id} not found`,
+      );
       pushStub.push(clientPushCommands("client.deleted", request.params.id, {}));
       return reply.code(204).send();
     },
@@ -324,9 +366,7 @@ export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushSt
     "/users/:userId/clients",
     { ...guard, schema: { params: userIdParamsSchema } },
     async (request): Promise<LinkResponse[]> => {
-      if (repo.getUser(scope.db, request.params.userId) === undefined) {
-        throw new ApiError(404, "not_found", `User ${request.params.userId} not found`);
-      }
+      assertFound(repo.getUser(scope.db, request.params.userId), "User", request.params.userId);
       return repo.listUserLinks(scope.db, request.params.userId).map(toLinkResponse);
     },
   );
@@ -338,12 +378,8 @@ export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushSt
       const { userId, clientId } = request.params;
       // Confirm both ends exist so the caller gets a precise 404 rather than an
       // opaque foreign-key failure.
-      if (repo.getUser(scope.db, userId) === undefined) {
-        throw new ApiError(404, "not_found", `User ${userId} not found`);
-      }
-      if (repo.getClient(scope.db, clientId) === undefined) {
-        throw new ApiError(404, "not_found", `Client ${clientId} not found`);
-      }
+      assertFound(repo.getUser(scope.db, userId), "User", userId);
+      assertFound(repo.getClient(scope.db, clientId), "Client", clientId);
       const row = asConflict(
         () => repo.upsertLink(scope.db, userId, clientId, request.body),
         `OS account reference ${request.body.osUserRef} is already mapped to another user on client ${clientId}`,
@@ -363,14 +399,20 @@ export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushSt
     { ...guard, schema: { params: userClientParamsSchema } },
     async (request, reply) => {
       const { userId, clientId } = request.params;
-      if (!repo.deleteLink(scope.db, userId, clientId)) {
-        throw new ApiError(
-          404,
-          "not_found",
-          `No link between user ${userId} and client ${clientId}`,
-        );
+      const removed = repo.deleteLink(scope.db, userId, clientId);
+      if (removed === undefined) {
+        throw notFound(`No link between user ${userId} and client ${clientId}`);
       }
-      pushStub.push(linkPushCommands("link.deleted", userId, clientId, {}));
+      // Carry the now-cascaded-away OS account name so the executor can
+      // "unmanage" it on the client (lift stale timekpra limits back to
+      // unrestricted), #253 — the link row is gone, so the name can only come
+      // from here. Mirrors the `link.upserted` detail.
+      pushStub.push(
+        linkPushCommands("link.deleted", userId, clientId, {
+          osUsername: removed.osUsername,
+          osUserRef: removed.osUserRef,
+        }),
+      );
       return reply.code(204).send();
     },
   );
@@ -399,10 +441,11 @@ export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushSt
     "/activities/:id",
     { ...guard, schema: { params: idParamsSchema } },
     async (request): Promise<ActivityResponse> => {
-      const row = repo.getActivity(scope.db, request.params.id);
-      if (row === undefined) {
-        throw new ApiError(404, "not_found", `Activity ${request.params.id} not found`);
-      }
+      const row = assertFound(
+        repo.getActivity(scope.db, request.params.id),
+        "Activity",
+        request.params.id,
+      );
       return toActivityResponse(row);
     },
   );
@@ -411,10 +454,11 @@ export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushSt
     "/activities/:id",
     { ...guard, schema: { params: idParamsSchema, body: updateActivitySchema } },
     async (request): Promise<ActivityResponse> => {
-      const existing = repo.getActivity(scope.db, request.params.id);
-      if (existing === undefined) {
-        throw new ApiError(404, "not_found", `Activity ${request.params.id} not found`);
-      }
+      const existing = assertFound(
+        repo.getActivity(scope.db, request.params.id),
+        "Activity",
+        request.params.id,
+      );
       // The grammar is a pair (ADR 0006): validate the *effective* match-type +
       // matcher after the patch merges over the stored row, since either field
       // may be the one omitted. createActivitySchema validates this at the DTO
@@ -424,10 +468,11 @@ export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushSt
       if (!isValidMatcher(matchType, matcher)) {
         throw new ApiError(400, "validation_error", "matcher is not a valid regular expression");
       }
-      const row = repo.updateActivity(scope.db, request.params.id, request.body);
-      if (row === undefined) {
-        throw new ApiError(404, "not_found", `Activity ${request.params.id} not found`);
-      }
+      const row = assertFound(
+        repo.updateActivity(scope.db, request.params.id, request.body),
+        "Activity",
+        request.params.id,
+      );
       return toActivityResponse(row);
     },
   );
@@ -436,9 +481,10 @@ export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushSt
     "/activities/:id",
     { ...guard, schema: { params: idParamsSchema } },
     async (request, reply) => {
-      if (!repo.deleteActivity(scope.db, request.params.id)) {
-        throw new ApiError(404, "not_found", `Activity ${request.params.id} not found`);
-      }
+      assertRemoved(
+        repo.deleteActivity(scope.db, request.params.id),
+        `Activity ${request.params.id} not found`,
+      );
       return reply.code(204).send();
     },
   );
@@ -469,10 +515,11 @@ export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushSt
     "/activity-groups/:id",
     { ...guard, schema: { params: idParamsSchema } },
     async (request): Promise<ActivityGroupResponse> => {
-      const row = repo.getActivityGroup(scope.db, request.params.id);
-      if (row === undefined) {
-        throw new ApiError(404, "not_found", `Activity group ${request.params.id} not found`);
-      }
+      const row = assertFound(
+        repo.getActivityGroup(scope.db, request.params.id),
+        "Activity group",
+        request.params.id,
+      );
       return toActivityGroupResponse(row);
     },
   );
@@ -481,13 +528,14 @@ export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushSt
     "/activity-groups/:id",
     { ...guard, schema: { params: idParamsSchema, body: updateActivityGroupSchema } },
     async (request): Promise<ActivityGroupResponse> => {
-      const row = asConflict(
-        () => repo.updateActivityGroup(scope.db, request.params.id, request.body),
-        "That activity-group name is already in use",
+      const row = assertFound(
+        asConflict(
+          () => repo.updateActivityGroup(scope.db, request.params.id, request.body),
+          "That activity-group name is already in use",
+        ),
+        "Activity group",
+        request.params.id,
       );
-      if (row === undefined) {
-        throw new ApiError(404, "not_found", `Activity group ${request.params.id} not found`);
-      }
       return toActivityGroupResponse(row);
     },
   );
@@ -496,9 +544,10 @@ export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushSt
     "/activity-groups/:id",
     { ...guard, schema: { params: idParamsSchema } },
     async (request, reply) => {
-      if (!repo.deleteActivityGroup(scope.db, request.params.id)) {
-        throw new ApiError(404, "not_found", `Activity group ${request.params.id} not found`);
-      }
+      assertRemoved(
+        repo.deleteActivityGroup(scope.db, request.params.id),
+        `Activity group ${request.params.id} not found`,
+      );
       return reply.code(204).send();
     },
   );
@@ -510,9 +559,7 @@ export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushSt
     { ...guard, schema: { params: groupIdParamsSchema } },
     async (request): Promise<ActivityResponse[]> => {
       const { groupId } = request.params;
-      if (repo.getActivityGroup(scope.db, groupId) === undefined) {
-        throw new ApiError(404, "not_found", `Activity group ${groupId} not found`);
-      }
+      assertFound(repo.getActivityGroup(scope.db, groupId), "Activity group", groupId);
       return repo.listGroupActivities(scope.db, groupId).map(toActivityResponse);
     },
   );
@@ -524,12 +571,8 @@ export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushSt
       const { groupId, activityId } = request.params;
       // Confirm both ends exist so the caller gets a precise 404 rather than an
       // opaque foreign-key failure.
-      if (repo.getActivityGroup(scope.db, groupId) === undefined) {
-        throw new ApiError(404, "not_found", `Activity group ${groupId} not found`);
-      }
-      if (repo.getActivity(scope.db, activityId) === undefined) {
-        throw new ApiError(404, "not_found", `Activity ${activityId} not found`);
-      }
+      assertFound(repo.getActivityGroup(scope.db, groupId), "Activity group", groupId);
+      assertFound(repo.getActivity(scope.db, activityId), "Activity", activityId);
       repo.addActivityToGroup(scope.db, groupId, activityId);
       return reply.code(204).send();
     },
@@ -540,13 +583,10 @@ export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushSt
     { ...guard, schema: { params: groupActivityParamsSchema } },
     async (request, reply) => {
       const { groupId, activityId } = request.params;
-      if (!repo.removeActivityFromGroup(scope.db, groupId, activityId)) {
-        throw new ApiError(
-          404,
-          "not_found",
-          `Activity ${activityId} is not a member of group ${groupId}`,
-        );
-      }
+      assertRemoved(
+        repo.removeActivityFromGroup(scope.db, groupId, activityId),
+        `Activity ${activityId} is not a member of group ${groupId}`,
+      );
       return reply.code(204).send();
     },
   );
@@ -577,10 +617,11 @@ export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushSt
     "/user-groups/:id",
     { ...guard, schema: { params: idParamsSchema } },
     async (request): Promise<UserGroupResponse> => {
-      const row = repo.getUserGroup(scope.db, request.params.id);
-      if (row === undefined) {
-        throw new ApiError(404, "not_found", `User group ${request.params.id} not found`);
-      }
+      const row = assertFound(
+        repo.getUserGroup(scope.db, request.params.id),
+        "User group",
+        request.params.id,
+      );
       return toUserGroupResponse(row);
     },
   );
@@ -589,13 +630,14 @@ export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushSt
     "/user-groups/:id",
     { ...guard, schema: { params: idParamsSchema, body: updateUserGroupSchema } },
     async (request): Promise<UserGroupResponse> => {
-      const row = asConflict(
-        () => repo.updateUserGroup(scope.db, request.params.id, request.body),
-        "That user-group name is already in use",
+      const row = assertFound(
+        asConflict(
+          () => repo.updateUserGroup(scope.db, request.params.id, request.body),
+          "That user-group name is already in use",
+        ),
+        "User group",
+        request.params.id,
       );
-      if (row === undefined) {
-        throw new ApiError(404, "not_found", `User group ${request.params.id} not found`);
-      }
       return toUserGroupResponse(row);
     },
   );
@@ -604,9 +646,10 @@ export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushSt
     "/user-groups/:id",
     { ...guard, schema: { params: idParamsSchema } },
     async (request, reply) => {
-      if (!repo.deleteUserGroup(scope.db, request.params.id)) {
-        throw new ApiError(404, "not_found", `User group ${request.params.id} not found`);
-      }
+      assertRemoved(
+        repo.deleteUserGroup(scope.db, request.params.id),
+        `User group ${request.params.id} not found`,
+      );
       return reply.code(204).send();
     },
   );
@@ -618,9 +661,7 @@ export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushSt
     { ...guard, schema: { params: groupIdParamsSchema } },
     async (request): Promise<UserResponse[]> => {
       const { groupId } = request.params;
-      if (repo.getUserGroup(scope.db, groupId) === undefined) {
-        throw new ApiError(404, "not_found", `User group ${groupId} not found`);
-      }
+      assertFound(repo.getUserGroup(scope.db, groupId), "User group", groupId);
       return repo.listGroupMembers(scope.db, groupId).map(toUserResponse);
     },
   );
@@ -630,9 +671,7 @@ export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushSt
     { ...guard, schema: { params: userIdParamsSchema } },
     async (request): Promise<UserGroupResponse[]> => {
       const { userId } = request.params;
-      if (repo.getUser(scope.db, userId) === undefined) {
-        throw new ApiError(404, "not_found", `User ${userId} not found`);
-      }
+      assertFound(repo.getUser(scope.db, userId), "User", userId);
       return repo.listUserGroupsForUser(scope.db, userId).map(toUserGroupResponse);
     },
   );
@@ -644,12 +683,8 @@ export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushSt
       const { groupId, userId } = request.params;
       // Confirm both ends exist so the caller gets a precise 404 rather than an
       // opaque foreign-key failure.
-      if (repo.getUserGroup(scope.db, groupId) === undefined) {
-        throw new ApiError(404, "not_found", `User group ${groupId} not found`);
-      }
-      if (repo.getUser(scope.db, userId) === undefined) {
-        throw new ApiError(404, "not_found", `User ${userId} not found`);
-      }
+      assertFound(repo.getUserGroup(scope.db, groupId), "User group", groupId);
+      assertFound(repo.getUser(scope.db, userId), "User", userId);
       repo.addUserToGroup(scope.db, groupId, userId);
       return reply.code(204).send();
     },
@@ -660,9 +695,10 @@ export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushSt
     { ...guard, schema: { params: userGroupMemberParamsSchema } },
     async (request, reply) => {
       const { groupId, userId } = request.params;
-      if (!repo.removeUserFromGroup(scope.db, groupId, userId)) {
-        throw new ApiError(404, "not_found", `User ${userId} is not a member of group ${groupId}`);
-      }
+      assertRemoved(
+        repo.removeUserFromGroup(scope.db, groupId, userId),
+        `User ${userId} is not a member of group ${groupId}`,
+      );
       return reply.code(204).send();
     },
   );
@@ -1061,9 +1097,7 @@ export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushSt
     { ...guard, schema: { body: createBudgetSchema } },
     async (request, reply): Promise<BudgetResponse> => {
       const { userId, scope: budgetScope, targetId } = request.body;
-      if (repo.getUser(scope.db, userId) === undefined) {
-        throw new ApiError(404, "not_found", `User ${userId} not found`);
-      }
+      assertFound(repo.getUser(scope.db, userId), "User", userId);
       assertTarget(scope.db, budgetScope, targetId);
       const row = asValidated(
         () => repo.createBudget(scope.db, request.body),
@@ -1087,10 +1121,11 @@ export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushSt
     "/budgets/:id",
     { ...guard, schema: { params: idParamsSchema } },
     async (request): Promise<BudgetResponse> => {
-      const row = repo.getBudget(scope.db, request.params.id);
-      if (row === undefined) {
-        throw new ApiError(404, "not_found", `Budget ${request.params.id} not found`);
-      }
+      const row = assertFound(
+        repo.getBudget(scope.db, request.params.id),
+        "Budget",
+        request.params.id,
+      );
       return toBudgetResponse(row);
     },
   );
@@ -1099,23 +1134,25 @@ export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushSt
     "/budgets/:id",
     { ...guard, schema: { params: idParamsSchema, body: updateBudgetSchema } },
     async (request): Promise<BudgetResponse> => {
-      const existing = repo.getBudget(scope.db, request.params.id);
-      if (existing === undefined) {
-        throw new ApiError(404, "not_found", `Budget ${request.params.id} not found`);
-      }
+      const existing = assertFound(
+        repo.getBudget(scope.db, request.params.id),
+        "Budget",
+        request.params.id,
+      );
       // Re-validate coherence against the merged row: a PATCH may change only
       // the scope or only the target.
       const nextScope = request.body.scope ?? existing.scope;
       const nextTargetId =
         request.body.targetId !== undefined ? request.body.targetId : existing.targetId;
       assertTarget(scope.db, nextScope, nextTargetId);
-      const row = asValidated(
-        () => repo.updateBudget(scope.db, request.params.id, request.body),
-        "The budget update violates a storage constraint",
+      const row = assertFound(
+        asValidated(
+          () => repo.updateBudget(scope.db, request.params.id, request.body),
+          "The budget update violates a storage constraint",
+        ),
+        "Budget",
+        request.params.id,
       );
-      if (row === undefined) {
-        throw new ApiError(404, "not_found", `Budget ${request.params.id} not found`);
-      }
       pushStub.push(
         userPushCommands(
           "budget.updated",
@@ -1137,10 +1174,11 @@ export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushSt
     async (request, reply) => {
       // Resolve the owner (and their clients) before deleting so the push can
       // still fan out to the right clients.
-      const existing = repo.getBudget(scope.db, request.params.id);
-      if (existing === undefined) {
-        throw new ApiError(404, "not_found", `Budget ${request.params.id} not found`);
-      }
+      const existing = assertFound(
+        repo.getBudget(scope.db, request.params.id),
+        "Budget",
+        request.params.id,
+      );
       const clientIds = repo.listUserClientIds(scope.db, existing.userId);
       repo.deleteBudget(scope.db, request.params.id);
       pushStub.push(
@@ -1172,9 +1210,7 @@ export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushSt
     { ...guard, schema: { body: createScheduleSchema } },
     async (request, reply): Promise<ScheduleResponse> => {
       const body = request.body;
-      if (repo.getUser(scope.db, body.userId) === undefined) {
-        throw new ApiError(404, "not_found", `User ${body.userId} not found`);
-      }
+      assertFound(repo.getUser(scope.db, body.userId), "User", body.userId);
       assertTarget(scope.db, body.targetKind, body.targetId);
       const row = asValidated(
         () =>
@@ -1215,10 +1251,11 @@ export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushSt
     "/schedules/:id",
     { ...guard, schema: { params: idParamsSchema } },
     async (request): Promise<ScheduleResponse> => {
-      const row = repo.getSchedule(scope.db, request.params.id);
-      if (row === undefined) {
-        throw new ApiError(404, "not_found", `Schedule ${request.params.id} not found`);
-      }
+      const row = assertFound(
+        repo.getSchedule(scope.db, request.params.id),
+        "Schedule",
+        request.params.id,
+      );
       return toScheduleResponse(row);
     },
   );
@@ -1227,10 +1264,11 @@ export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushSt
     "/schedules/:id",
     { ...guard, schema: { params: idParamsSchema, body: updateScheduleSchema } },
     async (request): Promise<ScheduleResponse> => {
-      const existing = repo.getSchedule(scope.db, request.params.id);
-      if (existing === undefined) {
-        throw new ApiError(404, "not_found", `Schedule ${request.params.id} not found`);
-      }
+      const existing = assertFound(
+        repo.getSchedule(scope.db, request.params.id),
+        "Schedule",
+        request.params.id,
+      );
       const body = request.body;
       const nextKind = body.targetKind ?? existing.targetKind;
       const nextTargetId = body.targetId !== undefined ? body.targetId : existing.targetId;
@@ -1256,13 +1294,14 @@ export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushSt
           : {}),
         ...(body.ordinal !== undefined ? { ordinal: body.ordinal } : {}),
       };
-      const row = asValidated(
-        () => repo.updateSchedule(scope.db, request.params.id, patch),
-        "The schedule update violates a recurrence or target constraint",
+      const row = assertFound(
+        asValidated(
+          () => repo.updateSchedule(scope.db, request.params.id, patch),
+          "The schedule update violates a recurrence or target constraint",
+        ),
+        "Schedule",
+        request.params.id,
       );
-      if (row === undefined) {
-        throw new ApiError(404, "not_found", `Schedule ${request.params.id} not found`);
-      }
       pushStub.push(
         userPushCommands(
           "schedule.updated",
@@ -1281,10 +1320,11 @@ export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushSt
     "/schedules/:id",
     { ...guard, schema: { params: idParamsSchema } },
     async (request, reply) => {
-      const existing = repo.getSchedule(scope.db, request.params.id);
-      if (existing === undefined) {
-        throw new ApiError(404, "not_found", `Schedule ${request.params.id} not found`);
-      }
+      const existing = assertFound(
+        repo.getSchedule(scope.db, request.params.id),
+        "Schedule",
+        request.params.id,
+      );
       const clientIds = repo.listUserClientIds(scope.db, existing.userId);
       repo.deleteSchedule(scope.db, request.params.id);
       pushStub.push(
@@ -1318,9 +1358,7 @@ export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushSt
     { ...guard, schema: { body: createExceptionSchema } },
     async (request, reply): Promise<ExceptionResponse> => {
       const body = request.body;
-      if (repo.getUser(scope.db, body.userId) === undefined) {
-        throw new ApiError(404, "not_found", `User ${body.userId} not found`);
-      }
+      assertFound(repo.getUser(scope.db, body.userId), "User", body.userId);
       assertTarget(scope.db, body.targetKind, body.targetId);
       const row = asValidated(
         () =>
@@ -1358,10 +1396,11 @@ export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushSt
     "/exceptions/:id",
     { ...guard, schema: { params: idParamsSchema } },
     async (request): Promise<ExceptionResponse> => {
-      const row = repo.getException(scope.db, request.params.id);
-      if (row === undefined) {
-        throw new ApiError(404, "not_found", `Exception ${request.params.id} not found`);
-      }
+      const row = assertFound(
+        repo.getException(scope.db, request.params.id),
+        "Exception",
+        request.params.id,
+      );
       return toExceptionResponse(row);
     },
   );
@@ -1370,10 +1409,11 @@ export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushSt
     "/exceptions/:id",
     { ...guard, schema: { params: idParamsSchema, body: updateExceptionSchema } },
     async (request): Promise<ExceptionResponse> => {
-      const existing = repo.getException(scope.db, request.params.id);
-      if (existing === undefined) {
-        throw new ApiError(404, "not_found", `Exception ${request.params.id} not found`);
-      }
+      const existing = assertFound(
+        repo.getException(scope.db, request.params.id),
+        "Exception",
+        request.params.id,
+      );
       const body = request.body;
       const nextKind = body.targetKind ?? existing.targetKind;
       const nextTargetId = body.targetId !== undefined ? body.targetId : existing.targetId;
@@ -1388,13 +1428,14 @@ export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushSt
           : {}),
         ...(body.expiresAt !== undefined ? { expiresAt: new Date(body.expiresAt) } : {}),
       };
-      const row = asValidated(
-        () => repo.updateException(scope.db, request.params.id, patch),
-        "The exception update violates a target or effective-window constraint",
+      const row = assertFound(
+        asValidated(
+          () => repo.updateException(scope.db, request.params.id, patch),
+          "The exception update violates a target or effective-window constraint",
+        ),
+        "Exception",
+        request.params.id,
       );
-      if (row === undefined) {
-        throw new ApiError(404, "not_found", `Exception ${request.params.id} not found`);
-      }
       pushStub.push(
         userPushCommands(
           "exception.updated",
@@ -1411,10 +1452,11 @@ export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushSt
     "/exceptions/:id",
     { ...guard, schema: { params: idParamsSchema } },
     async (request, reply) => {
-      const existing = repo.getException(scope.db, request.params.id);
-      if (existing === undefined) {
-        throw new ApiError(404, "not_found", `Exception ${request.params.id} not found`);
-      }
+      const existing = assertFound(
+        repo.getException(scope.db, request.params.id),
+        "Exception",
+        request.params.id,
+      );
       const clientIds = repo.listUserClientIds(scope.db, existing.userId);
       repo.deleteException(scope.db, request.params.id);
       pushStub.push(
@@ -1422,6 +1464,87 @@ export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushSt
           exceptionId: existing.id,
         }),
       );
+      return reply.code(204).send();
+    },
+  );
+
+  // --- Notification policy (#104) ------------------------------------------
+  // Per-user (1:1), pushed to the client "with the rest of policy" and cached
+  // there (docs/client-notifications.md). A user always *has* an effective
+  // policy: GET returns the persisted row or the documented defaults; PUT
+  // upserts; DELETE reverts to defaults. Mutations fan out to the user's
+  // linked clients exactly like budget.*/schedule.* (eventual wire delivery is
+  // the `policy.changed` event, #100).
+
+  typed.get(
+    "/users/:userId/notification-policy",
+    { ...guard, schema: { params: userIdParamsSchema } },
+    async (request): Promise<NotificationPolicyResponse> => {
+      const { userId } = request.params;
+      if (repo.getUser(scope.db, userId) === undefined) {
+        throw new ApiError(404, "not_found", `User ${userId} not found`);
+      }
+      const row = repo.getNotificationPolicy(scope.db, userId);
+      return row === undefined
+        ? defaultNotificationPolicyResponse(userId)
+        : toNotificationPolicyResponse(row);
+    },
+  );
+
+  typed.put(
+    "/users/:userId/notification-policy",
+    { ...guard, schema: { params: userIdParamsSchema, body: upsertNotificationPolicySchema } },
+    async (request): Promise<NotificationPolicyResponse> => {
+      const { userId } = request.params;
+      // Confirm the user exists so the caller gets a precise 404 rather than an
+      // opaque foreign-key failure.
+      if (repo.getUser(scope.db, userId) === undefined) {
+        throw new ApiError(404, "not_found", `User ${userId} not found`);
+      }
+      const row = asValidated(
+        () => repo.upsertNotificationPolicy(scope.db, userId, request.body),
+        "The notification policy violates a storage constraint",
+      );
+      pushStub.push(
+        userPushCommands(
+          "notification.upserted",
+          userId,
+          repo.listUserClientIds(scope.db, userId),
+          {
+            enabled: row.enabled,
+            soundProfile: row.soundProfile,
+            graceSeconds: row.graceSeconds,
+            // The full effective policy is pushed "with the rest of policy" and
+            // cached client-side (#100/#103), so carry the cadence overrides the
+            // upsert just persisted — `null` means the built-in cadence.
+            cadenceOverrides: row.cadenceOverridesJson ?? null,
+          },
+        ),
+      );
+      return toNotificationPolicyResponse(row);
+    },
+  );
+
+  typed.delete(
+    "/users/:userId/notification-policy",
+    { ...guard, schema: { params: userIdParamsSchema } },
+    async (request, reply) => {
+      const { userId } = request.params;
+      // Resolve the affected clients before deleting so the push still fans out.
+      const clientIds = repo.listUserClientIds(scope.db, userId);
+      if (!repo.deleteNotificationPolicy(scope.db, userId)) {
+        // No persisted row: either the user doesn't exist or they were already
+        // at defaults. Distinguish so "already default" isn't a silent 204 lie.
+        if (repo.getUser(scope.db, userId) === undefined) {
+          throw new ApiError(404, "not_found", `User ${userId} not found`);
+        }
+        throw new ApiError(
+          404,
+          "not_found",
+          `User ${userId} has no custom notification policy (already at defaults)`,
+        );
+      }
+      pushStub.push(userPushCommands("notification.deleted", userId, clientIds, {}));
       return reply.code(204).send();
     },
   );

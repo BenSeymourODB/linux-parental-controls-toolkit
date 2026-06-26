@@ -112,13 +112,22 @@ idempotently:
    admin UI.
 3. **AdGuard Home bootstrap** — driven by `PCT_ADGUARD_MODE` (see
    "AdGuard Home deployment modes" below). In `managed` mode, the
-   first-time fetch downloads the latest stable release from
-   `github.com/AdguardTeam/AdGuardHome/releases`, verifies the
-   checksum, and writes it to `/data/adguard/AdGuardHome`; the
-   dashboard then supervises it as a child process. In `external` mode,
-   the dashboard skips the download entirely and validates that it can
-   reach the configured AdGuard Home instance's REST API. In `disabled`
-   mode (the default), neither happens.
+   first-time fetch downloads a release from
+   `github.com/AdguardTeam/AdGuardHome/releases` (the latest stable, or a
+   release pinned with `PCT_ADGUARD_VERSION`), verifies its SHA-256
+   against the release `checksums.txt`, and writes it to
+   `<PCT_ADGUARD_DATA_DIR>/AdGuardHome` (default `/data/adguard/`). A
+   minimal dashboard-owned seed `AdGuardHome.yaml` is written once (web/REST
+   UI bound to `127.0.0.1:<PCT_ADGUARD_ADMIN_PORT>`, DNS to
+   `PCT_ADGUARD_BIND_ADDR`) so it boots headless, then the dashboard
+   supervises it as a child process — restarting it with capped backoff on
+   an unexpected exit and stopping it gracefully on shutdown. Like the
+   Ansible bootstrap, this runs in the background after the HTTP listener is
+   up and never crashes the process: a failed fetch leaves managed DNS
+   disabled with the reason surfaced at `GET /api/system/adguard-managed`.
+   In `external` mode, the dashboard skips the download entirely and
+   validates that it can reach the configured AdGuard Home instance's REST
+   API. In `disabled` mode (the default), neither happens.
 4. **SSH key bootstrap** — if `/data/secrets/ssh/id_ed25519` is absent, the
    Node server generates an Ed25519 key pair **in-process on boot** (issue #39,
    via `node:crypto` — the runtime image ships no `ssh-keygen` binary, mirroring
@@ -162,8 +171,10 @@ Set via environment variables:
 
 # managed — dashboard hosts AdGuard Home
 PCT_ADGUARD_MODE=managed
-PCT_ADGUARD_BIND_ADDR=0.0.0.0:53   # what AdGuard listens on
-PCT_ADGUARD_ADMIN_PORT=3000        # AdGuard's own web UI; optional
+PCT_ADGUARD_BIND_ADDR=0.0.0.0:53   # what AdGuard's DNS server listens on
+PCT_ADGUARD_ADMIN_PORT=3000        # AdGuard's web/REST UI (bound to localhost)
+PCT_ADGUARD_DATA_DIR=/data/adguard # binary + seed config + work dir
+PCT_ADGUARD_VERSION=v0.107.65      # optional: pin a release; latest stable if unset
 
 # external — point at your existing instance
 PCT_ADGUARD_MODE=external
@@ -224,8 +235,8 @@ services:
     volumes:
       - pct_data:/data
     environment:
-      - PCT_BASE_URL=https://parentalcontrols.lan
-      - PCT_TIMEZONE=America/New_York
+      - PCT_SECRET_KEY=change-me-to-a-long-random-string # required: signs the session cookie
+      - PCT_DEFAULT_TZ=America/New_York # server-default timezone for budget rollover
       - PCT_ADGUARD_MODE=external
       - PCT_ADGUARD_URL=https://adguard.lan
       - PCT_ADGUARD_USERNAME=parental-controls
@@ -255,8 +266,8 @@ services:
     volumes:
       - pct_data:/data
     environment:
-      - PCT_BASE_URL=https://parentalcontrols.lan
-      - PCT_TIMEZONE=America/New_York
+      - PCT_SECRET_KEY=change-me-to-a-long-random-string # required: signs the session cookie
+      - PCT_DEFAULT_TZ=America/New_York # server-default timezone for budget rollover
       - PCT_ADGUARD_MODE=managed
 volumes:
   pct_data:
@@ -279,7 +290,11 @@ surfaces that face unauthenticated callers (the admin login and the
 token-authenticated `POST /api/clients/enrol` enrolment exchange, issue
 #154), as cheap defence-in-depth that holds even with no proxy in front;
 that is throttling of *failures*, not a substitute for proxy-level rate
-limiting.
+limiting. That limiter keys on `request.ip`; behind a proxy, set
+`PCT_TRUST_PROXY` (off by default) so it sees the real client IP rather
+than the proxy's — see
+[`reverse-proxy-tls.md`](reverse-proxy-tls.md) → "Client IP and the
+failed-attempt limiter" (#235).
 
 ## Authentication
 
@@ -415,6 +430,37 @@ The behaviour is controlled by `PCT_PRE_MIGRATION_BACKUP` (default `true`),
 it cannot write (e.g. an unwritable `/data/backups`) the server logs the error
 loudly and still migrates — the migrator's own failure remains the boot health
 gate — so disable it only if you snapshot `/data` externally.
+
+## Data retention
+
+The dashboard keeps a bounded history of *dated* data and lets the admin
+tune how long. Retention has two layers:
+
+- A **global default window**, set with `PCT_RETENTION_DEFAULT_DAYS`
+  (default `365` — one year). It applies to every retention category that
+  has no override. It must be a positive integer; an absurdly large value
+  is rejected at startup. "Effectively forever" is the per-category
+  keep-forever mode below, not a giant day count here.
+- **Per-category overrides**, stored in the policy DB and managed at
+  runtime through the admin API (`GET` / `PUT` / `DELETE
+  /api/retention/:category`). Each override is either a custom day count
+  or "keep forever". A category with no override inherits the default.
+
+The retention **categories** are the dated tables that have an "age"
+(grounded in [`docs/adr/0005-recurrence-and-date-scoping.md`](adr/0005-recurrence-and-date-scoping.md)
+§4 — recurrence rules themselves are *not* dated and are never purged):
+
+| Category         | What it covers                                                       |
+| ---------------- | -------------------------------------------------------------------- |
+| `usage_samples`  | ActivityWatch usage history                                          |
+| `grant_ledger`   | the immutable grant ledger                                           |
+| `audit_log`      | transport audit entries                                              |
+| `date_overrides` | date-specific policy rows wholly in the past (an exception past its expiry, a schedule past its `effective_to`) |
+
+This release ships the retention **configuration model and API** (#136);
+the scheduled purge job that acts on these windows lands separately
+(#137/#138). Only the global default lives in the environment — restart to
+change it; per-category overrides are runtime config and need no restart.
 
 ## Upgrade path
 

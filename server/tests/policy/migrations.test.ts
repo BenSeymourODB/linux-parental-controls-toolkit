@@ -58,8 +58,9 @@ function columnNames(sqlite: Database.Database, table: string): string[] {
 /**
  * Every table the committed migrations must materialise. These are the
  * policy-model tables (docs/architecture.md) plus `admin_credentials`, the
- * single-admin login row added in #52, and `transport_queue`, the offline-push
- * queue added in #84 (neither is part of the policy model — see their table
+ * single-admin login row added in #52, `transport_queue`, the offline-push
+ * queue added in #84, and `retention_overrides`, the per-category retention
+ * config added in #136 (none is part of the policy model — see their table
  * comments in `schema.ts`). Sorted to match the `ORDER BY name` query.
  */
 const EXPECTED_TABLES = [
@@ -78,6 +79,7 @@ const EXPECTED_TABLES = [
   "group_schedules",
   "integration_tokens",
   "notification_policies",
+  "retention_overrides",
   "schedules",
   "transport_queue",
   "usage_samples",
@@ -238,6 +240,32 @@ describe("policy migrations", () => {
       match_type: string;
     };
     expect(row.match_type).toBe("exact");
+
+    sqlite.close();
+  });
+
+  it("reserves clients.platform defaulting to 'linux' (#229)", () => {
+    // Locks the hand-fixed recreate migration: the OS-family discriminator must
+    // exist and carry the degenerate `linux` default so any client predating it
+    // (and every current enrolment) keeps platform `linux` with no backfill.
+    const sqlite = new Database(":memory:");
+    const db = drizzle(sqlite);
+
+    migrate(db, { migrationsFolder });
+
+    const column = sqlite
+      .prepare(`SELECT name, "notnull", dflt_value FROM pragma_table_info('clients')`)
+      .all() as { name: string; notnull: number; dflt_value: string | null }[];
+    const platform = column.find((c) => c.name === "platform");
+    expect(platform).toBeDefined();
+    expect(platform?.notnull).toBe(1);
+    expect(platform?.dflt_value).toBe("'linux'");
+
+    // A client inserted without platform lands on the default, so the recreate's
+    // column-copy hand-fix preserved pre-existing rows.
+    sqlite.prepare(`INSERT INTO clients (hostname, ssh_user) VALUES ('box', 'pct-agent')`).run();
+    const row = sqlite.prepare(`SELECT platform FROM clients`).get() as { platform: string };
+    expect(row.platform).toBe("linux");
 
     sqlite.close();
   });

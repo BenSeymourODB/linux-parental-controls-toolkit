@@ -56,4 +56,18 @@ describe("FixedWindowRateLimiter", () => {
     limiter.recordFailure("ip");
     expect(limiter.isBlocked("ip")).toBe(true);
   });
+
+  it("defaults to a 15-minute window when none is given", () => {
+    const fifteenMinutesMs = 15 * 60 * 1000;
+    let clock = 0;
+    const limiter = new FixedWindowRateLimiter({ maxAttempts: 1, now: () => clock });
+    limiter.recordFailure("ip");
+    expect(limiter.isBlocked("ip")).toBe(true);
+    // Still within the default window one millisecond short of 15 minutes.
+    clock = fifteenMinutesMs - 1;
+    expect(limiter.isBlocked("ip")).toBe(true);
+    // The window elapses exactly at 15 minutes (the bound is inclusive).
+    clock = fifteenMinutesMs;
+    expect(limiter.isBlocked("ip")).toBe(false);
+  });
 });

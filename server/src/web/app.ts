@@ -14,11 +14,20 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import { registerApi } from "../api/index.js";
 import { loadSettings, type Settings } from "../config.js";
-import { EventHub } from "../events/index.js";
+import { EventHub, type EventStreamOptions } from "../events/index.js";
 import { createDb, type PolicyDb } from "../policy/db.js";
 import { createAnsibleVenvSupervisor, type AnsibleVenvSupervisor } from "../setup/ansible-venv.js";
-import { createAdGuardService, type AdGuardService } from "../transport/adguard/index.js";
-import { createPolicyPushTransport } from "../transport/policy-push/index.js";
+import {
+  createAdGuardManagedSupervisor,
+  createAdGuardService,
+  type AdGuardHealthPollHandle,
+  type AdGuardManagedSupervisor,
+  type AdGuardService,
+} from "../transport/adguard/index.js";
+import {
+  createPolicyPushTransport,
+  type PolicyPushTransport,
+} from "../transport/policy-push/index.js";
 import { registerFrontend } from "./frontend.js";
 import { REQUEST_ID_HEADER, buildLoggerOptions, genRequestId, type LogStream } from "./logger.js";
 
@@ -44,6 +53,23 @@ declare module "fastify" {
      * app — including in tests — spawns nothing.
      */
     ansibleVenv: AnsibleVenvSupervisor;
+    /**
+     * The managed-mode AdGuard Home supervisor (#96), or `null` when
+     * `PCT_ADGUARD_MODE` is not `managed`. `GET /api/system/adguard-managed`
+     * reads its `status`. Built (or injected) here so the route has a snapshot
+     * to serialise, but **not** run by `buildApp`: `main.ts` fires `bootstrap()`
+     * after `listen` (a first-run download must not block startup), and it is
+     * `stop()`ped on `app.close()`.
+     */
+    adguardManaged: AdGuardManagedSupervisor | null;
+    /**
+     * The managed-mode AdGuard health poller handle (#283), or `null` until
+     * wired. Like the other schedulers it is **not** started by `buildApp` (so
+     * building the app — including tests — starts no timer); `main.ts` assigns
+     * it after `listen` in `managed` mode. `buildApp` only owns its teardown: an
+     * `onClose` hook stops it if set.
+     */
+    adguardHealthPoll: AdGuardHealthPollHandle | null;
   }
 }
 
@@ -78,6 +104,27 @@ export interface BuildAppOptions {
    * constructing the app.
    */
   ansibleVenv?: AnsibleVenvSupervisor;
+  /**
+   * Inject an {@link AdGuardManagedSupervisor} (tests pass one with fake
+   * acquire/spawn seams), or `null` to force the not-managed contract. When
+   * omitted, {@link buildApp} builds one only in `managed` mode (else `null`)
+   * and never calls `bootstrap()`, so constructing the app spawns nothing.
+   */
+  adguardManaged?: AdGuardManagedSupervisor | null;
+  /**
+   * Inject the outbound {@link PolicyPushTransport} (#201/#257). When omitted,
+   * {@link buildApp} builds the live `timekpra`-over-SSH transport from settings
+   * (or the logging fallback when no SSH key exists yet). Tests inject one with
+   * a fake `adjustTimeToday` to exercise `POST /users/:userId/time-today`
+   * without SSH. An injected transport is left for its provider to dispose.
+   */
+  policyPush?: PolicyPushTransport;
+  /**
+   * Tuning/test seam for the `/api/events/stream` handshake (heartbeat
+   * interval, hello timeout, negotiated server protocol). Omitted in
+   * production; tests use it to exercise the N-1 refusal branches.
+   */
+  eventStream?: EventStreamOptions;
 }
 
 /**
@@ -96,6 +143,12 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     // Either way the id is bound to every request-scoped log line as `reqId`.
     requestIdHeader: REQUEST_ID_HEADER,
     genReqId: genRequestId,
+    // Opt-in trust of `X-Forwarded-*` so `request.ip` is the real client IP
+    // behind a trusted reverse proxy, keeping the per-IP failed-attempt
+    // limiter (auth login, /api/clients/enrol) per-attacker (#235). Default
+    // `false` is identical to Fastify's default — never trust a direct
+    // caller's forwarded headers on a LAN deployment.
+    trustProxy: settings.trustProxy,
   });
 
   // Open (and migrate) the policy store unless a handle was injected. buildApp
@@ -109,10 +162,14 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   // Outbound policy-push transport (#201): the live `timekpra`-over-SSH
   // dispatcher when the SSH key exists (#39), else the logging stub. It also
   // owns the offline-queue drainer + pooled SSH connections, torn down on close
-  // — before the db it reads from (when buildApp owns that db).
-  const policyPush = createPolicyPushTransport({ settings, db, log: app.log });
+  // — before the db it reads from (when buildApp owns that db). A test may
+  // inject one (e.g. with a fake `adjustTimeToday`); only the handle buildApp
+  // creates is disposed here, mirroring the `db` seam.
+  const policyPush =
+    options.policyPush ?? createPolicyPushTransport({ settings, db, log: app.log });
+  const ownsPolicyPush = options.policyPush === undefined;
   app.addHook("onClose", async () => {
-    policyPush.dispose();
+    if (ownsPolicyPush) policyPush.dispose();
     if (ownsDb) db.$client.close();
   });
 
@@ -124,13 +181,55 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   const eventHub = new EventHub();
   app.decorate("eventHub", eventHub);
 
+  // The managed-mode AdGuard Home supervisor (#96), read by
+  // GET /api/system/adguard-managed. Built only in `managed` mode (else null);
+  // like ansibleVenv it is decorated here but bootstrapped by main.ts after
+  // listen, so constructing the app — including tests — spawns no process. An
+  // explicitly-injected value (including null) is honoured as-is. Built before
+  // the AdGuard service so it can be wired in as the service's managed-instance
+  // source (#283).
+  const adguardManaged =
+    options.adguardManaged !== undefined
+      ? options.adguardManaged
+      : settings.adguard.mode === "managed"
+        ? createAdGuardManagedSupervisor({
+            dataDir: settings.adguard.dataDir,
+            bindAddr: settings.adguard.bindAddr,
+            adminPort: settings.adguard.adminPort,
+            ...(settings.adguard.version !== undefined
+              ? { version: settings.adguard.version }
+              : {}),
+          })
+        : null;
+  app.decorate("adguardManaged", adguardManaged);
+  if (adguardManaged !== null) {
+    app.addHook("onClose", async () => {
+      await adguardManaged.stop();
+    });
+  }
+
   // Route the configured AdGuard mode (#95) and decorate it so the /api/dns
-  // route reads one snapshot. The external-mode preflight runs once the app is
-  // ready (after listen/inject triggers onReady); disabled/managed are no-ops.
-  const adguard = options.adguard ?? createAdGuardService(settings.adguard);
+  // route reads one snapshot. In `managed` mode the supervisor above is wired in
+  // as the service's running-instance source (#283), so getClient()/runPreflight
+  // target the supervised endpoint. The preflight runs once the app is ready
+  // (after listen/inject triggers onReady); disabled is a no-op.
+  const adguard =
+    options.adguard ??
+    createAdGuardService(
+      settings.adguard,
+      adguardManaged !== null ? { managed: adguardManaged } : {},
+    );
   app.decorate("adguard", adguard);
   app.addHook("onReady", async () => {
     await adguard.runPreflight(app.log);
+  });
+
+  // The managed-mode health poller (#283) is started by main.ts after listen
+  // (not here, so building the app starts no timer); buildApp owns only its
+  // teardown. Initialised null and stopped on close if main.ts wired it.
+  app.decorate("adguardHealthPoll", null);
+  app.addHook("onClose", async () => {
+    app.adguardHealthPoll?.stop();
   });
 
   // The first-run Ansible venv bootstrap supervisor (#39), read by
@@ -160,7 +259,14 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   // within this prefix, leaving /, /healthz, /admin and /app untouched. Auth
   // (#52) is wired inside this scope and needs the settings (PCT_SECRET_KEY,
   // first-admin bootstrap) threaded through.
-  registerApi(app, settings, eventHub, policyPush.dispatcher);
+  registerApi(
+    app,
+    settings,
+    eventHub,
+    policyPush.dispatcher,
+    policyPush.adjustTimeToday,
+    options.eventStream,
+  );
 
   // Serve the prerendered SvelteKit build at /admin and /app (#40). Skipped
   // (with a warning) when the build directory is absent, so /, /healthz, and

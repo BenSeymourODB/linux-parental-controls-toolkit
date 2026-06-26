@@ -23,10 +23,16 @@ import {
   activityKindSchema,
   budgetWindowSchema,
   matchTypeSchema,
+  platformSchema,
   scheduleActionSchema,
   scopeSchema,
+  soundProfileSchema,
   type MatchType,
 } from "../../policy/enums.js";
+import {
+  defaultNotificationPolicy,
+  notificationGraceSecondsSchema,
+} from "../../policy/notification.js";
 import {
   scheduleRecurrenceSchema,
   minuteOfDaySchema,
@@ -41,6 +47,7 @@ import type {
   GroupBudgetRow,
   GroupExceptionRow,
   GroupScheduleRow,
+  NotificationPolicyRow,
   ScheduleRow,
   UserGroupRow,
   UserOnClientRow,
@@ -113,6 +120,21 @@ export const clientResponseSchema = z.object({
   sshUser: z.string(),
   enrolledAt: z.string(),
   lastSeen: z.string().nullable(),
+  /**
+   * Whether this client has been through the enrolment exchange
+   * (`POST /api/clients/enrol`) — true once it holds a bearer token. A client
+   * created through the admin CRUD escape hatch (`POST /api/clients`) has not,
+   * so it carries no event-stream credential and no supervised-user links until
+   * a real enrolment claims it. Read-only; surfaced so the admin UI can mark a
+   * manual record as not-yet-enrolled.
+   */
+  enrolled: z.boolean(),
+  /**
+   * The client's OS family (#229) — `linux` today, `windows` reserved. Read-only
+   * and always `linux` until a Windows enforcement client exists (epic #233);
+   * surfaced so the admin UI can render a per-client OS badge.
+   */
+  platform: platformSchema,
 });
 
 export type CreateClientRequest = z.infer<typeof createClientSchema>;
@@ -127,6 +149,8 @@ export function toClientResponse(row: ClientRow): ClientResponse {
     sshUser: row.sshUser,
     enrolledAt: row.enrolledAt.toISOString(),
     lastSeen: row.lastSeen === null ? null : row.lastSeen.toISOString(),
+    enrolled: row.bearerTokenHash !== null,
+    platform: row.platform,
   };
 }
 
@@ -447,6 +471,57 @@ export function toScheduleResponse(row: ScheduleRow): ScheduleResponse {
   };
 }
 
+// --- Schedule ordering (#63) -----------------------------------------------
+
+/**
+ * Atomic reorder body: the user's schedule ids in their new evaluation order
+ * (first wins). Completeness and uniqueness against the user's actual rows are
+ * checked server-side by `reorder()` (a 409 on mismatch), which gives a precise
+ * error a per-field schema can't — so this only asserts a non-empty list of ids.
+ */
+export const reorderSchedulesSchema = z.object({
+  orderedIds: z.array(z.number().int().positive()).min(1),
+});
+export type ReorderSchedulesRequest = z.infer<typeof reorderSchedulesSchema>;
+
+/**
+ * A later schedule rule that an earlier one renders unreachable — the wire form
+ * of `policy/schedule-precedence.ts`'s `ShadowFinding`, feeding the editor's
+ * "this rule will never apply" warning.
+ */
+export const shadowFindingSchema = z.object({
+  shadowedId: z.number().int(),
+  shadowedById: z.number().int(),
+});
+export type ShadowFindingDto = z.infer<typeof shadowFindingSchema>;
+
+/**
+ * A user's schedules in evaluation order, plus the two derived facts the
+ * drag-to-reorder editor (#63) renders without re-implementing precedence:
+ * `shadows` — rules an earlier rule provably pre-empts — and `effectiveIds` —
+ * the rule in effect *right now* for each distinct target. Both are computed
+ * server-side from the shared precedence module so every surface agrees.
+ */
+export const scheduleOrderViewSchema = z.object({
+  schedules: z.array(scheduleResponseSchema),
+  shadows: z.array(shadowFindingSchema),
+  effectiveIds: z.array(z.number().int()),
+});
+export type ScheduleOrderView = z.infer<typeof scheduleOrderViewSchema>;
+
+/** Assemble a {@link ScheduleOrderView} from ordered rows + the derived facts. */
+export function toScheduleOrderView(
+  rows: readonly ScheduleRow[],
+  shadows: readonly ShadowFindingDto[],
+  effectiveIds: readonly number[],
+): ScheduleOrderView {
+  return {
+    schedules: rows.map(toScheduleResponse),
+    shadows: shadows.map((s) => ({ shadowedId: s.shadowedId, shadowedById: s.shadowedById })),
+    effectiveIds: [...effectiveIds],
+  };
+}
+
 // --- Exceptions ------------------------------------------------------------
 
 /**
@@ -524,6 +599,69 @@ export function toExceptionResponse(row: ExceptionRow): ExceptionResponse {
   };
 }
 
+// --- Notification policy (#104) --------------------------------------------
+
+/**
+ * Per-user notification settings (`docs/client-notifications.md` →
+ * "Configuration knobs"). Bounds and the sound-profile enum come from their
+ * single source (`policy/notification.ts`, `policy/enums.ts`) so the wire
+ * contract, the storage `CHECK`, and the synthesized defaults can't drift.
+ *
+ * `cadenceOverrides` is an optional object of per-budget warning-cadence
+ * overrides (the override grammar itself is the agent's concern, #103); `null`
+ * means "use the built-in 15/5/1-minute cadence".
+ */
+const cadenceOverridesSchema = z.record(z.string(), z.unknown());
+
+/**
+ * Notification-policy upsert body (`PUT`). Every field is optional: an omitted
+ * field takes the documented default on first write, or is left unchanged on a
+ * later write. The body must carry at least one field.
+ */
+export const upsertNotificationPolicySchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    soundProfile: soundProfileSchema.optional(),
+    graceSeconds: notificationGraceSecondsSchema.optional(),
+    // Present (incl. explicit null) ⇒ change; absent ⇒ leave unchanged.
+    cadenceOverrides: cadenceOverridesSchema.nullable().optional(),
+  })
+  .refine(nonEmpty, { message: "At least one field must be provided" });
+
+export const notificationPolicyResponseSchema = z.object({
+  userId: z.number().int(),
+  enabled: z.boolean(),
+  soundProfile: soundProfileSchema,
+  graceSeconds: z.number().int(),
+  cadenceOverrides: cadenceOverridesSchema.nullable(),
+});
+
+export type UpsertNotificationPolicyRequest = z.infer<typeof upsertNotificationPolicySchema>;
+export type NotificationPolicyResponse = z.infer<typeof notificationPolicyResponseSchema>;
+
+/** Map a stored notification-policy row to its wire DTO. */
+export function toNotificationPolicyResponse(
+  row: NotificationPolicyRow,
+): NotificationPolicyResponse {
+  return {
+    userId: row.userId,
+    enabled: row.enabled,
+    soundProfile: row.soundProfile,
+    graceSeconds: row.graceSeconds,
+    cadenceOverrides: row.cadenceOverridesJson ?? null,
+  };
+}
+
+/**
+ * The effective notification policy for a user when no row is persisted — the
+ * documented defaults. Every user always *has* an effective policy; it sits at
+ * defaults until the admin customises it.
+ */
+export function defaultNotificationPolicyResponse(userId: number): NotificationPolicyResponse {
+  const defaults = defaultNotificationPolicy();
+  return { userId, ...defaults };
+}
+
 // --- Group schedules (#182) ------------------------------------------------
 // Group-targeted recurring rules (ADR 0007). Identical to the user-keyed
 // schedule DTOs minus `userId` — the owning group comes from the
@@ -576,6 +714,38 @@ export function toGroupScheduleResponse(row: GroupScheduleRow): GroupScheduleRes
     effectiveFrom: row.effectiveFrom === null ? null : row.effectiveFrom.toISOString(),
     effectiveTo: row.effectiveTo === null ? null : row.effectiveTo.toISOString(),
     ordinal: row.ordinal,
+  };
+}
+
+// --- Group schedule ordering (#270) ----------------------------------------
+
+/**
+ * A group's schedules in evaluation order, plus the **structural** shadow
+ * findings — the group counterpart of {@link ScheduleOrderView} (#63),
+ * consumed by the group drag-to-reorder editor.
+ *
+ * It deliberately omits `effectiveIds`: a group has no single timezone (members
+ * may sit in different zones), so "in effect right now" is only meaningful once
+ * resolved per member (`GET /users/:userId/effective`), not for the group as a
+ * whole. `shadows` is purely structural (identical recurrence window + target
+ * superset; no tz, no instant — see `policy/schedule-precedence.ts`), so it
+ * stays fully meaningful here. The precedence math stays in one place; this
+ * view never re-derives it.
+ */
+export const groupScheduleOrderViewSchema = z.object({
+  schedules: z.array(groupScheduleResponseSchema),
+  shadows: z.array(shadowFindingSchema),
+});
+export type GroupScheduleOrderView = z.infer<typeof groupScheduleOrderViewSchema>;
+
+/** Assemble a {@link GroupScheduleOrderView} from ordered rows + the shadow facts. */
+export function toGroupScheduleOrderView(
+  rows: readonly GroupScheduleRow[],
+  shadows: readonly ShadowFindingDto[],
+): GroupScheduleOrderView {
+  return {
+    schedules: rows.map(toGroupScheduleResponse),
+    shadows: shadows.map((s) => ({ shadowedId: s.shadowedId, shadowedById: s.shadowedById })),
   };
 }
 
@@ -680,4 +850,87 @@ export function toGroupBudgetResponse(row: GroupBudgetRow): GroupBudgetResponse 
     window: row.window,
     secondsAllowed: row.secondsAllowed,
   };
+}
+
+// --- "Add time today" same-day adjustment (#257) ---------------------------
+
+/**
+ * The most a single adjustment may add, subtract, or set — one day in seconds.
+ * `timekpra` tracks today's remaining time, so anything beyond a day is a
+ * fat-finger rather than a real intent; the bound keeps the lever sane.
+ */
+export const TIME_TODAY_MAX_SECONDS = 86_400;
+
+/**
+ * Body of `POST /users/:userId/time-today`: adjust the user's **remaining time
+ * for today** on their linked client(s), without touching the standing daily
+ * `Budget` (#257). Exactly one of:
+ *
+ * - `deltaSeconds` — a signed, non-zero adjustment (`+1800` = "+30 min",
+ *   `-600` = "take back 10 min"), or
+ * - `setSeconds` — set today's remaining time outright (`0` = lock out now).
+ *
+ * `clientId`, when given, restricts the adjustment to that one linked client;
+ * omitted, it applies to every client the user is linked to.
+ */
+export const adjustTimeTodaySchema = z
+  .object({
+    deltaSeconds: z
+      .number()
+      .int()
+      .min(-TIME_TODAY_MAX_SECONDS)
+      .max(TIME_TODAY_MAX_SECONDS)
+      .refine((n) => n !== 0, { message: "deltaSeconds must be non-zero" })
+      .optional(),
+    setSeconds: z.number().int().min(0).max(TIME_TODAY_MAX_SECONDS).optional(),
+    clientId: z.number().int().positive().optional(),
+  })
+  .refine((b) => (b.deltaSeconds === undefined) !== (b.setSeconds === undefined), {
+    message: "Provide exactly one of deltaSeconds or setSeconds",
+  });
+
+/** The `timekpra --settimeleft` operation: `+`/`-` delta, or `=` set. */
+export const timeLeftOperationSchema = z.enum(["+", "-", "="]);
+
+/** Per-client outcome of an adjustment (mirrors the transport service result).
+ * `queued` is the offline-queue variant (#274): the client was unreachable, so
+ * the adjustment was durably queued for idempotent replay on reconnect. */
+export const clientAdjustmentResultSchema = z.object({
+  clientId: z.number().int(),
+  osUsername: z.string(),
+  status: z.enum(["applied", "queued", "unreachable", "failed"]),
+  error: z.string().optional(),
+});
+
+/** Response of `POST /users/:userId/time-today`: the resolved op + per-client results. */
+export const timeTodayResponseSchema = z.object({
+  userId: z.number().int(),
+  operation: timeLeftOperationSchema,
+  // The applied magnitude in seconds — always the non-negative count passed to
+  // `--settimeleft`, bounded like the request (one day max).
+  seconds: z.number().int().min(0).max(TIME_TODAY_MAX_SECONDS),
+  results: z.array(clientAdjustmentResultSchema),
+});
+
+export type AdjustTimeTodayRequest = z.infer<typeof adjustTimeTodaySchema>;
+export type ClientAdjustmentResultDto = z.infer<typeof clientAdjustmentResultSchema>;
+export type TimeTodayResponse = z.infer<typeof timeTodayResponseSchema>;
+
+/**
+ * Resolve the request body to the `timekpra --settimeleft` operation + a
+ * non-negative second count. A positive delta adds (`+`), a negative delta
+ * subtracts (`-`) its magnitude, and `setSeconds` sets outright (`=`). The DTO's
+ * `refine` guarantees exactly one branch applies.
+ */
+export function toTimeLeftCommand(body: AdjustTimeTodayRequest): {
+  operation: z.infer<typeof timeLeftOperationSchema>;
+  seconds: number;
+} {
+  if (body.deltaSeconds !== undefined) {
+    return body.deltaSeconds >= 0
+      ? { operation: "+", seconds: body.deltaSeconds }
+      : { operation: "-", seconds: -body.deltaSeconds };
+  }
+  // The refine guarantees setSeconds is present when deltaSeconds is not.
+  return { operation: "=", seconds: body.setSeconds ?? 0 };
 }
