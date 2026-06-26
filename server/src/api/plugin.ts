@@ -11,15 +11,23 @@ import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import { registerAuth } from "../auth/index.js";
 import type { Settings } from "../config.js";
 import { registerEventStream, type EventHub } from "../events/index.js";
+import type { TimeTodayAdjuster } from "../transport/policy-push/index.js";
 import type { PolicyPushStub } from "../transport/stub.js";
 import { registerAuditRoutes } from "./audit/index.js";
 import { registerClientEnrolmentRoutes, registerClientHealthRoutes } from "./clients/index.js";
 import { registerDnsRoutes } from "./dns/index.js";
 import { registerIntegrationRoutes } from "./integrations/index.js";
 import { registerMetaRoute } from "./meta.js";
-import { registerEffectiveRoutes, registerPolicyRoutes } from "./policy/index.js";
+import {
+  registerEffectiveRoutes,
+  registerPolicyRoutes,
+  registerScheduleOrderRoutes,
+  registerPreviewRoutes,
+  registerTimeTodayRoutes,
+} from "./policy/index.js";
 import { registerRetentionRoutes } from "./retention/index.js";
 import { registerSystemRoutes } from "./system/index.js";
+import { registerUsageRoutes } from "./usage/index.js";
 import { installApiConventions } from "./validation.js";
 
 /** Options the `/api` plugin needs from its host app. */
@@ -38,6 +46,13 @@ export interface ApiPluginOptions {
    * back to the logging stub (#54).
    */
   policyPush?: PolicyPushStub;
+  /**
+   * The awaitable "Add time today" adjuster (#257), present only when the live
+   * transport is wired (SSH key exists). Absent in tests / before the SSH-key
+   * bootstrap (#39), where `POST /users/:userId/time-today` returns a
+   * `503 transport_unavailable`.
+   */
+  timeToday?: TimeTodayAdjuster;
 }
 
 /**
@@ -54,9 +69,24 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (scope, opt
   // The live SSH dispatcher (#201) is injected from buildApp; absent it, the
   // routes log the intended push (the Phase-2 stub) instead of dispatching.
   registerPolicyRoutes(scope, opts.policyPush);
+  // "Add time today" same-day lever (#257): POST /users/:userId/time-today.
+  // The live `timekpra`-over-SSH adjuster is injected from buildApp; absent it,
+  // the route reports the transport as unavailable (503).
+  registerTimeTodayRoutes(scope, opts.timeToday);
   // Effective-policy preview (#143): GET /users/:userId/effective. Needs
   // `settings` for the server-default timezone of users with no `tz`.
   registerEffectiveRoutes(scope, opts.settings);
+  // Schedule drag-to-reorder editor support (#63): GET/PUT
+  // /users/:userId/schedules/order. Needs `settings` for the server-default
+  // timezone used to resolve which rule is in effect "right now".
+  registerScheduleOrderRoutes(scope, opts.settings);
+  // Usage views (#62): admin-only read of per-budget burndown + the
+  // per-activity timeline, the data source for the Phase-5 chart components.
+  // Needs `settings` for the server-default timezone of users with no `tz`.
+  registerUsageRoutes(scope, opts.settings);
+  // Save-and-push preview (#64): POST /users/:userId/policy-preview — the
+  // side-effect-free "what will change on each client" diff before a save.
+  registerPreviewRoutes(scope, opts.settings);
   // Client enrolment (#77): admin-minted token + the install script's enrol
   // exchange. `settings` carries the SSH-public-key path the enrol response returns.
   registerClientEnrolmentRoutes(scope, opts.settings);
@@ -95,6 +125,7 @@ export function registerApi(
   settings: Settings,
   eventHub: EventHub,
   policyPush?: PolicyPushStub,
+  timeToday?: TimeTodayAdjuster,
 ): void {
   app.register(apiPlugin, {
     prefix: "/api",
@@ -103,5 +134,6 @@ export function registerApi(
     // Spread only when present: under exactOptionalPropertyTypes an explicit
     // `undefined` is not assignable to the optional `policyPush?` field.
     ...(policyPush !== undefined ? { policyPush } : {}),
+    ...(timeToday !== undefined ? { timeToday } : {}),
   });
 }

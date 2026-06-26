@@ -25,6 +25,21 @@ export const scopeValues = ["overall", "activity", "group"] as const;
 export const scopeSchema = z.enum(scopeValues);
 export type Scope = z.infer<typeof scopeSchema>;
 
+/**
+ * The OS family an enrolled {@link Client} runs (#229).
+ *
+ * - `linux` — the only implemented enforcement target today, and the
+ *   **default** for every existing and newly enrolled client.
+ * - `windows` — **reserved**, not yet implemented; a Windows enforcement
+ *   client is the post-Phase-14 epic (#233). Reserving the value now keeps
+ *   the discriminator a trivial defaulted column instead of a
+ *   migrate-with-data problem once a fleet exists (cf. how #146 reserved the
+ *   recurrence columns ahead of need).
+ */
+export const platformValues = ["linux", "windows"] as const;
+export const platformSchema = z.enum(platformValues);
+export type Platform = z.infer<typeof platformSchema>;
+
 /** Rollover window for a {@link Budget}; resolved in the user's effective TZ. */
 export const budgetWindowValues = ["daily", "weekly", "monthly"] as const;
 export const budgetWindowSchema = z.enum(budgetWindowValues);
@@ -60,6 +75,22 @@ export type MatchType = z.infer<typeof matchTypeSchema>;
 export const scheduleActionValues = ["allow", "deny", "extend"] as const;
 export const scheduleActionSchema = z.enum(scheduleActionValues);
 export type ScheduleAction = z.infer<typeof scheduleActionSchema>;
+
+/**
+ * The client-side sound theme for a user's notifications, per
+ * `docs/client-notifications.md` → "Sound design":
+ *
+ * - `off` — no sounds at all.
+ * - `subtle` (default) — soft cues for routine warnings.
+ * - `prominent` — louder cues routed through a higher-volume channel, for a
+ *   user who routinely misses the subtle ones.
+ *
+ * The agent (#103) reads this from the pushed `NotificationPolicy` and the
+ * admin sets it from `/admin/notifications` (#105).
+ */
+export const soundProfileValues = ["off", "subtle", "prominent"] as const;
+export const soundProfileSchema = z.enum(soundProfileValues);
+export type SoundProfile = z.infer<typeof soundProfileSchema>;
 
 /**
  * Outcome of a transport command recorded in the audit log (#85), derived from

@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "b405f7f2-04b7-4a22-b4b9-53f52cef9627",
+  "id": "859567a4-27a7-426c-bdc9-842489106041",
   "prevId": "9c16c988-d8c9-40e3-b4b5-828f44a192a3",
   "tables": {
     "activities": {
@@ -1227,7 +1227,7 @@
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
-          "default": "'default'"
+          "default": "'subtle'"
         },
         "grace_seconds": {
           "name": "grace_seconds",
@@ -1235,7 +1235,7 @@
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
-          "default": 60
+          "default": 15
         },
         "cadence_overrides_json": {
           "name": "cadence_overrides_json",
@@ -1264,58 +1264,13 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "checkConstraints": {
+        "notification_policies_sound_profile_check": {
+          "name": "notification_policies_sound_profile_check",
+          "value": "\"notification_policies\".\"sound_profile\" in ('off', 'subtle', 'prominent')"
+        },
         "notification_policies_grace_check": {
           "name": "notification_policies_grace_check",
-          "value": "\"notification_policies\".\"grace_seconds\" >= 0"
-        }
-      }
-    },
-    "retention_overrides": {
-      "name": "retention_overrides",
-      "columns": {
-        "category": {
-          "name": "category",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "keep_forever": {
-          "name": "keep_forever",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": false
-        },
-        "days": {
-          "name": "days",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "(unixepoch())"
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {
-        "retention_overrides_category_check": {
-          "name": "retention_overrides_category_check",
-          "value": "\"retention_overrides\".\"category\" in ('usage_samples', 'grant_ledger', 'audit_log', 'date_overrides')"
-        },
-        "retention_overrides_coherence_check": {
-          "name": "retention_overrides_coherence_check",
-          "value": "(\"retention_overrides\".\"keep_forever\" = 1 and \"retention_overrides\".\"days\" is null) or (\"retention_overrides\".\"keep_forever\" = 0 and \"retention_overrides\".\"days\" > 0)"
+          "value": "\"notification_policies\".\"grace_seconds\" between 0 and 60"
         }
       }
     },

@@ -30,6 +30,7 @@ import {
   buildSetPlayTimeLimitOverride,
   buildSetPlayTimeLimits,
   buildSetPlayTimeUnaccountedIntervalsEnabled,
+  buildSetTimeLeft,
   buildSetTimeLimits,
   buildSetTimeLimitMonth,
   buildSetTimeLimitWeek,
@@ -38,6 +39,7 @@ import {
   type AllowedHoursDay,
   type IsoWeekday,
   type PlayTimeActivity,
+  type TimeLeftOperation,
 } from "./commands.js";
 import { TimekprArgumentError } from "./errors.js";
 import { timekprUserInfoSchema, type TimekprUserInfo } from "./userinfo.js";
@@ -169,6 +171,16 @@ export class TimekprClient {
   /** Set the rolling monthly session-time limit in seconds (`--settimelimitmonth`). */
   setTimeLimitMonth(seconds: number): Promise<ExecResult> {
     return this.#exec(() => buildSetTimeLimitMonth(this.#username, seconds));
+  }
+
+  /**
+   * Adjust or set the user's **remaining time for today** (`--settimeleft`) —
+   * the same-day "add 30 minutes" / "set time left" lever (#257), independent of
+   * the standing daily limit. `operation` is `"+"`/`"-"` for an additive delta
+   * or `"="` to set outright; `seconds` is a non-negative count.
+   */
+  setTimeLeft(operation: TimeLeftOperation, seconds: number): Promise<ExecResult> {
+    return this.#exec(() => buildSetTimeLeft(this.#username, operation, seconds));
   }
 
   /** Enable or disable PlayTime (app-group time) for the user (`--setplaytimeenabled`). */

@@ -256,6 +256,14 @@ overall policy and pushes it over the SSH + `timekpra` transport:
 - recorded in the **audit log** (#85): every issued command, with attribution,
   for the admin Clients/audit views.
 
+Removing a user↔client link is an **unmanage** push (#253): the deleting route
+captures the supervised account's `os_username` before the link cascades
+away and the executor pushes a fully-**unrestricted** `timekpra` config (the
+whole day every day, rolling caps at their maxima) so an unlinked account isn't
+left enforced by whatever limits were last pushed. This is deliberately *not* a
+session-kill or a zero limit — full lockout is a Phase-8c concern, the opposite
+intent — and it rides the same offline queue + audit log as every other push.
+
 The push is **fire-and-forget** from the HTTP handler — a mutation does not block
 on SSH round-trips to (possibly offline) clients; durability for offline clients
 comes from the queue + the periodic drainer. The live transport needs the
@@ -265,6 +273,36 @@ falls back to the **logging stub** (`server/src/transport/stub.ts`, #54,
 works (the change is logged, not dispatched). The file-level Ansible push
 (step 4) is still Phase 6, and PlayTime / per-activity limits are Phase 8 — both
 plug into the same call sites without reshaping them.
+
+#### "Add time today" — the same-day adjustment lever (#257)
+
+`POST /api/users/:userId/time-today` is a manual admin action that adjusts a
+supervised user's **remaining time for today** (`timekpra --settimeleft USER
+(+|-|=) SECONDS`) on their linked client(s) — the pre-Grant-ledger bonus / unlock
+affordance (#185). It does **not** change the standing daily `Budget`; it is a
+same-day, ephemeral nudge that Timekpr forgets at the daily rollover. The durable,
+auditable, idempotent path is the **Grant ledger** (Phase 10), which supersedes
+this lever.
+
+Two ways it deliberately differs from the standing policy push above:
+
+- **Awaitable, not fire-and-forget.** The admin clicked "give Alice 30 more
+  minutes" and wants to know it took, so the route awaits the transport and
+  returns a per-client `applied | unreachable | failed` result.
+- **Online-only — _not_ routed through the offline queue.** The queue (#84) is
+  at-least-once with coalescing and therefore requires **idempotent** executors;
+  the standing push satisfies that by setting *absolute* limits. An additive
+  `--settimeleft +N` is **not** idempotent — a crash-then-replay would
+  double-apply and coalescing two queued adjustments would drop one. So an
+  adjustment to an unreachable client is reported as `unreachable` rather than
+  queued. (A queue-safe absolute-target variant could be added later if a
+  same-day adjustment to an offline client is ever wanted; tracked as a
+  follow-up.)
+
+Both paths are still recorded in the **audit log** (#85) — the `--settimeleft`
+command is attributed to `actor: "admin"`, `reason: "time.adjusted"`. When the
+live transport isn't wired (no SSH key yet), the route returns `503
+transport_unavailable` rather than silently no-op'ing.
 
 ### Inbound (client → server) — telemetry pull
 

@@ -36,11 +36,20 @@ import {
   auditOutcomeValues,
   budgetWindowValues,
   matchTypeValues,
+  platformValues,
   retentionCategoryValues,
   scheduleActionValues,
   scopeValues,
+  soundProfileValues,
   transportQueueStatusValues,
 } from "./enums.js";
+import {
+  DEFAULT_GRACE_SECONDS,
+  DEFAULT_NOTIFICATION_ENABLED,
+  DEFAULT_SOUND_PROFILE,
+  GRACE_SECONDS_MAX,
+  GRACE_SECONDS_MIN,
+} from "./notification.js";
 import {
   MINUTE_OF_DAY_MAX,
   MINUTE_OF_DAY_MIN,
@@ -105,6 +114,11 @@ export const users = sqliteTable("users", {
  * that doesn't report versions (an older install script, an admin-CRUD client)
  * still enrols; `versions_reported_at` is set only when at least one version is
  * reported. `component_versions` is a JSON blob keyed by managed component.
+ *
+ * `platform` (#229) is the OS-family discriminator — `linux` today, `windows`
+ * reserved (post-Phase-14 epic #233). It defaults to `linux` so every existing
+ * row and every current enrolment carries it without a backfill; reserving it
+ * now keeps a future per-platform transport/UI branch off a schema migration.
  */
 export interface ComponentVersions {
   // `| undefined` on each optional field so this lines up with the zod-inferred
@@ -126,6 +140,7 @@ export const clients = sqliteTable(
     agentVersion: text("agent_version"),
     componentVersions: text("component_versions", { mode: "json" }).$type<ComponentVersions>(),
     versionsReportedAt: integer("versions_reported_at", { mode: "timestamp" }),
+    platform: text("platform", { enum: platformValues }).notNull().default("linux"),
   },
   (table) => [
     uniqueIndex("clients_hostname_unique").on(table.hostname),
@@ -134,6 +149,7 @@ export const clients = sqliteTable(
     // by construction. SQLite treats multiple NULLs as distinct, so the
     // admin-CRUD clients that carry no bearer token are unaffected.
     uniqueIndex("clients_bearer_token_hash_unique").on(table.bearerTokenHash),
+    check("clients_platform_check", oneOf(table.platform, platformValues)),
   ],
 );
 
@@ -647,10 +663,19 @@ export const adminCredentials = sqliteTable(
 );
 
 /**
- * Per-user knobs for the client-side notification experience (Phase 8b).
- * 1:1 with {@link users} (the `user_id` is the primary key).
- * `cadence_overrides_json` is an optional JSON blob of warning-cadence
- * overrides; NULL means "use the built-in 15/5/1-minute cadence".
+ * Per-user knobs for the client-side notification experience (#104, Phase 8b).
+ * 1:1 with {@link users} (the `user_id` is the primary key). The values and
+ * their defaults come from `docs/client-notifications.md` → "Configuration
+ * knobs" (the authoritative source); the shared bounds/defaults live in
+ * {@link ./notification.ts} so the storage `CHECK` and the API DTOs read one
+ * source.
+ *
+ * - `enabled` — master switch, default `true`.
+ * - `sound_profile` — `off` / `subtle` / `prominent` ({@link soundProfileValues}),
+ *   default `subtle`; a `CHECK` pins it to the enum the DTO validates against.
+ * - `grace_seconds` — 0–60, default 15 (0 disables the grace countdown).
+ * - `cadence_overrides_json` — optional JSON blob of warning-cadence overrides;
+ *   NULL means "use the built-in 15/5/1-minute cadence".
  */
 export const notificationPolicies = sqliteTable(
   "notification_policies",
@@ -658,14 +683,29 @@ export const notificationPolicies = sqliteTable(
     userId: integer("user_id")
       .primaryKey()
       .references(() => users.id, { onDelete: "cascade" }),
-    enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
-    soundProfile: text("sound_profile").notNull().default("default"),
-    graceSeconds: integer("grace_seconds").notNull().default(60),
+    enabled: integer("enabled", { mode: "boolean" })
+      .notNull()
+      .default(DEFAULT_NOTIFICATION_ENABLED),
+    soundProfile: text("sound_profile", { enum: soundProfileValues })
+      .notNull()
+      .default(DEFAULT_SOUND_PROFILE),
+    graceSeconds: integer("grace_seconds").notNull().default(DEFAULT_GRACE_SECONDS),
     cadenceOverridesJson: text("cadence_overrides_json", { mode: "json" }).$type<
       Record<string, unknown>
     >(),
   },
-  (table) => [check("notification_policies_grace_check", sql`${table.graceSeconds} >= 0`)],
+  (table) => [
+    check(
+      "notification_policies_sound_profile_check",
+      oneOf(table.soundProfile, soundProfileValues),
+    ),
+    // Grace period is a whole number of seconds in [0, 60] (ADR knobs: 0
+    // disables the countdown, 60 is the documented ceiling).
+    check(
+      "notification_policies_grace_check",
+      sql`${table.graceSeconds} between ${sql.raw(String(GRACE_SECONDS_MIN))} and ${sql.raw(String(GRACE_SECONDS_MAX))}`,
+    ),
+  ],
 );
 
 /**
