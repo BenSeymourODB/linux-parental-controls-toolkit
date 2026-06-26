@@ -3,25 +3,45 @@
 
   Shown after the admin logs in when the Ansible venv bootstrap is still
   in progress. Presentational: the parent owns polling and passes the
-  current status snapshot. Two states:
+  current status snapshot. Three states:
 
   - bootstrapping / idle  → indeterminate progress bar + informational copy
+  - bootstrapping / idle + timed out → same bar + "Continue" escape hatch
   - unavailable           → error detail + "Continue to dashboard" escape hatch
 
   The "continue" escape hatch matters because Ansible is required only for
   the client-configuration features; the rest of the dashboard is usable
   without it.
+
+  A 5-minute internal timeout surfaces the escape hatch even while still
+  bootstrapping/idle, guarding against a permanently-stalled install that
+  would otherwise pin the admin on this screen indefinitely.
 -->
 <script lang="ts">
+  import { onMount } from "svelte";
   import type { AnsibleVenvStatusResponse } from "$lib/api/contract.js";
 
   interface Props {
     status: AnsibleVenvStatusResponse;
-    /** Called when the user accepts an error and wants to proceed to the dashboard. */
+    /** Called when the user accepts an error/timeout and wants to proceed to the dashboard. */
     oncontinue: () => void;
   }
 
   let { status, oncontinue }: Props = $props();
+
+  // Surface the escape hatch after 5 minutes of bootstrapping/idle with no
+  // terminal transition — guards against a silently-stalled install.
+  const TIMEOUT_MS = 5 * 60 * 1000;
+  let timedOut = $state(false);
+
+  onMount(() => {
+    if (status.state !== "unavailable") {
+      const handle = setTimeout(() => {
+        timedOut = true;
+      }, TIMEOUT_MS);
+      return () => clearTimeout(handle);
+    }
+  });
 </script>
 
 <main class="setup">
@@ -43,9 +63,17 @@
       <div class="bar-track" role="progressbar" aria-label="Installing Ansible…">
         <div class="bar-fill"></div>
       </div>
-      <p class="status">
-        Installing Ansible — this only happens once and may take a few minutes.
-      </p>
+      {#if timedOut}
+        <p class="warning" role="status">
+          Ansible is taking longer than expected. Client configuration features won't be available
+          until it finishes, but you can use the rest of the dashboard now.
+        </p>
+        <button onclick={oncontinue}>Continue to dashboard</button>
+      {:else}
+        <p class="status">
+          Installing Ansible — this only happens once and may take a few minutes.
+        </p>
+      {/if}
     {/if}
   </div>
 </main>
@@ -105,6 +133,15 @@
     margin: 0;
     color: #6b7280;
     font-size: 0.875rem;
+  }
+  .warning {
+    margin: 0;
+    padding: 0.5rem 0.6rem;
+    border-radius: 0.4rem;
+    background: #fffbeb;
+    color: #92400e;
+    font-size: 0.85rem;
+    line-height: 1.5;
   }
   .error {
     margin: 0;

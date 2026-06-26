@@ -13,7 +13,7 @@
   the static shell.
 -->
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
   import { browser } from "$app/environment";
   import { ApiError } from "$lib/api/client.js";
   import { fetchSession, login, logout } from "$lib/api/auth.js";
@@ -119,6 +119,7 @@
   let username = $derived(session?.username ?? "admin");
 
   onMount(probeSession);
+  onDestroy(stopSetupPolling);
 
   async function probeSession(): Promise<void> {
     if (!browser) {
