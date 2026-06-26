@@ -9,8 +9,10 @@
  *
  * Layering: {@link ./decision.ts} is the pure core (compare + cool-down);
  * {@link ./evaluate.ts} is the read-only DB seam that feeds it from the policy
- * store. This module *decides* — emitting `enforce.force_close` after grace and
- * the SSH `pkill` fallback is #99, over the #100 event channel.
+ * store. The decision is *acted on* by the force-close trigger
+ * ({@link ./force-close.ts}, #99): after grace it emits `enforce.force_close`
+ * over the #100 event channel, or falls back to a user-scoped SSH `pkill`. Its
+ * live wiring is {@link ./force-close-deps.ts}.
  */
 export const moduleName = "enforcement";
 
@@ -25,3 +27,20 @@ export {
 } from "./decision.js";
 
 export { evaluateUserEnforcement, type EvaluateEnforcementInput } from "./evaluate.js";
+
+export {
+  ForceCloseTrigger,
+  type ForceCloseClient,
+  type ForceCloseActivity,
+  type ForceCloseDeps,
+  type ForceCloseLogger,
+} from "./force-close.js";
+
+export { buildPkillArgv } from "./force-close-pkill.js";
+
+export {
+  createForceCloseDeps,
+  type CreateForceCloseDepsOptions,
+  type ForceCloseEventHub,
+  type ForceClosePkillTransport,
+} from "./force-close-deps.js";
