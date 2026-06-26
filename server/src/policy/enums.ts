@@ -129,3 +129,31 @@ export type AuditOutcome = z.infer<typeof auditOutcomeSchema>;
 export const transportQueueStatusValues = ["pending", "failed"] as const;
 export const transportQueueStatusSchema = z.enum(transportQueueStatusValues);
 export type TransportQueueStatus = z.infer<typeof transportQueueStatusSchema>;
+
+/**
+ * The classes of *dated* data a retention window can target (#135/#136).
+ *
+ * The vocabulary is grounded in `docs/adr/0005-recurrence-and-date-scoping.md`
+ * §4: retention purges only rows that have an "age", never the recurrence
+ * rules themselves. So the categories are the dated tables that exist today:
+ *
+ * - `usage_samples` — ActivityWatch usage history (`usage_samples.ended_at`).
+ * - `grant_ledger` — the immutable {@link grants} ledger (`granted_at`).
+ * - `audit_log` — transport audit entries (`audit_log.at`).
+ * - `date_overrides` — date-specific policy rows whose effective window lies
+ *   wholly in the past: an `exception` past `expires_at`, or a `schedule` past
+ *   `effective_to`. A purely recurring schedule (no `effective_to`) has no age
+ *   and is out of retention's scope entirely (ADR 0005 §4).
+ *
+ * The epic (#135) named `schedule_history` / `budget_history` as illustrative
+ * examples; there are no such tables (schedules/budgets are live recurrence
+ * rules, not dated history), so they are deliberately not categories here.
+ */
+export const retentionCategoryValues = [
+  "usage_samples",
+  "grant_ledger",
+  "audit_log",
+  "date_overrides",
+] as const;
+export const retentionCategorySchema = z.enum(retentionCategoryValues);
+export type RetentionCategory = z.infer<typeof retentionCategorySchema>;

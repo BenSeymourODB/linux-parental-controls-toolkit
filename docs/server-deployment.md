@@ -431,6 +431,37 @@ it cannot write (e.g. an unwritable `/data/backups`) the server logs the error
 loudly and still migrates — the migrator's own failure remains the boot health
 gate — so disable it only if you snapshot `/data` externally.
 
+## Data retention
+
+The dashboard keeps a bounded history of *dated* data and lets the admin
+tune how long. Retention has two layers:
+
+- A **global default window**, set with `PCT_RETENTION_DEFAULT_DAYS`
+  (default `365` — one year). It applies to every retention category that
+  has no override. It must be a positive integer; an absurdly large value
+  is rejected at startup. "Effectively forever" is the per-category
+  keep-forever mode below, not a giant day count here.
+- **Per-category overrides**, stored in the policy DB and managed at
+  runtime through the admin API (`GET` / `PUT` / `DELETE
+  /api/retention/:category`). Each override is either a custom day count
+  or "keep forever". A category with no override inherits the default.
+
+The retention **categories** are the dated tables that have an "age"
+(grounded in [`docs/adr/0005-recurrence-and-date-scoping.md`](adr/0005-recurrence-and-date-scoping.md)
+§4 — recurrence rules themselves are *not* dated and are never purged):
+
+| Category         | What it covers                                                       |
+| ---------------- | -------------------------------------------------------------------- |
+| `usage_samples`  | ActivityWatch usage history                                          |
+| `grant_ledger`   | the immutable grant ledger                                           |
+| `audit_log`      | transport audit entries                                              |
+| `date_overrides` | date-specific policy rows wholly in the past (an exception past its expiry, a schedule past its `effective_to`) |
+
+This release ships the retention **configuration model and API** (#136);
+the scheduled purge job that acts on these windows lands separately
+(#137/#138). Only the global default lives in the environment — restart to
+change it; per-category overrides are runtime config and need no restart.
+
 ## Upgrade path
 
 `docker pull` a newer image tag and restart. The server applies any new

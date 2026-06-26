@@ -37,6 +37,7 @@ import {
   budgetWindowValues,
   matchTypeValues,
   platformValues,
+  retentionCategoryValues,
   scheduleActionValues,
   scopeValues,
   soundProfileValues,
@@ -805,5 +806,40 @@ export const transportQueue = sqliteTable(
     index("transport_queue_client_status_id_idx").on(table.clientId, table.status, table.id),
     check("transport_queue_status_check", oneOf(table.status, transportQueueStatusValues)),
     check("transport_queue_attempts_check", sql`${table.attempts} >= 0`),
+  ],
+);
+
+/**
+ * Per-category retention overrides (#136, epic #135).
+ *
+ * Retention has a global default window (env `PCT_RETENTION_DEFAULT_DAYS`, 365
+ * days) plus optional per-category overrides stored here — one row per
+ * {@link retentionCategoryValues} category that diverges from the default. A
+ * category with **no row** inherits the default; a row either pins a custom
+ * positive `days` count or sets `keep_forever`. The pure resolution rule and
+ * the `isExpired` predicate that the purge job (#137/#138) reuses live in
+ * `policy/retention.ts`; this table is just the persisted override layer.
+ *
+ * `category` is the primary key (at most one override per category). The
+ * coherence CHECK encodes the keepForever ⊕ days invariant the model also
+ * guards (`overrideToResolved`): keep-forever rows carry no day count, custom
+ * rows carry a positive one. `updated_at` is UTC epoch seconds (ADR 0001).
+ */
+export const retentionOverrides = sqliteTable(
+  "retention_overrides",
+  {
+    category: text("category", { enum: retentionCategoryValues }).primaryKey(),
+    keepForever: integer("keep_forever", { mode: "boolean" }).notNull().default(false),
+    days: integer("days"),
+    updatedAt: timestampNow("updated_at"),
+  },
+  (table) => [
+    check("retention_overrides_category_check", oneOf(table.category, retentionCategoryValues)),
+    // keepForever ⊕ days: keep-forever rows carry no day count; custom-window
+    // rows carry a strictly-positive one. Mirrors `overrideToResolved`.
+    check(
+      "retention_overrides_coherence_check",
+      sql`(${table.keepForever} = 1 and ${table.days} is null) or (${table.keepForever} = 0 and ${table.days} > 0)`,
+    ),
   ],
 );

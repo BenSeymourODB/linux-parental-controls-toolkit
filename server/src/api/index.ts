@@ -156,6 +156,19 @@ export {
   type ListAuditQuery,
 } from "./audit/index.js";
 
+// Retention-config DTOs (#136): the admin read/write contract for data-
+// retention windows. Schemas live in `./retention/dtos.ts` next to the routes.
+export {
+  retentionCategoryParamsSchema,
+  setRetentionOverrideSchema,
+  retentionEntryResponseSchema,
+  retentionConfigResponseSchema,
+  type RetentionCategoryParams,
+  type SetRetentionOverrideRequest,
+  type RetentionEntryResponse,
+  type RetentionConfigResponse,
+} from "./retention/index.js";
+
 // Usage-views DTOs (#62): the read-only contract for the admin burndown chart
 // and per-activity timeline. Schemas live in `./usage/dtos.ts` next to the route.
 export {

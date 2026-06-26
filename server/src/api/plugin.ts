@@ -25,6 +25,7 @@ import {
   registerPreviewRoutes,
   registerTimeTodayRoutes,
 } from "./policy/index.js";
+import { registerRetentionRoutes } from "./retention/index.js";
 import { registerSystemRoutes } from "./system/index.js";
 import { registerUsageRoutes } from "./usage/index.js";
 import { installApiConventions } from "./validation.js";
@@ -104,6 +105,9 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (scope, opt
   });
   // Transport audit log (#85): admin-only read of every command issued to a client.
   registerAuditRoutes(scope);
+  // Retention config (#136): admin-only read/write of data-retention windows.
+  // Needs `settings` for the global default window.
+  registerRetentionRoutes(scope, opts.settings);
   // DNS status (#95): admin-only read of the active AdGuard mode + health.
   registerDnsRoutes(scope);
   // System status (#39): admin-only read of first-run subsystem health (the
