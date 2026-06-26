@@ -807,11 +807,13 @@ export const adjustTimeTodaySchema = z
 /** The `timekpra --settimeleft` operation: `+`/`-` delta, or `=` set. */
 export const timeLeftOperationSchema = z.enum(["+", "-", "="]);
 
-/** Per-client outcome of an adjustment (mirrors the transport service result). */
+/** Per-client outcome of an adjustment (mirrors the transport service result).
+ * `queued` is the offline-queue variant (#274): the client was unreachable, so
+ * the adjustment was durably queued for idempotent replay on reconnect. */
 export const clientAdjustmentResultSchema = z.object({
   clientId: z.number().int(),
   osUsername: z.string(),
-  status: z.enum(["applied", "unreachable", "failed"]),
+  status: z.enum(["applied", "queued", "unreachable", "failed"]),
   error: z.string().optional(),
 });
 

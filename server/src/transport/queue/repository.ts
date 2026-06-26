@@ -55,6 +55,30 @@ export function enqueue(db: PolicyDb, action: NewQueuedAction): QueuedActionRow 
     .get();
 }
 
+/**
+ * Replace a queued row's `payload` in place (advancing `updated_at`), without
+ * touching its status / FIFO position. A *deferred-resolve* executor calls this
+ * to persist the part of its target it could only compute on first reconnect
+ * (e.g. an absolute `--settimeleft` value derived from a live `--userinfo` read)
+ * **before** issuing the command, so an at-least-once replay re-issues the same
+ * resolved target rather than recomputing a fresh delta. Returns whether a row
+ * was updated (`false` if it no longer exists).
+ */
+export function updateActionPayload(
+  db: PolicyDb,
+  id: number,
+  payload: Record<string, unknown>,
+): boolean {
+  return (
+    db
+      .update(transportQueue)
+      .set({ payload, updatedAt: new Date() })
+      .where(eq(transportQueue.id, id))
+      .returning({ id: transportQueue.id })
+      .get() !== undefined
+  );
+}
+
 /** A client's `pending` actions, oldest first — the order the drainer replays. */
 export function listPendingForClient(db: PolicyDb, clientId: number): QueuedActionRow[] {
   return db

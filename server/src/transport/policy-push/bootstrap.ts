@@ -26,7 +26,11 @@ import type { Settings } from "../../config.js";
 import type { PolicyDb } from "../../policy/db.js";
 import { getClient } from "../../policy/repository.js";
 import { AuditingTransport, DrizzleAuditSink, type AuditableTransport } from "../audit/index.js";
-import { startOfflineQueueDrainer, type ReachabilityProbe } from "../queue/index.js";
+import {
+  compositeExecutor,
+  startOfflineQueueDrainer,
+  type ReachabilityProbe,
+} from "../queue/index.js";
 import { SshError } from "../ssh/errors.js";
 import {
   SshTransport,
@@ -38,9 +42,12 @@ import { createPolicyPushStub } from "../stub.js";
 import type { PolicyPushStub } from "../stub.js";
 import {
   adjustTimeToday,
+  createTimeTodayExecutor,
+  TIME_TODAY_KIND,
   type TimeTodayAdjustment,
   type TimeTodayResult,
 } from "../time-today/index.js";
+import { POLICY_PUSH_KIND } from "../queue/policy-push.js";
 import { TimekprClient } from "../timekpr/index.js";
 import { createPolicyPushDispatcher } from "./dispatcher.js";
 import { createPolicyPushExecutor } from "./executor.js";
@@ -157,11 +164,42 @@ export function createPolicyPushTransport(
 
   const dispatcher = createPolicyPushDispatcher({ db, executor, log });
   const probe = sshReachabilityProbe(db, ssh, credentials);
-  const drainer = startOfflineQueueDrainer({ db, probe, executor, log });
+
+  // The queued same-day-adjustment executor (#274): resolves an absolute
+  // `--settimeleft` target on first reconnect and replays it idempotently. Runs
+  // over the same audited `timekpra` client as the online lever below.
+  const timeTodayExecutor = createTimeTodayExecutor({
+    db,
+    defaultTz: settings.defaultTz,
+    ...(options.now !== undefined ? { now: options.now } : {}),
+    buildClient: ({ client, username, userId }) =>
+      new TimekprClient(
+        auditing.withContext({
+          clientId: client.id,
+          userId,
+          actor: "admin",
+          reason: "time.adjusted",
+        }),
+        targetFromClient(client, credentials),
+        username,
+      ),
+  });
+
+  // The drainer replays both kinds: standing policy pushes and queued same-day
+  // adjustments. The dispatcher above only ever pushes `policy.push`, so it
+  // keeps driving that executor directly.
+  const drainExecutor = compositeExecutor({
+    [POLICY_PUSH_KIND]: executor,
+    [TIME_TODAY_KIND]: timeTodayExecutor,
+  });
+  const drainer = startOfflineQueueDrainer({ db, probe, executor: drainExecutor, log });
 
   // The same-day "Add time today" lever (#257): a synchronous, audited
-  // `--settimeleft` over the same audited SSH `timekpra` client, attributed to
-  // the admin. Online-only (see `time-today/adjust.ts` for why it is not queued).
+  // `--settimeleft` over the audited SSH `timekpra` client, attributed to the
+  // admin. With the offline-queue variant enabled (#274), a client that is
+  // unreachable at request time has the adjustment durably queued (resolved to
+  // an idempotent absolute target on reconnect by `timeTodayExecutor` above)
+  // rather than reported as a bare `unreachable`.
   const timeTodayAdjuster: TimeTodayAdjuster = (adjustment) =>
     adjustTimeToday(
       db,
@@ -177,6 +215,10 @@ export function createPolicyPushTransport(
           username,
         ),
       adjustment,
+      {
+        defaultTz: settings.defaultTz,
+        ...(options.now !== undefined ? { now: options.now } : {}),
+      },
     );
 
   return {
