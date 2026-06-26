@@ -76,8 +76,16 @@ export const REDACTED = "[redacted]";
  */
 export function redactArgv(argv: readonly string[]): string[] {
   const out: string[] = [];
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i] as string;
+  // `argv.entries()` yields a properly-typed `arg` (no `as string` cast,
+  // per CLAUDE.md). The value following a sensitive flag is masked and then
+  // skipped on the next iteration via `skipNext`, since a `for...of` loop
+  // can't advance its own index the way the old counter loop did.
+  let skipNext = false;
+  for (const [i, arg] of argv.entries()) {
+    if (skipNext) {
+      skipNext = false;
+      continue;
+    }
     const eq = arg.indexOf("=");
     if (eq > 0 && SENSITIVE_FLAG.test(arg.slice(0, eq))) {
       out.push(`${arg.slice(0, eq)}=${REDACTED}`);
@@ -86,7 +94,7 @@ export function redactArgv(argv: readonly string[]): string[] {
     out.push(arg);
     if (SENSITIVE_FLAG.test(arg) && i + 1 < argv.length) {
       out.push(REDACTED);
-      i += 1;
+      skipNext = true;
     }
   }
   return out;

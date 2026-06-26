@@ -78,7 +78,7 @@ describe("createPolicyPushExecutor", () => {
     db = testDb();
     const userId = createUser(db, { displayName: "Alice", tz: "UTC" }).id;
     const clientId = createClient(db, { hostname: "mint-01", sshUser: "pct-agent" }).id;
-    upsertLink(db, userId, clientId, { linuxUsername: "alice", linuxUid: 1001 });
+    upsertLink(db, userId, clientId, { osUsername: "alice", osUserRef: "1001" });
     return { userId, clientId };
   }
 
@@ -169,7 +169,7 @@ describe("createPolicyPushExecutor", () => {
     db = testDb();
     const userId = createUser(db, { displayName: "Bob", tz: null }).id;
     const clientId = createClient(db, { hostname: "mint-02", sshUser: "pct-agent" }).id;
-    upsertLink(db, userId, clientId, { linuxUsername: "bob", linuxUid: 1002 });
+    upsertLink(db, userId, clientId, { osUsername: "bob", osUserRef: "1002" });
     createSchedule(db, {
       userId,
       targetKind: "overall",

@@ -27,6 +27,7 @@ structural GPL license boundary — see `CLAUDE.md` → "License boundaries" and
 ```
 playbooks/
   activitywatch.yml          # #91 — deploy/upgrade AW as systemd --user units
+  apparmor-profiles.yml      # #92 — per-app hard-deny AppArmor profiles
   templates/                 # Jinja templates, resolved relative to the playbook
 molecule/
   default/                   # Molecule scenario (docker driver)
@@ -57,6 +58,35 @@ Variables of note (override via `--extra-vars`):
 | `aw_sha256`           | _(pinned)_         | Bundle checksum, verified before extract |
 | `aw_prefix`           | `/opt/activitywatch` | Install root                           |
 | `aw_host` / `aw_port` | `127.0.0.1` / `5600` | Loopback-only aw-server binding        |
+
+### `apparmor-profiles.yml` (#92)
+
+Drops AppArmor profiles that hard-block designated executables for the
+supervised users on a client — the AppArmor half of `docs/architecture.md` →
+"Per-app deny (hard block)" (the e2guardian web-filter half is #90). An empty
+profile in enforce mode grants the executable no permissions, so it cannot
+read/map its libraries and fails to start. Profiles are written under
+`/etc/apparmor.d/pct.d/`, loaded via `apparmor_parser`, and **reconciled** every
+run so a lifted deny removes its profile (the periodic re-apply scheduler, #93).
+
+The dashboard's `transport/ansible/apparmor.ts` builds the plan from policy and
+passes it whole as the `apparmor_plan` `--extra-vars` object:
+
+| Variable        | Default          | Purpose                                               |
+| --------------- | ---------------- | ----------------------------------------------------- |
+| `apparmor_plan` | `{"denials": []}` | The per-client plan: `denials[].{profileName,executable,blockedFor}` |
+
+AppArmor attaches per *executable*, not per Linux UID, so a profile blocks the
+binary client-wide; per-user attribution lives in the dashboard audit log, and
+true per-UID exec gating is a follow-up. In-scope per-app **blocking**
+enforcement only — it does not lock down `/etc`, `/usr`, or boot media against
+root (`CLAUDE.md` → "Tamper resistance is deliberately bounded").
+
+> **Live convergence test deferred.** AppArmor enforcement inside a container
+> needs a privileged, AppArmor-capable host; the Molecule scenario applying this
+> playbook against a real client is a tracked follow-up (mirroring the #90/#215
+> split for e2guardian). `ansible-lint` (production profile) and YAML/Jinja
+> parse cover it structurally today.
 
 ## Tests
 

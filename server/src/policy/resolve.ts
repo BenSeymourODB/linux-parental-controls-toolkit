@@ -41,10 +41,8 @@ import {
   localCalendarDate,
 } from "./budget-window.js";
 import type { BudgetWindow, Scope, ScheduleAction } from "./enums.js";
+import { MINUTES_PER_DAY } from "./recurrence.js";
 import { byOrdinal, type RuleActivePredicate, type ScheduleRule } from "./schedule-precedence.js";
-
-/** Minutes in a full day; the exclusive end of the intra-day window space. */
-const MINUTES_PER_DAY = 1440;
 
 /**
  * The subset of a {@link import("./schema.js").budgets} row the resolver reads.

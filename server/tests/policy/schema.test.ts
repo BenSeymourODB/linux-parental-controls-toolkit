@@ -121,6 +121,36 @@ describe("enum CHECK constraints", () => {
   });
 });
 
+describe("clients.platform reservation (#229)", () => {
+  it("defaults platform to 'linux' when unspecified", () => {
+    const row = db
+      .insert(clients)
+      .values({ hostname: "box-a", sshUser: "pct-agent" })
+      .returning()
+      .get();
+
+    expect(row?.platform).toBe("linux");
+  });
+
+  it("accepts and stores the reserved 'windows' value", () => {
+    const row = db
+      .insert(clients)
+      .values({ hostname: "box-b", sshUser: "pct-agent", platform: "windows" })
+      .returning()
+      .get();
+
+    expect(row?.platform).toBe("windows");
+  });
+
+  it("rejects a platform outside the tuple", () => {
+    expect(() =>
+      db.$client
+        .prepare("INSERT INTO clients (hostname, ssh_user, platform) VALUES (?,?,?)")
+        .run("box-c", "pct-agent", "macos"),
+    ).toThrow(/CHECK constraint/i);
+  });
+});
+
 describe("value & coherence constraints", () => {
   it("rejects a negative budget allowance but accepts zero", () => {
     const userId = insertUser();
@@ -485,13 +515,13 @@ describe("users_on_clients", () => {
     if (clientId === undefined) throw new Error("client insert returned no row");
 
     db.insert(usersOnClients)
-      .values({ userId: userA, clientId, linuxUsername: "alice", linuxUid: 1001 })
+      .values({ userId: userA, clientId, osUsername: "alice", osUserRef: "1001" })
       .run();
 
     expect(() =>
       db
         .insert(usersOnClients)
-        .values({ userId: userB, clientId, linuxUsername: "bob", linuxUid: 1001 })
+        .values({ userId: userB, clientId, osUsername: "bob", osUserRef: "1001" })
         .run(),
     ).toThrow(/UNIQUE constraint/i);
   });
@@ -604,13 +634,13 @@ describe("enrolment_tokens", () => {
     db.insert(enrolmentTokens)
       .values({
         tokenHash: "abc123",
-        supervisedUsers: [{ userId, linuxUsername: "alice" }],
+        supervisedUsers: [{ userId, osUsername: "alice" }],
         expiresAt: new Date("2026-12-31T00:00:00Z"),
       })
       .run();
     const row = db.select().from(enrolmentTokens).get();
 
-    expect(row?.supervisedUsers).toStrictEqual([{ userId, linuxUsername: "alice" }]);
+    expect(row?.supervisedUsers).toStrictEqual([{ userId, osUsername: "alice" }]);
     expect(row?.consumedAt).toBeNull();
     expect(row?.consumedClientId).toBeNull();
   });
@@ -639,15 +669,35 @@ describe("enrolment_tokens", () => {
 });
 
 describe("notification_policies", () => {
-  it("applies its column defaults", () => {
+  it("applies its documented column defaults (#104)", () => {
     const userId = insertUser();
     db.insert(notificationPolicies).values({ userId }).run();
     const row = db.select().from(notificationPolicies).get();
 
+    // Defaults match docs/client-notifications.md → "Configuration knobs":
+    // enabled on, subtle sounds, a 15-second grace period, no cadence override.
     expect(row?.enabled).toBe(true);
-    expect(row?.soundProfile).toBe("default");
-    expect(row?.graceSeconds).toBe(60);
+    expect(row?.soundProfile).toBe("subtle");
+    expect(row?.graceSeconds).toBe(15);
     expect(row?.cadenceOverridesJson).toBeNull();
+  });
+
+  it("rejects a sound profile outside the off/subtle/prominent enum", () => {
+    const userId = insertUser();
+    expect(() =>
+      db.$client
+        .prepare("INSERT INTO notification_policies (user_id, sound_profile) VALUES (?,?)")
+        .run(userId, "blaring"),
+    ).toThrow(/CHECK constraint/i);
+  });
+
+  it("rejects a grace period above the 60-second ceiling", () => {
+    const userId = insertUser();
+    expect(() =>
+      db.$client
+        .prepare("INSERT INTO notification_policies (user_id, grace_seconds) VALUES (?,?)")
+        .run(userId, 61),
+    ).toThrow(/CHECK constraint/i);
   });
 });
 

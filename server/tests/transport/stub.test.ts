@@ -40,8 +40,8 @@ describe("policy push command builders", () => {
   });
 
   it("linkPushCommands targets the one user/client pair", () => {
-    expect(linkPushCommands("link.upserted", 7, 9, { linuxUid: 1001 })).toEqual([
-      { clientId: 9, userId: 7, reason: "link.upserted", detail: { linuxUid: 1001 } },
+    expect(linkPushCommands("link.upserted", 7, 9, { osUserRef: "1001" })).toEqual([
+      { clientId: 9, userId: 7, reason: "link.upserted", detail: { osUserRef: "1001" } },
     ]);
   });
 });
