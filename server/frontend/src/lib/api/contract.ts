@@ -34,6 +34,9 @@ export type {
   ActivityGroupResponse,
   CreateActivityGroupRequest,
   UpdateActivityGroupRequest,
+  UserGroupResponse,
+  CreateUserGroupRequest,
+  UpdateUserGroupRequest,
   BudgetResponse,
   CreateBudgetRequest,
   UpdateBudgetRequest,
@@ -45,12 +48,17 @@ export type {
   ReorderSchedulesRequest,
   ShadowFindingDto,
   ScheduleOrderView,
+  GroupScheduleResponse,
+  CreateGroupScheduleRequest,
+  GroupScheduleOrderView,
   ExceptionResponse,
   CreateExceptionRequest,
   UpdateExceptionRequest,
   AdjustTimeTodayRequest,
   TimeTodayResponse,
   ClientAdjustmentResultDto,
+  NotificationPolicyResponse,
+  UpsertNotificationPolicyRequest,
 } from "../../../../src/api/policy/dtos.js";
 export type {
   PolicyPreviewRequest,
@@ -88,6 +96,7 @@ export type {
   Scope,
   BudgetWindow,
   ScheduleAction,
+  SoundProfile,
   AuditOutcome,
 } from "../../../../src/policy/enums.js";
 export type { ErrorEnvelope, ErrorDetail } from "../../../../src/api/errors.js";

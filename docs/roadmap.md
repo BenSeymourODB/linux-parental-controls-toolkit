@@ -442,6 +442,70 @@ client tools keep coming from the distro/PPA/upstream — `CLAUDE.md`,
 unchanged (these are *operations* features, not hardening —
 `docs/client-install.md`).
 
+## Alpha rollout — testing gates
+
+The phases above are the *build* plan; this section is the *release* plan —
+the points at which the toolkit is put in front of real users, and what must
+be true before each. Tracked operationally by the Alpha-1 readiness epic
+([#185](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/185)).
+
+### Alpha-1 — "screen-time dogfood" (maintainer + technical, forgiving households)
+
+The first real install: install on a Linux Mint box, enrol it, set per-child
+daily/weekly limits and allowed-hours, have Timekpr-nExT enforce them. **Time
+limits only** — no content filtering, no usage charts, no graceful
+notifications (the device-side Timekpr tray is the user-facing warning).
+Enforcement authority is Timekpr-nExT, not an agent (there is none yet).
+
+The core **set-limits → enforce → observe** loop is **code-complete**:
+install/enrol (#76/#77), live CRUD→SSH push (#201), audit log (#85), offline
+queue (#161), resolver (#176), version reporting (#164), first-run SSH keypair
+(#205), client health + Clients page + enrol flow (#196/#194), and the full
+`/admin` policy-editor UI — login + Users/Clients/Activities/Groups/Budgets/
+links/Schedules/Exceptions (#53 via #189/#244/#246) — have all landed.
+
+**Gate — remaining before first install:**
+
+- Live `timekpra`-over-SSH round-trip test (#157) — *the key confidence gate*:
+  the enforcement code is complete and unit-tested, but this confirms the CLI
+  grammar against the real binary before trusting it on a child's machine.
+- `/admin` smoke/e2e coverage — the one open quality slice of #53 (all editors
+  and login are functionally complete; `svelte-check` and the build are green).
+- "Add time today" same-day unlock lever
+  ([#257](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/257)).
+
+**Fast-follow (not blocking the first install):**
+
+- Save-and-push preview diff (#64) — policy already pushes on save, and client
+  health (#196/#194) + the audit log (#85) already let the admin confirm a
+  limit took effect, so the diff is a trust/UX nicety rather than a blocker.
+- Clear/unmanage a user's limits when a user↔client link is removed (#253).
+
+Assumes each child already has their own Linux account (the toolkit does not
+create OS accounts); per-child enforcement requires per-child accounts, since
+Timekpr/AW/e2guardian all key on the OS account.
+
+### Alpha-1.5 — add usage visibility (same trusted testers)
+
+**Gate: Phase 5 burndown.** AW event normalisation into `UsageSample`
+(#88) + the per-user burndown view (#62), on top of the telemetry transport
+that already landed (#86/#162). This is also the correctness check that makes
+alpha feedback trustworthy — until the admin can see "Alice used 1h52 of 2h,"
+there's no way to confirm enforcement matches reality.
+
+### Alpha-2 — "friends & family" (non-technical households)
+
+**Gate: Phase 8b + Phase 6 (+ Phase 8c).** Do not widen past technical testers
+until:
+
+- **Phase 8b** — the `pct-client` agent: warning cadence, grace period,
+  graceful per-app close. The raw Timekpr session-kill UX is the main reason
+  Alpha-1 is unfit for a non-technical household.
+- **Phase 6** — server-pushed e2guardian web filtering + tamper reversion;
+  "parental controls" without content filtering reads as incomplete.
+- **Phase 8c** — clean lockout / grant-unlock so "out of time → granted more →
+  back in" is seamless.
+
 ## Out of scope (for now)
 
 - Non-Linux **enforcement** clients (macOS, Windows, Chromebook). The

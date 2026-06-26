@@ -29,20 +29,13 @@ import { eq } from "drizzle-orm";
 
 import type { PolicyDb } from "../policy/db.js";
 import { localCalendarDate } from "../policy/budget-window.js";
+import { DEFAULT_GRACE_SECONDS } from "../policy/notification.js";
 import { effectivePolicy, type BudgetInput, type GrantInput } from "../policy/resolve.js";
 import type { ScheduleRule } from "../policy/schedule-precedence.js";
 import { budgets, grants, notificationPolicies, schedules } from "../policy/schema.js";
 import { groupSecondsInWindow, usageByActivityInWindow } from "../policy/usage.js";
 
 import { decideEnforcement, type EnforcementOutcome } from "./decision.js";
-
-/**
- * The schema default for `notification_policies.grace_seconds`, applied when a
- * user has no notification-policy row. One minute gives the supervised user a
- * short, predictable window to wrap up after the warning before enforcement
- * acts, without materially extending the budget.
- */
-const DEFAULT_GRACE_SECONDS = 60;
 
 /** Inputs to {@link evaluateUserEnforcement}. */
 export interface EvaluateEnforcementInput {
@@ -56,8 +49,9 @@ export interface EvaluateEnforcementInput {
 }
 
 /**
- * The user's grace period from their notification policy, or the schema default
- * when they have no row.
+ * The user's grace period from their notification policy, or the documented
+ * default ({@link DEFAULT_GRACE_SECONDS}, the same value the schema column
+ * defaults to) when they have no row.
  */
 function graceSecondsFor(db: PolicyDb, userId: number): number {
   const row = db

@@ -1,0 +1,17 @@
+{#
+  Managed e2guardian listen-port fragment, included into e2guardian.conf via a
+  blockinfile-managed `.Include`. Declares one extra listen port per supervised
+  user and the port -> filter-group mapping the dashboard assigned, so a UID
+  whose :80/:443 traffic iptables redirects to `listenPort` is filtered by that
+  user's group. Managed by #90 — do not hand-edit.
+
+  NOTE: the exact e2guardian directive set for per-port filter-group selection
+  is pending the Molecule integration test (see the issue linked from the #90
+  PR). The dashboard-computed mapping below is the source of truth either way.
+-#}
+# Managed by pct e2guardian-filtering.yml (#90). Generated — do not hand-edit.
+# Base permissive proxy (filter group 1) listens on {{ e2guardian.proxyPort }}.
+{% for user in e2guardian.users %}
+# group {{ user.filterGroup }} ({{ user.osUsername }}, ref={{ user.osUserRef }}) <- listen port {{ user.listenPort }}
+filterports = {{ user.listenPort }}
+{% endfor %}

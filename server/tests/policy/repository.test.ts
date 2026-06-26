@@ -188,10 +188,13 @@ describe("policy repository — user/client links", () => {
     expect(repo.listUserLinks(db, userId)).toEqual([]);
   });
 
-  it("deleteLink reports whether a row was removed", () => {
+  it("deleteLink returns the removed row, then undefined when there is none", () => {
     repo.upsertLink(db, userId, clientId, { osUsername: "alice", osUserRef: "1001" });
-    expect(repo.deleteLink(db, userId, clientId)).toBe(true);
-    expect(repo.deleteLink(db, userId, clientId)).toBe(false);
+    const removed = repo.deleteLink(db, userId, clientId);
+    // The removed row carries the OS account name the unlink push (#253)
+    // needs, since the link has now cascaded away.
+    expect(removed).toMatchObject({ userId, clientId, osUsername: "alice", osUserRef: "1001" });
+    expect(repo.deleteLink(db, userId, clientId)).toBeUndefined();
   });
 
   it("listUserClientIds returns the linked client ids ascending, [] when none", () => {
@@ -641,6 +644,65 @@ describe("policy repository — schedules & exceptions", () => {
     repo.deleteUser(db, userId);
     expect(repo.listSchedules(db)).toEqual([]);
     expect(repo.listExceptions(db)).toEqual([]);
+  });
+});
+
+describe("policy repository — notification policies (#104)", () => {
+  let db: TestDb;
+  let userId: number;
+  beforeEach(() => {
+    db = testDb();
+    userId = repo.createUser(db, { displayName: "Alice" }).id;
+  });
+  afterEach(() => {
+    db.$client.close();
+  });
+
+  it("returns undefined / false when no policy is persisted", () => {
+    expect(repo.getNotificationPolicy(db, userId)).toBeUndefined();
+    expect(repo.deleteNotificationPolicy(db, userId)).toBe(false);
+  });
+
+  it("inserts with the documented column defaults for omitted fields", () => {
+    const row = repo.upsertNotificationPolicy(db, userId, { enabled: false });
+    expect(row.userId).toBe(userId);
+    expect(row.enabled).toBe(false);
+    // The rest fall to the column defaults.
+    expect(row.soundProfile).toBe("subtle");
+    expect(row.graceSeconds).toBe(15);
+    expect(row.cadenceOverridesJson).toBeNull();
+    expect(repo.getNotificationPolicy(db, userId)).toEqual(row);
+  });
+
+  it("upserts idempotently on the user_id PK, updating only provided fields", () => {
+    repo.upsertNotificationPolicy(db, userId, {
+      soundProfile: "prominent",
+      graceSeconds: 30,
+      cadenceOverrides: { homework: { suppressSub5: true } },
+    });
+    // A second upsert changes only graceSeconds; the rest stay put.
+    const updated = repo.upsertNotificationPolicy(db, userId, { graceSeconds: 0 });
+    expect(updated.graceSeconds).toBe(0);
+    expect(updated.soundProfile).toBe("prominent");
+    expect(updated.cadenceOverridesJson).toEqual({ homework: { suppressSub5: true } });
+    // Still exactly one row for the user.
+    expect(repo.getNotificationPolicy(db, userId)).toEqual(updated);
+  });
+
+  it("clears cadence overrides back to null when passed null", () => {
+    repo.upsertNotificationPolicy(db, userId, { cadenceOverrides: { a: 1 } });
+    const cleared = repo.upsertNotificationPolicy(db, userId, { cadenceOverrides: null });
+    expect(cleared.cadenceOverridesJson).toBeNull();
+  });
+
+  it("deletes a persisted policy and cascades when the user is removed", () => {
+    repo.upsertNotificationPolicy(db, userId, { enabled: false });
+    expect(repo.deleteNotificationPolicy(db, userId)).toBe(true);
+    expect(repo.getNotificationPolicy(db, userId)).toBeUndefined();
+
+    repo.upsertNotificationPolicy(db, userId, { enabled: false });
+    repo.deleteUser(db, userId);
+    expect(repo.getNotificationPolicy(db, userId)).toBeUndefined();
   });
 });
 

@@ -20,7 +20,14 @@
 import { and, eq } from "drizzle-orm";
 
 import type { PolicyDb } from "./db.js";
-import type { ActivityKind, BudgetWindow, MatchType, ScheduleAction, Scope } from "./enums.js";
+import type {
+  ActivityKind,
+  BudgetWindow,
+  MatchType,
+  ScheduleAction,
+  Scope,
+  SoundProfile,
+} from "./enums.js";
 import { reorder } from "./schedule-precedence.js";
 import {
   activities,
@@ -31,6 +38,7 @@ import {
   exceptions,
   groupExceptions,
   groupSchedules,
+  notificationPolicies,
   schedules,
   userGroupMemberships,
   userGroups,
@@ -251,15 +259,23 @@ export function listUserClientIds(db: PolicyDb, userId: number): number[] {
     .map((row) => row.clientId);
 }
 
-/** Delete a link. Returns whether a row was removed. */
-export function deleteLink(db: PolicyDb, userId: number, clientId: number): boolean {
-  return (
-    db
-      .delete(usersOnClients)
-      .where(and(eq(usersOnClients.userId, userId), eq(usersOnClients.clientId, clientId)))
-      .returning({ userId: usersOnClients.userId })
-      .get() !== undefined
-  );
+/**
+ * Delete a link, returning the **removed** row, or `undefined` if there was no
+ * such link. Returning the row (rather than a bare boolean) lets the caller read
+ * the `os_username` it carried *before* it cascaded away — the unlink push
+ * (#253) needs that name to "unmanage" the account's `timekpra` config on the
+ * client, where there is no longer a link row to resolve it from.
+ */
+export function deleteLink(
+  db: PolicyDb,
+  userId: number,
+  clientId: number,
+): UserOnClientRow | undefined {
+  return db
+    .delete(usersOnClients)
+    .where(and(eq(usersOnClients.userId, userId), eq(usersOnClients.clientId, clientId)))
+    .returning()
+    .get();
 }
 
 // --- User groups -----------------------------------------------------------
@@ -880,6 +896,79 @@ export function deleteException(db: PolicyDb, id: number): boolean {
   );
 }
 
+// --- Notification policies (#104) ------------------------------------------
+
+/** A persisted {@link notificationPolicies} row. */
+export type NotificationPolicyRow = typeof notificationPolicies.$inferSelect;
+
+/**
+ * Fields accepted when upserting a {@link notificationPolicies} row. All
+ * optional: an omitted field takes the column default on insert (the
+ * documented `subtle` / `15` / `true`), or is left unchanged on update — the
+ * route layer resolves the full effective policy from the merged row. A
+ * `cadenceOverrides` of `null` clears any override back to the built-in cadence.
+ */
+export interface NotificationPolicyUpsert {
+  enabled?: boolean | undefined;
+  soundProfile?: SoundProfile | undefined;
+  graceSeconds?: number | undefined;
+  cadenceOverrides?: Record<string, unknown> | null | undefined;
+}
+
+/** The persisted notification policy for a user, or `undefined` if unset. */
+export function getNotificationPolicy(
+  db: PolicyDb,
+  userId: number,
+): NotificationPolicyRow | undefined {
+  return db
+    .select()
+    .from(notificationPolicies)
+    .where(eq(notificationPolicies.userId, userId))
+    .get();
+}
+
+/**
+ * Create or replace the user's notification policy (idempotent on the
+ * `user_id` primary key) and return the stored row. The caller confirms the
+ * user exists first (an FK violation otherwise surfaces opaquely). Only the
+ * fields present in `input` are written; on conflict the same fields are
+ * updated, so a partial upsert leaves the rest at their stored (or default)
+ * values. `cadenceOverrides` maps to the `cadence_overrides_json` column.
+ */
+export function upsertNotificationPolicy(
+  db: PolicyDb,
+  userId: number,
+  input: NotificationPolicyUpsert,
+): NotificationPolicyRow {
+  // Build the column set from only the provided fields so omitted keys fall to
+  // the column default (insert) or stay unchanged (the on-conflict update).
+  const set: Partial<typeof notificationPolicies.$inferInsert> = {};
+  if (input.enabled !== undefined) set.enabled = input.enabled;
+  if (input.soundProfile !== undefined) set.soundProfile = input.soundProfile;
+  if (input.graceSeconds !== undefined) set.graceSeconds = input.graceSeconds;
+  if (input.cadenceOverrides !== undefined) set.cadenceOverridesJson = input.cadenceOverrides;
+  return db
+    .insert(notificationPolicies)
+    .values({ userId, ...set })
+    .onConflictDoUpdate({ target: notificationPolicies.userId, set })
+    .returning()
+    .get();
+}
+
+/**
+ * Delete a user's notification policy (reverting them to the documented
+ * defaults). Returns whether a row was removed.
+ */
+export function deleteNotificationPolicy(db: PolicyDb, userId: number): boolean {
+  return (
+    db
+      .delete(notificationPolicies)
+      .where(eq(notificationPolicies.userId, userId))
+      .returning({ userId: notificationPolicies.userId })
+      .get() !== undefined
+  );
+}
+
 // --- Group schedules (#182) ------------------------------------------------
 // Group-targeted recurring rules, keyed by `user_group_id` (ADR 0007). The same
 // rule shape as {@link schedules} minus the owner; `policy/group-resolution.ts`
@@ -982,6 +1071,34 @@ export function deleteGroupSchedule(db: PolicyDb, id: number): boolean {
       .returning({ id: groupSchedules.id })
       .get() !== undefined
   );
+}
+
+/**
+ * Atomically reorder a group's schedules to match `orderedIds` — the group
+ * counterpart of {@link reorderUserSchedules} (#270), the persistence step
+ * behind the group drag-to-reorder editor. `orderedIds` must be a permutation
+ * of exactly that group's schedule ids; {@link reorder} validates this and
+ * throws {@link import("./schedule-precedence.js").ReorderMismatchError} before
+ * any write, so a stale or garbled request can never partially apply or drop a
+ * rule's position. The dense `0..n-1` ordinals are written in a single
+ * transaction; the rows are then re-read in the new evaluation order.
+ */
+export function reorderGroupSchedules(
+  db: PolicyDb,
+  groupId: number,
+  orderedIds: readonly number[],
+): GroupScheduleRow[] {
+  // Validate the permutation and compute dense ordinals up front (may throw).
+  const reordered = reorder(listGroupSchedules(db, groupId), orderedIds);
+  db.transaction((tx) => {
+    for (const rule of reordered) {
+      tx.update(groupSchedules)
+        .set({ ordinal: rule.ordinal })
+        .where(eq(groupSchedules.id, rule.id))
+        .run();
+    }
+  });
+  return listGroupSchedules(db, groupId);
 }
 
 // --- Group exceptions (#182) -----------------------------------------------
