@@ -706,6 +706,38 @@ export function toGroupScheduleResponse(row: GroupScheduleRow): GroupScheduleRes
   };
 }
 
+// --- Group schedule ordering (#270) ----------------------------------------
+
+/**
+ * A group's schedules in evaluation order, plus the **structural** shadow
+ * findings — the group counterpart of {@link ScheduleOrderView} (#63),
+ * consumed by the group drag-to-reorder editor.
+ *
+ * It deliberately omits `effectiveIds`: a group has no single timezone (members
+ * may sit in different zones), so "in effect right now" is only meaningful once
+ * resolved per member (`GET /users/:userId/effective`), not for the group as a
+ * whole. `shadows` is purely structural (identical recurrence window + target
+ * superset; no tz, no instant — see `policy/schedule-precedence.ts`), so it
+ * stays fully meaningful here. The precedence math stays in one place; this
+ * view never re-derives it.
+ */
+export const groupScheduleOrderViewSchema = z.object({
+  schedules: z.array(groupScheduleResponseSchema),
+  shadows: z.array(shadowFindingSchema),
+});
+export type GroupScheduleOrderView = z.infer<typeof groupScheduleOrderViewSchema>;
+
+/** Assemble a {@link GroupScheduleOrderView} from ordered rows + the shadow facts. */
+export function toGroupScheduleOrderView(
+  rows: readonly GroupScheduleRow[],
+  shadows: readonly ShadowFindingDto[],
+): GroupScheduleOrderView {
+  return {
+    schedules: rows.map(toGroupScheduleResponse),
+    shadows: shadows.map((s) => ({ shadowedId: s.shadowedId, shadowedById: s.shadowedById })),
+  };
+}
+
 // --- Group exceptions (#182) -----------------------------------------------
 // Group-targeted one-off overrides (ADR 0007). Identical to the user-keyed
 // exception DTOs minus `userId`; the PATCH body reuses {@link updateExceptionSchema}.
