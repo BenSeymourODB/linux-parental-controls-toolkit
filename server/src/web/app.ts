@@ -128,6 +128,12 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     // Either way the id is bound to every request-scoped log line as `reqId`.
     requestIdHeader: REQUEST_ID_HEADER,
     genReqId: genRequestId,
+    // Opt-in trust of `X-Forwarded-*` so `request.ip` is the real client IP
+    // behind a trusted reverse proxy, keeping the per-IP failed-attempt
+    // limiter (auth login, /api/clients/enrol) per-attacker (#235). Default
+    // `false` is identical to Fastify's default — never trust a direct
+    // caller's forwarded headers on a LAN deployment.
+    trustProxy: settings.trustProxy,
   });
 
   // Open (and migrate) the policy store unless a handle was injected. buildApp

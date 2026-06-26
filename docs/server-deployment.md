@@ -290,7 +290,11 @@ surfaces that face unauthenticated callers (the admin login and the
 token-authenticated `POST /api/clients/enrol` enrolment exchange, issue
 #154), as cheap defence-in-depth that holds even with no proxy in front;
 that is throttling of *failures*, not a substitute for proxy-level rate
-limiting.
+limiting. That limiter keys on `request.ip`; behind a proxy, set
+`PCT_TRUST_PROXY` (off by default) so it sees the real client IP rather
+than the proxy's — see
+[`reverse-proxy-tls.md`](reverse-proxy-tls.md) → "Client IP and the
+failed-attempt limiter" (#235).
 
 ## Authentication
 
