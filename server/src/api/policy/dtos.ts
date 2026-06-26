@@ -23,10 +23,16 @@ import {
   activityKindSchema,
   budgetWindowSchema,
   matchTypeSchema,
+  platformSchema,
   scheduleActionSchema,
   scopeSchema,
+  soundProfileSchema,
   type MatchType,
 } from "../../policy/enums.js";
+import {
+  defaultNotificationPolicy,
+  notificationGraceSecondsSchema,
+} from "../../policy/notification.js";
 import {
   scheduleRecurrenceSchema,
   minuteOfDaySchema,
@@ -40,6 +46,7 @@ import type {
   ExceptionRow,
   GroupExceptionRow,
   GroupScheduleRow,
+  NotificationPolicyRow,
   ScheduleRow,
   UserGroupRow,
   UserOnClientRow,
@@ -112,6 +119,12 @@ export const clientResponseSchema = z.object({
   sshUser: z.string(),
   enrolledAt: z.string(),
   lastSeen: z.string().nullable(),
+  /**
+   * The client's OS family (#229) — `linux` today, `windows` reserved. Read-only
+   * and always `linux` until a Windows enforcement client exists (epic #233);
+   * surfaced so the admin UI can render a per-client OS badge.
+   */
+  platform: platformSchema,
 });
 
 export type CreateClientRequest = z.infer<typeof createClientSchema>;
@@ -126,6 +139,7 @@ export function toClientResponse(row: ClientRow): ClientResponse {
     sshUser: row.sshUser,
     enrolledAt: row.enrolledAt.toISOString(),
     lastSeen: row.lastSeen === null ? null : row.lastSeen.toISOString(),
+    platform: row.platform,
   };
 }
 
@@ -446,6 +460,57 @@ export function toScheduleResponse(row: ScheduleRow): ScheduleResponse {
   };
 }
 
+// --- Schedule ordering (#63) -----------------------------------------------
+
+/**
+ * Atomic reorder body: the user's schedule ids in their new evaluation order
+ * (first wins). Completeness and uniqueness against the user's actual rows are
+ * checked server-side by `reorder()` (a 409 on mismatch), which gives a precise
+ * error a per-field schema can't — so this only asserts a non-empty list of ids.
+ */
+export const reorderSchedulesSchema = z.object({
+  orderedIds: z.array(z.number().int().positive()).min(1),
+});
+export type ReorderSchedulesRequest = z.infer<typeof reorderSchedulesSchema>;
+
+/**
+ * A later schedule rule that an earlier one renders unreachable — the wire form
+ * of `policy/schedule-precedence.ts`'s `ShadowFinding`, feeding the editor's
+ * "this rule will never apply" warning.
+ */
+export const shadowFindingSchema = z.object({
+  shadowedId: z.number().int(),
+  shadowedById: z.number().int(),
+});
+export type ShadowFindingDto = z.infer<typeof shadowFindingSchema>;
+
+/**
+ * A user's schedules in evaluation order, plus the two derived facts the
+ * drag-to-reorder editor (#63) renders without re-implementing precedence:
+ * `shadows` — rules an earlier rule provably pre-empts — and `effectiveIds` —
+ * the rule in effect *right now* for each distinct target. Both are computed
+ * server-side from the shared precedence module so every surface agrees.
+ */
+export const scheduleOrderViewSchema = z.object({
+  schedules: z.array(scheduleResponseSchema),
+  shadows: z.array(shadowFindingSchema),
+  effectiveIds: z.array(z.number().int()),
+});
+export type ScheduleOrderView = z.infer<typeof scheduleOrderViewSchema>;
+
+/** Assemble a {@link ScheduleOrderView} from ordered rows + the derived facts. */
+export function toScheduleOrderView(
+  rows: readonly ScheduleRow[],
+  shadows: readonly ShadowFindingDto[],
+  effectiveIds: readonly number[],
+): ScheduleOrderView {
+  return {
+    schedules: rows.map(toScheduleResponse),
+    shadows: shadows.map((s) => ({ shadowedId: s.shadowedId, shadowedById: s.shadowedById })),
+    effectiveIds: [...effectiveIds],
+  };
+}
+
 // --- Exceptions ------------------------------------------------------------
 
 /**
@@ -521,6 +586,69 @@ export function toExceptionResponse(row: ExceptionRow): ExceptionResponse {
     expiresAt: row.expiresAt.toISOString(),
     createdAt: row.createdAt.toISOString(),
   };
+}
+
+// --- Notification policy (#104) --------------------------------------------
+
+/**
+ * Per-user notification settings (`docs/client-notifications.md` →
+ * "Configuration knobs"). Bounds and the sound-profile enum come from their
+ * single source (`policy/notification.ts`, `policy/enums.ts`) so the wire
+ * contract, the storage `CHECK`, and the synthesized defaults can't drift.
+ *
+ * `cadenceOverrides` is an optional object of per-budget warning-cadence
+ * overrides (the override grammar itself is the agent's concern, #103); `null`
+ * means "use the built-in 15/5/1-minute cadence".
+ */
+const cadenceOverridesSchema = z.record(z.string(), z.unknown());
+
+/**
+ * Notification-policy upsert body (`PUT`). Every field is optional: an omitted
+ * field takes the documented default on first write, or is left unchanged on a
+ * later write. The body must carry at least one field.
+ */
+export const upsertNotificationPolicySchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    soundProfile: soundProfileSchema.optional(),
+    graceSeconds: notificationGraceSecondsSchema.optional(),
+    // Present (incl. explicit null) ⇒ change; absent ⇒ leave unchanged.
+    cadenceOverrides: cadenceOverridesSchema.nullable().optional(),
+  })
+  .refine(nonEmpty, { message: "At least one field must be provided" });
+
+export const notificationPolicyResponseSchema = z.object({
+  userId: z.number().int(),
+  enabled: z.boolean(),
+  soundProfile: soundProfileSchema,
+  graceSeconds: z.number().int(),
+  cadenceOverrides: cadenceOverridesSchema.nullable(),
+});
+
+export type UpsertNotificationPolicyRequest = z.infer<typeof upsertNotificationPolicySchema>;
+export type NotificationPolicyResponse = z.infer<typeof notificationPolicyResponseSchema>;
+
+/** Map a stored notification-policy row to its wire DTO. */
+export function toNotificationPolicyResponse(
+  row: NotificationPolicyRow,
+): NotificationPolicyResponse {
+  return {
+    userId: row.userId,
+    enabled: row.enabled,
+    soundProfile: row.soundProfile,
+    graceSeconds: row.graceSeconds,
+    cadenceOverrides: row.cadenceOverridesJson ?? null,
+  };
+}
+
+/**
+ * The effective notification policy for a user when no row is persisted — the
+ * documented defaults. Every user always *has* an effective policy; it sits at
+ * defaults until the admin customises it.
+ */
+export function defaultNotificationPolicyResponse(userId: number): NotificationPolicyResponse {
+  const defaults = defaultNotificationPolicy();
+  return { userId, ...defaults };
 }
 
 // --- Group schedules (#182) ------------------------------------------------
