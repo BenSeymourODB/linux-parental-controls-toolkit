@@ -18,8 +18,15 @@
  * **No-op branches** (resolve to nothing to push, never an error):
  * - a **client-scoped** change (`userId === null`): `timekpra` is per-user;
  * - a **missing client** (deleted before replay);
- * - a **missing `(user, client)` link** (e.g. `link.deleted`): the
- *   `os_username` can't be resolved and there is nothing left to enforce.
+ * - a **missing `(user, client)` link** that is *not* an explicit unlink — e.g.
+ *   a user-scoped edit for a user since unlinked from this client: there is
+ *   nothing left to enforce here.
+ *
+ * **Unmanage branch** (#253): a `link.deleted` action whose `detail` carries the
+ * `os_username` the route captured before the link cascaded away. The link row
+ * is gone, but the dashboard still owes the client one push — it pushes the
+ * fully-{@link unrestrictedPolicyPush unrestricted} config so a now-unlinked
+ * account isn't left enforced by whatever limits/allowed-hours were last pushed.
  *
  * Errors propagate the SSH taxonomy unchanged so the queue classifies them: an
  * `SshUnreachableError`/timeout (retriable) keeps the action queued for replay;
@@ -31,6 +38,8 @@
  * `timekpra` client, which execs over the existing SSH subprocess facade. No GPL
  * code is linked in-process (`CLAUDE.md` → "License boundaries").
  */
+import { z } from "zod";
+
 import type { PolicyDb } from "../../policy/db.js";
 import {
   getClient,
@@ -43,7 +52,18 @@ import {
 import type { WeeklyAllowedWindows } from "../timekpr/allowed-hours.js";
 import type { ActionExecutor, QueuedAction } from "../queue/types.js";
 import { policyPushPayloadSchema } from "./payload.js";
-import { resolvePolicyPush } from "./resolve.js";
+import { resolvePolicyPush, unrestrictedPolicyPush, type ResolvedPolicyPush } from "./resolve.js";
+
+/** The push reason that marks an explicit user↔client unlink (#253). */
+const LINK_DELETED_REASON = "link.deleted";
+
+/**
+ * The `link.deleted` detail the route attaches: the OS account name captured
+ * before the link row cascaded away. Validated here because a queued payload is
+ * external-at-rest (`CLAUDE.md` → "Validate all external input"); a row without
+ * a usable name skips the unmanage push rather than throwing.
+ */
+const unlinkDetailSchema = z.object({ osUsername: z.string().min(1) });
 
 /**
  * The slice of {@link import("../timekpr/client.js").TimekprClient} the executor
@@ -106,33 +126,17 @@ export function createPolicyPushExecutor(options: PolicyPushExecutorOptions): Ac
   const { db, buildClient, defaultTz, log } = options;
   const now = options.now ?? ((): Date => new Date());
 
-  return async function execute(action: QueuedAction): Promise<void> {
-    const { userId, reason } = policyPushPayloadSchema.parse(action.payload);
-
-    // Client-scoped change (e.g. a client record renamed): nothing per-user to push.
-    if (userId === null) return;
-
-    // The client may have been deleted between enqueue and replay.
-    const client = getClient(db, action.clientId);
-    if (client === undefined) return;
-
-    // Resolve the supervised account on this client; if the link is gone
-    // (e.g. link.deleted), there is no username to act on and nothing to enforce.
-    const link = listUserLinks(db, userId).find((l) => l.clientId === action.clientId);
-    if (link === undefined) return;
-
-    // The link's existence guarantees the user row exists (the link FK-cascades
-    // away with the user), so `getUser` is effectively non-null here; `?.` is
-    // defensive only, and a vanished user resolves to an empty-policy push.
-    const user = getUser(db, userId);
-    const tz = user?.tz ?? defaultTz;
-    const budgets = listUserBudgets(db, userId);
-    const schedules = listUserSchedules(db, userId);
-
-    const resolved = resolvePolicyPush({ tz, schedules, budgets, now: now() });
-
-    const timekpr = buildClient({ client, username: link.osUsername, userId, reason });
-
+  /**
+   * Drive one {@link ResolvedPolicyPush} through the `timekpra` setters, in
+   * order. Shared by the normal policy push and the unlink unmanage push so both
+   * apply limits identically and idempotently.
+   */
+  async function applyResolvedPush(
+    timekpr: PolicyPushClient,
+    resolved: ResolvedPolicyPush,
+    clientId: number,
+    userId: number,
+  ): Promise<void> {
     if (resolved.perWeekdaySeconds !== null) {
       await timekpr.setTimeLimits(resolved.perWeekdaySeconds);
     }
@@ -149,13 +153,54 @@ export function createPolicyPushExecutor(options: PolicyPushExecutorOptions): Ac
     // silently dropping the limits above too. Full lockout is enforced via a
     // zero daily limit / session-kill (Phase 8c), not allowed-hours, so skip
     // the allowed-hours push here and surface the gap rather than failing.
+    // (The unmanage push is all-hours-every-day, so it never takes this branch.)
     if ([...resolved.weekly.values()].some((windows) => windows.length > 0)) {
       await timekpr.setWeeklyAllowedHours(resolved.weekly);
     } else {
       log?.warn(
-        { clientId: action.clientId, userId },
+        { clientId, userId },
         "policy denies all access all week; allowed-hours push skipped (full lockout is Phase 8c: zero daily limit / session-kill, not allowed-hours)",
       );
     }
+  }
+
+  return async function execute(action: QueuedAction): Promise<void> {
+    const { userId, reason, detail } = policyPushPayloadSchema.parse(action.payload);
+
+    // Client-scoped change (e.g. a client record renamed): nothing per-user to push.
+    if (userId === null) return;
+
+    // The client may have been deleted between enqueue and replay.
+    const client = getClient(db, action.clientId);
+    if (client === undefined) return;
+
+    // Resolve the supervised account on this client.
+    const link = listUserLinks(db, userId).find((l) => l.clientId === action.clientId);
+    if (link === undefined) {
+      // The link is gone. An explicit unlink (`link.deleted`) still owes the
+      // client one *unmanage* push: lift this user's timekpra limits back to
+      // unrestricted, using the username the route captured before the row
+      // cascaded away (#253). Any other missing-link case has nothing to do.
+      if (reason !== LINK_DELETED_REASON) return;
+      const unlink = unlinkDetailSchema.safeParse(detail);
+      if (!unlink.success) return;
+      const timekpr = buildClient({ client, username: unlink.data.osUsername, userId, reason });
+      await applyResolvedPush(timekpr, unrestrictedPolicyPush(), action.clientId, userId);
+      return;
+    }
+
+    // The link's existence guarantees the user row exists (the link FK-cascades
+    // away with the user), so `getUser` is effectively non-null here; `?.` is
+    // defensive only, and a vanished user resolves to an empty-policy push.
+    const user = getUser(db, userId);
+    const tz = user?.tz ?? defaultTz;
+    const budgets = listUserBudgets(db, userId);
+    const schedules = listUserSchedules(db, userId);
+
+    const resolved = resolvePolicyPush({ tz, schedules, budgets, now: now() });
+
+    const timekpr = buildClient({ client, username: link.osUsername, userId, reason });
+
+    await applyResolvedPush(timekpr, resolved, action.clientId, userId);
   };
 }

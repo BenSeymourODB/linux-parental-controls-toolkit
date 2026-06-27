@@ -12,6 +12,7 @@ export const moduleName = "transport/time-today";
 export {
   adjustTimeToday,
   TimeTodayTargetError,
+  type AdjustTimeTodayOptions,
   type ClientAdjustmentResult,
   type ClientAdjustmentStatus,
   type TimeTodayAdjustment,
@@ -20,3 +21,20 @@ export {
   type TimeTodayClientTarget,
   type TimeTodayResult,
 } from "./adjust.js";
+
+export {
+  TIME_TODAY_KIND,
+  formatCalendarDate,
+  queuedActionForOfflineAdjustment,
+  timeTodayPayloadSchema,
+  type OfflineAdjustment,
+  type TimeTodayPayload,
+} from "./queued.js";
+
+export {
+  createTimeTodayExecutor,
+  type TimeTodayDeferredClient,
+  type TimeTodayExecutorClientFactory,
+  type TimeTodayExecutorOptions,
+  type TimeTodayExecutorTarget,
+} from "./executor.js";

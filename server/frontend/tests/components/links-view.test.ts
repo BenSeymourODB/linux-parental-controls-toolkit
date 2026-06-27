@@ -46,6 +46,8 @@ function client(overrides: Partial<ClientResponse> = {}): ClientResponse {
     sshUser: "admin",
     enrolledAt: "2026-01-01T00:00:00.000Z",
     lastSeen: null,
+    enrolled: true,
+    platform: "linux",
     ...overrides,
   };
 }

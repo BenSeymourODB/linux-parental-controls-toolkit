@@ -21,6 +21,7 @@ import type { FastifyInstance } from "fastify";
 import type { Settings } from "../config.js";
 import { bootstrapAdmin } from "./credentials.js";
 import { makeRequireAdmin } from "./guard.js";
+import { makeRequirePinSession } from "./pin-guard.js";
 import { FixedWindowRateLimiter } from "./rate-limit.js";
 import { registerAuthRoutes } from "./routes.js";
 
@@ -45,6 +46,13 @@ export async function registerAuth(
   scope.decorateRequest("admin", null);
   scope.decorate("requireAdmin", makeRequireAdmin(authConfigured));
 
+  // The child-scoped PIN-session guard (#112), decorated alongside the admin
+  // guard so the own-data `/app` routes can opt in with
+  // `{ preHandler: app.requirePinSession }`. Deny-by-default: only routes that
+  // apply it accept a PIN session.
+  scope.decorateRequest("pinUser", null);
+  scope.decorate("requirePinSession", makeRequirePinSession(authConfigured));
+
   // Seed the first admin once the app (and app.db) are ready. Idempotent: a
   // restart with an existing admin is a no-op.
   scope.addHook("onReady", async () => {
@@ -55,6 +63,7 @@ export async function registerAuth(
 }
 
 export { makeRequireAdmin, assertAuthConfigured } from "./guard.js";
+export { makeRequirePinSession } from "./pin-guard.js";
 export {
   loginRequestSchema,
   sessionResponseSchema,
@@ -62,4 +71,11 @@ export {
   type SessionResponse,
 } from "./dtos.js";
 export { SESSION_COOKIE, SESSION_TTL_SECONDS } from "./session.js";
+export {
+  PIN_SESSION_COOKIE,
+  PIN_SESSION_TTL_SECONDS,
+  issuePinSession,
+  clearPinSession,
+  readPinSession,
+} from "./pin-session.js";
 export { bootstrapAdmin, getAdmin, type BootstrapResult } from "./credentials.js";

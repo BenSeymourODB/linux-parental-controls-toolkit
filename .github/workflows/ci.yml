@@ -229,10 +229,11 @@ jobs:
         run: |
           if [ -f server/Dockerfile ]; then
             docker buildx build \
+              --file server/Dockerfile \
               --cache-from type=gha \
               --cache-to type=gha,mode=max \
               --tag pct-dashboard:ci \
-              server/
+              .
           else
             echo "server/Dockerfile not yet present — skipping Docker build"
           fi

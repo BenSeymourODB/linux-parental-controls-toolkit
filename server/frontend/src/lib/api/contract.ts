@@ -22,6 +22,13 @@
  */
 export type { SessionResponse, LoginRequest } from "../../../../src/auth/dtos.js";
 export type {
+  PinLoginRequest,
+  PinSessionResponse,
+  SetUserPinRequest,
+  UserPinStatusResponse,
+  AppMeResponse,
+} from "../../../../src/api/app/dtos.js";
+export type {
   UserResponse,
   CreateUserRequest,
   UpdateUserRequest,
@@ -34,6 +41,9 @@ export type {
   ActivityGroupResponse,
   CreateActivityGroupRequest,
   UpdateActivityGroupRequest,
+  UserGroupResponse,
+  CreateUserGroupRequest,
+  UpdateUserGroupRequest,
   BudgetResponse,
   CreateBudgetRequest,
   UpdateBudgetRequest,
@@ -45,13 +55,23 @@ export type {
   ReorderSchedulesRequest,
   ShadowFindingDto,
   ScheduleOrderView,
+  GroupScheduleResponse,
+  CreateGroupScheduleRequest,
+  GroupScheduleOrderView,
   ExceptionResponse,
   CreateExceptionRequest,
   UpdateExceptionRequest,
   AdjustTimeTodayRequest,
   TimeTodayResponse,
   ClientAdjustmentResultDto,
+  NotificationPolicyResponse,
+  UpsertNotificationPolicyRequest,
 } from "../../../../src/api/policy/dtos.js";
+export type {
+  PolicyPreviewRequest,
+  PolicyPreviewResponse,
+  PreviewAffectedClient,
+} from "../../../../src/api/policy/preview-dtos.js";
 export type { AuditEntryResponse, AuditListResponse } from "../../../../src/api/audit/dtos.js";
 export type {
   CreateIntegrationTokenRequest,
@@ -83,6 +103,8 @@ export type {
   Scope,
   BudgetWindow,
   ScheduleAction,
+  SoundProfile,
   AuditOutcome,
 } from "../../../../src/policy/enums.js";
 export type { ErrorEnvelope, ErrorDetail } from "../../../../src/api/errors.js";
+export type { AnsibleVenvStatusResponse } from "../../../../src/api/system/dtos.js";
