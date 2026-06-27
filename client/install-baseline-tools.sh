@@ -102,9 +102,12 @@ pct_baseline_add_repositories() {
     pct_ok "Timekpr-nExT PPA already present (${TIMEKPR_PPA_LIST_GLOB})"
   else
     pct_log "Adding Timekpr-nExT PPA ${TIMEKPR_PPA}"
-    pct_run add-apt-repository -y "$TIMEKPR_PPA"
+    # Network-dependent: add-apt-repository fetches the PPA key/metadata from
+    # launchpad.net and gives up after a short internal timeout. Retry so a
+    # transient blip on home internet doesn't abort the whole enrolment.
+    pct_retry add-apt-repository -y "$TIMEKPR_PPA"
   fi
-  pct_run apt-get update -q
+  pct_retry apt-get update -q
   # ActivityWatch is an upstream release bundle (handled below); e2guardian
   # ships in the distro repositories — no extra repo needed for either.
 }
@@ -133,7 +136,9 @@ pct_baseline_install_packages() {
     return 0
   fi
   pct_log "Installing: ${want[*]}"
-  pct_run env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${want[@]}"
+  # Network-dependent (downloads packages from the mirrors); retry on a
+  # transient fetch failure rather than aborting the enrolment.
+  pct_retry env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${want[@]}"
 }
 
 # --- step: ActivityWatch upstream bundle -----------------------------------
@@ -162,7 +167,8 @@ pct_baseline_install_activitywatch() {
 
   pct_run mkdir -p "$tmp" "$AW_PREFIX"
   pct_log "Downloading ${url}"
-  pct_run curl --fail --location --silent --show-error --output "$zip_path" "$url"
+  # Network-dependent: retry the GitHub release download on a transient failure.
+  pct_retry curl --fail --location --silent --show-error --output "$zip_path" "$url"
 
   # Verify the checksum before extracting anything we downloaded.
   pct_log "Verifying SHA-256"

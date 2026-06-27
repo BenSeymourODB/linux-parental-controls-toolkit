@@ -63,6 +63,46 @@ pct_run() {
   "$@"
 }
 
+# Run a command, retrying on failure with exponential backoff. Wrap the
+# network-dependent install steps (PPA add, apt update/install, upstream
+# downloads) so a single transient timeout on home internet — e.g. a slow
+# launchpad.net the PPA fetch gives up on after 10s — self-heals instead of
+# aborting the whole enrolment under `set -e`. The successful return is silent
+# so a first-try success reads exactly like a plain pct_run.
+#
+# Honours dry-run (prints the command once via pct_run; never sleeps or loops,
+# so the dry-run plan stays a single clean line per step). Tunable, mainly so
+# tests stay fast and slow links can be given more headroom:
+#   PCT_RETRIES      total attempts before giving up (default 3)
+#   PCT_RETRY_DELAY  seconds before the 2nd attempt, doubling each time (default 2)
+#
+# Usage: pct_retry add-apt-repository -y ppa:mjasnik/ppa
+pct_retry() {
+  if pct_is_dry_run; then
+    pct_run "$@"
+    return 0
+  fi
+  local attempts="${PCT_RETRIES:-3}" delay="${PCT_RETRY_DELAY:-2}" n=1 rc=0
+  while :; do
+    # Capture the exit code with `|| rc=$?` rather than testing in an `if`: a
+    # failed `if` with no else resets $? to 0, which would mask the real code.
+    # The `|| rc=$?` form is also safe under the callers' `set -e`.
+    rc=0
+    "$@" || rc=$?
+    if [ "$rc" -eq 0 ]; then
+      return 0
+    fi
+    if [ "$n" -ge "$attempts" ]; then
+      pct_err "still failing after ${attempts} attempt(s) (exit ${rc}); giving up: $*"
+      return "$rc"
+    fi
+    pct_warn "attempt ${n}/${attempts} failed (exit ${rc}); retrying in ${delay}s: $*"
+    sleep "$delay"
+    n=$((n + 1))
+    delay=$((delay * 2))
+  done
+}
+
 # --- distro detection ------------------------------------------------------
 
 # Parse /etc/os-release into PCT_OS_ID / PCT_OS_ID_LIKE. The path is
