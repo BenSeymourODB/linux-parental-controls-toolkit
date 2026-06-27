@@ -140,7 +140,7 @@ Three agents run on each enrolled client. All are installed and maintained via t
 
 **Integration surface:** D-Bus (local) and `timekpra` CLI (remote over SSH). The dashboard writes session-limit policy by calling `timekpra` subcommands remotely.
 
-**PlayTime feature:** Groups of processes can be assigned a separate sub-budget within the overall session budget. This is the primary mechanism for per-application time quotas. Its limitation (no independent per-app budget, only grouped budgets) means more granular per-app enforcement requires additional logic in the dashboard or a complementary process-kill script.
+**PlayTime feature:** Groups of processes can be assigned a *single shared* sub-budget within the overall session budget. It was evaluated as the per-application time-quota mechanism but **not adopted**: PlayTime provides only one shared budget across all its activities (no independent per-app budgets), which is the opposite of the policy model's requirement (multiple independent per-activity/per-group budgets per user). It also matches process masks against the *executable* (path/name, or command line with the "Enhanced activity monitor" option), whereas our path matches the *window-layer app identity* ActivityWatch reports (WM app id/class) — which separates apps that share one executable (Electron→`electron`, JVM→`java`, wrapper-launched apps) that executable-name masking conflates. Per-application time quotas are therefore enforced by the dashboard's own usage-poll → decision → agent force-close path; PlayTime is left unwired. See [ADR 0010](adr/0010-per-activity-enforcement-mechanism.md).
 
 ### 3b. Activity tracking — ActivityWatch
 
@@ -194,8 +194,8 @@ These are the system-level mechanisms that the agent layer configures and that a
 
 ### Application access control
 
-- **Timekpr-nExT PlayTime** — per-process-group sub-budget within the overall session limit
-- **AppArmor profiles** — can deny execution of specific binaries for specific users; complements PlayTime for outright-deny use cases rather than time-limited access
+- **Dashboard usage-poll + agent force-close** — the per-application / app-group time-quota mechanism (#98/#99); enforces multiple independent per-activity budgets. Timekpr-nExT PlayTime (a single shared per-process-group sub-budget) was evaluated and **not adopted** for this — see [ADR 0010](adr/0010-per-activity-enforcement-mechanism.md).
+- **AppArmor profiles** — can deny execution of specific binaries for specific users; complements the time-quota path for outright-deny use cases rather than time-limited access
 - **malcontent / AccountsService** — useful only for Flatpak applications; does not apply to native packages on Cinnamon/Mint and is not relied upon in this stack
 
 ### Network enforcement

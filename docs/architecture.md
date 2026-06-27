@@ -301,8 +301,10 @@ server's SSH key (generated on first run, #39); until it exists the dispatcher
 falls back to the **logging stub** (`server/src/transport/stub.ts`, #54,
 `component: "transport/stub"`) so the dashboard still starts and CRUD still
 works (the change is logged, not dispatched). The file-level Ansible push
-(step 4) is still Phase 6, and PlayTime / per-activity limits are Phase 8 — both
-plug into the same call sites without reshaping them.
+(step 4) is still Phase 6, and per-activity limit enforcement is Phase 8
+(#98/#99, via usage-poll + agent force-close — not Timekpr PlayTime; see
+[ADR 0010](adr/0010-per-activity-enforcement-mechanism.md)) — both plug into the
+same call sites without reshaping them.
 
 #### "Add time today" — the same-day adjustment lever (#257)
 
@@ -344,8 +346,10 @@ transport_unavailable` rather than silently no-op'ing.
 3. Events are normalised into `UsageSample` rows. Raw event blobs are
    discarded; only aggregated samples are kept.
 4. The dashboard re-checks budgets; if a per-activity quota is exhausted,
-   it triggers the enforcement step (kill the process via Ansible
-   ad-hoc command, or adjust Timekpr-nExT PlayTime).
+   it triggers the enforcement step — `enforce.force_close` to the per-user
+   agent, with an SSH ad-hoc `pkill` fallback (#98/#99). This is the single
+   per-activity enforcement authority; Timekpr PlayTime is not used (see
+   [ADR 0010](adr/0010-per-activity-enforcement-mechanism.md)).
 
 ActivityWatch's REST API is unauthenticated. We never expose it on the
 network — all access goes through SSH port forwarding initiated by the
@@ -356,12 +360,18 @@ server, which is consistent with the upstream project's guidance.
 | Concern | Enforced by | Configured by |
 |---|---|---|
 | Total session time | Timekpr-nExT (logind) | `timekpra` over SSH |
-| App-group time | Timekpr-nExT PlayTime | `timekpra` over SSH |
 | Per-app deny (hard block) | AppArmor | Ansible-deployed profile |
-| Per-app time quota (granular) | Dashboard polling + process kill | Ansible ad-hoc / signal |
+| Per-app / app-group time quota | Dashboard polling + agent force-close (SSH `pkill` fallback) | usage-poll decision (#98/#99) |
 | Per-website filter | e2guardian | Ansible-deployed config |
 | Per-website time-window | e2guardian config swap on schedule | Ansible + systemd timer |
 | DNS-level block | AdGuard Home | Dashboard via REST API |
+
+Per-app *and* app-group time quotas share **one** enforcement authority: the
+custom usage-poll → decision → agent force-close path. Timekpr-nExT PlayTime was
+evaluated as the app-group mechanism and **not adopted** — it provides only a
+single shared budget across all its activities, not the independent per-activity
+budgets the policy model requires; see
+[ADR 0010](adr/0010-per-activity-enforcement-mechanism.md).
 
 ## External integrations
 
