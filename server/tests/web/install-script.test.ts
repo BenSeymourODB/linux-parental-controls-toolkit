@@ -19,10 +19,11 @@ const SCRIPT_CONTENT = "#!/usr/bin/env bash\necho 'install-client'\n";
 describe("GET /install-client.sh (script present)", () => {
   let app: FastifyInstance;
   let db: TestDb;
+  let dir: string;
   let scriptPath: string;
 
   beforeEach(() => {
-    const dir = mkdtempSync(join(tmpdir(), "pct-install-script-"));
+    dir = mkdtempSync(join(tmpdir(), "pct-install-script-"));
     scriptPath = join(dir, "install-client.sh");
     writeFileSync(scriptPath, SCRIPT_CONTENT);
     db = testDb();
@@ -38,7 +39,7 @@ describe("GET /install-client.sh (script present)", () => {
   afterEach(async () => {
     await app.close();
     db.$client.close();
-    rmSync(scriptPath, { force: true });
+    rmSync(dir, { recursive: true, force: true });
   });
 
   it("returns 200 with the script content", async () => {
@@ -60,13 +61,15 @@ describe("GET /install-client.sh (script present)", () => {
 });
 
 describe("GET /install-client.sh (script absent)", () => {
-  let app: FastifyInstance;
-  let db: TestDb;
+  let app: FastifyInstance | undefined;
+  let db: TestDb | undefined;
   const missingPath = join(tmpdir(), "pct-install-script-does-not-exist.sh");
 
   afterEach(async () => {
-    await app.close();
-    db.$client.close();
+    await app?.close();
+    db?.$client.close();
+    app = undefined;
+    db = undefined;
   });
 
   it("404s and emits a startup warning", async () => {

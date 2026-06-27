@@ -31,7 +31,12 @@ import { componentLogger } from "./logger.js";
 export function registerInstallScript(app: FastifyInstance, settings: Settings): void {
   const scriptPath = settings.installClientScriptPath;
 
-  if (!existsSync(scriptPath)) {
+  // Cache presence at registration time: the file is baked into the image and
+  // never appears or disappears at runtime, so re-checking on every request
+  // is both redundant and a blocking syscall on the event loop.
+  const scriptPresent = existsSync(scriptPath);
+
+  if (!scriptPresent) {
     componentLogger(app, "web/install-script").warn(
       { installClientScriptPath: scriptPath },
       "install-client.sh not found; GET /install-client.sh will 404 until it is present",
@@ -39,9 +44,17 @@ export function registerInstallScript(app: FastifyInstance, settings: Settings):
   }
 
   app.get("/install-client.sh", async (_request, reply) => {
-    if (!existsSync(scriptPath)) {
+    if (!scriptPresent) {
       return reply.code(404).type("text/plain").send("install-client.sh not found");
     }
-    return reply.type("text/x-shellscript").send(createReadStream(scriptPath));
+    const stream = createReadStream(scriptPath);
+    stream.on("error", (err) => {
+      if (!reply.sent) {
+        void reply.code(500).type("text/plain").send("Failed to read install-client.sh");
+      } else {
+        app.log.error({ err }, "install-client.sh stream error after headers sent");
+      }
+    });
+    return reply.type("text/x-shellscript").send(stream);
   });
 }
