@@ -44,6 +44,7 @@ import type {
   BudgetRow,
   ClientRow,
   ExceptionRow,
+  GroupBudgetRow,
   GroupExceptionRow,
   GroupScheduleRow,
   NotificationPolicyRow,
@@ -806,6 +807,48 @@ export function toGroupExceptionResponse(row: GroupExceptionRow): GroupException
     effectiveFrom: row.effectiveFrom === null ? null : row.effectiveFrom.toISOString(),
     expiresAt: row.expiresAt.toISOString(),
     createdAt: row.createdAt.toISOString(),
+  };
+}
+
+// --- Group budgets (#134) --------------------------------------------------
+// Group-targeted time allowances (ADR 0008). Identical to the user-keyed budget
+// DTOs minus `userId` — the owning group comes from the
+// `/user-groups/:groupId/budgets` path. The PATCH body is identical to a user
+// budget's ({@link updateBudgetSchema}) and is reused there.
+
+/**
+ * Group-budget create body: scope/target/window/allowance, no `userId` (the
+ * group is the path param). Same shape as {@link createBudgetSchema} minus the
+ * owner.
+ */
+export const createGroupBudgetSchema = z.object({
+  scope: scopeSchema,
+  targetId: targetIdSchema.default(null),
+  window: budgetWindowSchema,
+  secondsAllowed: z.number().int().min(0),
+});
+
+export const groupBudgetResponseSchema = z.object({
+  id: z.number().int(),
+  userGroupId: z.number().int(),
+  scope: scopeSchema,
+  targetId: z.number().int().nullable(),
+  window: budgetWindowSchema,
+  secondsAllowed: z.number().int(),
+});
+
+export type CreateGroupBudgetRequest = z.infer<typeof createGroupBudgetSchema>;
+export type GroupBudgetResponse = z.infer<typeof groupBudgetResponseSchema>;
+
+/** Map a stored group-budget row to its wire DTO. */
+export function toGroupBudgetResponse(row: GroupBudgetRow): GroupBudgetResponse {
+  return {
+    id: row.id,
+    userGroupId: row.userGroupId,
+    scope: row.scope,
+    targetId: row.targetId,
+    window: row.window,
+    secondsAllowed: row.secondsAllowed,
   };
 }
 

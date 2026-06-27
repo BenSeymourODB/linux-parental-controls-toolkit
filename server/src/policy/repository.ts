@@ -38,6 +38,7 @@ import {
   budgets,
   clients,
   exceptions,
+  groupBudgets,
   groupExceptions,
   groupSchedules,
   notificationPolicies,
@@ -1218,6 +1219,95 @@ export function deleteGroupException(db: PolicyDb, id: number): boolean {
       .delete(groupExceptions)
       .where(eq(groupExceptions.id, id))
       .returning({ id: groupExceptions.id })
+      .get() !== undefined
+  );
+}
+
+// --- Group budgets (#134) --------------------------------------------------
+// Group-targeted time allowances, keyed by `user_group_id` (ADR 0008). The
+// same shape as {@link budgets} minus the owner; `policy/group-resolution.ts`
+// resolves a member's effective baseline (own budget for a slot, else the
+// inherited group budget).
+
+/** A persisted {@link groupBudgets} row. */
+export type GroupBudgetRow = typeof groupBudgets.$inferSelect;
+
+/**
+ * Fields accepted when creating a {@link groupBudgets} row — {@link BudgetCreate}
+ * with `userGroupId` in place of `userId`. The route layer enforces scope/target
+ * coherence and referent existence before this is called, so the storage `CHECK`
+ * is a backstop, not the primary guard.
+ */
+export interface GroupBudgetCreate {
+  userGroupId: number;
+  scope: Scope;
+  targetId?: number | null | undefined;
+  window: BudgetWindow;
+  secondsAllowed: number;
+}
+
+/** Mutable fields on a {@link groupBudgets} row; omitted keys are left unchanged. */
+export interface GroupBudgetUpdate {
+  scope?: Scope | undefined;
+  targetId?: number | null | undefined;
+  window?: BudgetWindow | undefined;
+  secondsAllowed?: number | undefined;
+}
+
+/** All budgets for one group, ascending by id. */
+export function listGroupBudgets(db: PolicyDb, groupId: number): GroupBudgetRow[] {
+  return db
+    .select()
+    .from(groupBudgets)
+    .where(eq(groupBudgets.userGroupId, groupId))
+    .orderBy(groupBudgets.id)
+    .all();
+}
+
+/** One group budget by id, or `undefined` if absent. */
+export function getGroupBudget(db: PolicyDb, id: number): GroupBudgetRow | undefined {
+  return db.select().from(groupBudgets).where(eq(groupBudgets.id, id)).get();
+}
+
+/**
+ * Insert a group budget and return the stored row. The caller confirms the
+ * group (and any activity/group referent) exists first; an FK violation
+ * otherwise surfaces opaquely.
+ */
+export function createGroupBudget(db: PolicyDb, input: GroupBudgetCreate): GroupBudgetRow {
+  return db
+    .insert(groupBudgets)
+    .values({
+      userGroupId: input.userGroupId,
+      scope: input.scope,
+      targetId: input.targetId ?? null,
+      window: input.window,
+      secondsAllowed: input.secondsAllowed,
+    })
+    .returning()
+    .get();
+}
+
+/**
+ * Apply a partial update and return the stored row, or `undefined` if no group
+ * budget with `id` exists. The route re-validates scope/target coherence on the
+ * merged row before calling this.
+ */
+export function updateGroupBudget(
+  db: PolicyDb,
+  id: number,
+  patch: GroupBudgetUpdate,
+): GroupBudgetRow | undefined {
+  return db.update(groupBudgets).set(patch).where(eq(groupBudgets.id, id)).returning().get();
+}
+
+/** Delete a group budget. Returns whether a row was removed. */
+export function deleteGroupBudget(db: PolicyDb, id: number): boolean {
+  return (
+    db
+      .delete(groupBudgets)
+      .where(eq(groupBudgets.id, id))
+      .returning({ id: groupBudgets.id })
       .get() !== undefined
   );
 }

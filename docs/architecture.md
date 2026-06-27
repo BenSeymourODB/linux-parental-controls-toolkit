@@ -177,6 +177,36 @@ NotificationPolicy (user_id, enabled, sound_profile,
                   (see docs/client-notifications.md)
 ```
 
+### Group-targeted policy (user groups)
+
+A second axis lets policy be defined **once for a group of supervised users** and
+inherited, with an individual's own rule taking precedence — "set bedtime for all
+the kids once, but let Alice's calendar override it". `UserGroup` + a
+many-to-many membership (a user belongs to ≥0 groups) carry the axis (#124/#181),
+and the rule entities gain group-keyed twins kept in **separate tables** rather
+than relaxing the user-keyed tables to nullable owners (ADR 0007 / ADR 0008 →
+"Why separate tables"):
+
+```
+UserGroup     (id, name)  --  many-to-many with User (#124)
+GroupSchedule (id, user_group_id, <Schedule shape minus user_id>)  --  #182
+GroupException(id, user_group_id, <Exception shape minus user_id>) --  #182
+GroupBudget   (id, user_group_id, scope, target_id?, window,
+                seconds_allowed)  --  #134, the Budget shape minus user_id
+```
+
+The two tables for each axis converge at **resolution**, not storage. For
+schedules, `policy/group-resolution.ts` → `gatherUserScheduleRules` merges a
+member's own rules (first) with each group's rules into one precedence-ordered
+list the existing resolver consumes (ADR 0007). For budgets,
+`gatherUserBudgets` resolves the member's **effective baseline** per
+`(scope, window, target)` slot: the member's own budget for the slot if set,
+otherwise the inherited group budget (lowest group id wins on a multi-group tie)
+— full-replace, never a sum, because a `Budget` is a single baseline figure and
+**grants are the additive layer** on top (ADR 0008). Doling reward time to an
+individual therefore adjusts only *that* member's effective numbers (the grant
+is `user_id`-keyed); the group baseline and other members are untouched.
+
 ### Recurrence and date-scoping
 
 Time-varying policy — "no Discord weekdays 16:00–18:00", "extra hour during

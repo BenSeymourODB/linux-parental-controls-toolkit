@@ -107,6 +107,11 @@ export {
   groupExceptionResponseSchema,
   type CreateGroupExceptionRequest,
   type GroupExceptionResponse,
+  // Group-targeted budgets (#134)
+  createGroupBudgetSchema,
+  groupBudgetResponseSchema,
+  type CreateGroupBudgetRequest,
+  type GroupBudgetResponse,
   // "Add time today" same-day adjustment (#257)
   adjustTimeTodaySchema,
   timeTodayResponseSchema,
