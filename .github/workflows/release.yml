@@ -77,13 +77,20 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # Publish a GitHub Release; attach install-client.sh so the server can
-      # serve it from /install-client.sh at the matching tagged version.
+      # Build the self-contained installer bundle so the attached artifact works
+      # when downloaded and piped to a shell on a fresh machine (the raw modular
+      # client/install-client.sh cannot source its siblings in that form). This
+      # mirrors what the image serves at /install-client.sh.
+      - name: Build install-client.sh bundle
+        run: bash client/build-install-bundle.sh ./install-client.sh
+
+      # Publish a GitHub Release; attach the bundled install-client.sh so the
+      # server can serve it from /install-client.sh at the matching tagged version.
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           # Any prerelease tag (vX.Y.Z-<suffix>) is flagged as a GitHub pre-release.
           prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
-            client/install-client.sh
+            install-client.sh
           generate_release_notes: true

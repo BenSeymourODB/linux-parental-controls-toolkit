@@ -1,13 +1,21 @@
 /**
  * Serve the client install script at `GET /install-client.sh` (#itoffd).
  *
- * The script is bundled into the image at build time
- * (`COPY client/install-client.sh ./client-scripts/install-client.sh`) and
- * served directly from disk. A client device can bootstrap with:
+ * The served file is the SELF-CONTAINED installer bundle built into the image
+ * at build time (`client/build-install-bundle.sh` runs in the Dockerfile builder
+ * stage). The raw modular `client/install-client.sh` sources its sub-steps from
+ * sibling files, which do not exist on a freshly-curled machine — so the bundle,
+ * which carries the whole install tree and unpacks it at run time, is what we
+ * serve. A client device can bootstrap with either form:
  *
- *   sudo bash <(curl -fsSL https://<dashboard>/install-client.sh) \
+ *   curl -fsSL https://<dashboard>/install-client.sh | sudo bash -s -- \
  *       --server-url https://<dashboard> \
  *       --enrolment-token <token> \
+ *       --supervised-user <username>
+ *
+ *   # or, equivalently, via process substitution:
+ *   sudo bash <(curl -fsSL https://<dashboard>/install-client.sh) \
+ *       --server-url https://<dashboard> --enrolment-token <token> \
  *       --supervised-user <username>
  *
  * If the script is absent (e.g. a dev build without the client directory in

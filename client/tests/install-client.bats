@@ -148,7 +148,7 @@ plan_strict() {
   ok_args
   [ "$status" -eq 0 ]
   # A line only install-baseline-tools.sh emits — proves we delegate to it.
-  [[ "$output" == *"add-apt-repository -y ppa:mjasnik/ppa"* ]]
+  [[ "$output" == *"Installing timekpr-next from the distribution repositories"* ]]
   [[ "$output" == *"ActivityWatch units for alice"* ]]
 }
 
