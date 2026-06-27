@@ -98,6 +98,11 @@ export {
   type ExceptionResponse,
   type CreateExceptionRequest,
   type UpdateExceptionRequest,
+  // Notification policy (#104)
+  notificationPolicyResponseSchema,
+  upsertNotificationPolicySchema,
+  type NotificationPolicyResponse,
+  type UpsertNotificationPolicyRequest,
   // Group-targeted schedules + exceptions (#182). The PATCH bodies reuse the
   // user-keyed `updateScheduleSchema` / `updateExceptionSchema` above.
   createGroupScheduleSchema,
@@ -108,6 +113,12 @@ export {
   groupExceptionResponseSchema,
   type CreateGroupExceptionRequest,
   type GroupExceptionResponse,
+  // Group-targeted budgets (#134). The PATCH body reuses the user-keyed
+  // `updateBudgetSchema` above.
+  createGroupBudgetSchema,
+  groupBudgetResponseSchema,
+  type CreateGroupBudgetRequest,
+  type GroupBudgetResponse,
   // "Add time today" same-day adjustment (#257)
   adjustTimeTodaySchema,
   timeTodayResponseSchema,

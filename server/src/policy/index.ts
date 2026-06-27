@@ -42,4 +42,16 @@ export {
   findShadowedRules,
 } from "./schedule-precedence.js";
 
+export {
+  type ResolvedRetention,
+  type RetentionOverride,
+  DEFAULT_RETENTION_DAYS,
+  MAX_RETENTION_DAYS,
+  RetentionPolicy,
+  RetentionOverrideError,
+  isExpired,
+  overrideToResolved,
+  resolveRetention,
+} from "./retention.js";
+
 export { type WeeklyWindowsInput, resolveWeeklyAllowedWindows } from "./weekly-windows.js";

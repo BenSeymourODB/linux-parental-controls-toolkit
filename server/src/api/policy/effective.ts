@@ -22,15 +22,10 @@ import { z } from "zod";
 import type { Settings } from "../../config.js";
 import { resolveEffectiveTz, localCalendarDate } from "../../policy/budget-window.js";
 import { scheduleActionSchema, scopeSchema } from "../../policy/enums.js";
-import { gatherUserScheduleRules } from "../../policy/group-resolution.js";
+import { gatherUserBudgets, gatherUserScheduleRules } from "../../policy/group-resolution.js";
 import * as repo from "../../policy/repository.js";
-import {
-  effectivePolicy,
-  type BudgetInput,
-  type EffectivePolicy,
-  type GrantInput,
-} from "../../policy/resolve.js";
-import { budgets, grants } from "../../policy/schema.js";
+import { effectivePolicy, type EffectivePolicy, type GrantInput } from "../../policy/resolve.js";
+import { grants } from "../../policy/schema.js";
 import { ApiError } from "../errors.js";
 import type { ZodTypeProvider } from "../validation.js";
 
@@ -163,11 +158,9 @@ export function registerEffectiveRoutes(scope: FastifyInstance, settings: Settin
       // Own rules first (they win), then inherited group rules, merged and
       // re-sequenced into one precedence-ordered list (#182, ADR 0007).
       const scheduleRules = gatherUserScheduleRules(scope.db, userId);
-      const budgetRows: BudgetInput[] = scope.db
-        .select()
-        .from(budgets)
-        .where(eq(budgets.userId, userId))
-        .all();
+      // The user's effective budget baseline: own budgets, plus inherited group
+      // budgets for any slot the user has not overridden (#134, ADR 0008).
+      const budgetRows = gatherUserBudgets(scope.db, userId);
       const grantRows: GrantInput[] = scope.db
         .select()
         .from(grants)

@@ -121,6 +121,35 @@ describe("policy repository — clients", () => {
     repo.touchClientLastSeen(db, 999, at);
     expect(repo.listClients(db)).toHaveLength(1);
   });
+
+  it("records the reported agent version + versions_reported_at (#165 heartbeat)", () => {
+    const id = repo.createClient(db, { hostname: "mint-av", sshUser: "pct-agent" }).id;
+    expect(repo.getClient(db, id)?.agentVersion).toBeNull();
+
+    const at = new Date("2026-06-23T09:00:00.000Z");
+    repo.recordClientAgentVersion(db, id, "1.4.2", at);
+    const row = repo.getClient(db, id);
+    expect(row?.agentVersion).toBe("1.4.2");
+    expect(row?.versionsReportedAt).toEqual(at);
+
+    // No throw, no row touched for a missing client.
+    repo.recordClientAgentVersion(db, 999, "9.9.9", at);
+    expect(repo.listClients(db)).toHaveLength(1);
+  });
+
+  it("sets and clears update_required (and is a no-op for a missing client)", () => {
+    const id = repo.createClient(db, { hostname: "mint-ur", sshUser: "pct-agent" }).id;
+    expect(repo.getClient(db, id)?.updateRequired).toBe(false);
+
+    repo.setClientUpdateRequired(db, id, true);
+    expect(repo.getClient(db, id)?.updateRequired).toBe(true);
+
+    repo.setClientUpdateRequired(db, id, false);
+    expect(repo.getClient(db, id)?.updateRequired).toBe(false);
+
+    repo.setClientUpdateRequired(db, 999, true);
+    expect(repo.listClients(db)).toHaveLength(1);
+  });
 });
 
 describe("policy repository — user/client links", () => {
@@ -188,10 +217,13 @@ describe("policy repository — user/client links", () => {
     expect(repo.listUserLinks(db, userId)).toEqual([]);
   });
 
-  it("deleteLink reports whether a row was removed", () => {
+  it("deleteLink returns the removed row, then undefined when there is none", () => {
     repo.upsertLink(db, userId, clientId, { osUsername: "alice", osUserRef: "1001" });
-    expect(repo.deleteLink(db, userId, clientId)).toBe(true);
-    expect(repo.deleteLink(db, userId, clientId)).toBe(false);
+    const removed = repo.deleteLink(db, userId, clientId);
+    // The removed row carries the OS account name the unlink push (#253)
+    // needs, since the link has now cascaded away.
+    expect(removed).toMatchObject({ userId, clientId, osUsername: "alice", osUserRef: "1001" });
+    expect(repo.deleteLink(db, userId, clientId)).toBeUndefined();
   });
 
   it("listUserClientIds returns the linked client ids ascending, [] when none", () => {
@@ -644,6 +676,65 @@ describe("policy repository — schedules & exceptions", () => {
   });
 });
 
+describe("policy repository — notification policies (#104)", () => {
+  let db: TestDb;
+  let userId: number;
+  beforeEach(() => {
+    db = testDb();
+    userId = repo.createUser(db, { displayName: "Alice" }).id;
+  });
+  afterEach(() => {
+    db.$client.close();
+  });
+
+  it("returns undefined / false when no policy is persisted", () => {
+    expect(repo.getNotificationPolicy(db, userId)).toBeUndefined();
+    expect(repo.deleteNotificationPolicy(db, userId)).toBe(false);
+  });
+
+  it("inserts with the documented column defaults for omitted fields", () => {
+    const row = repo.upsertNotificationPolicy(db, userId, { enabled: false });
+    expect(row.userId).toBe(userId);
+    expect(row.enabled).toBe(false);
+    // The rest fall to the column defaults.
+    expect(row.soundProfile).toBe("subtle");
+    expect(row.graceSeconds).toBe(15);
+    expect(row.cadenceOverridesJson).toBeNull();
+    expect(repo.getNotificationPolicy(db, userId)).toEqual(row);
+  });
+
+  it("upserts idempotently on the user_id PK, updating only provided fields", () => {
+    repo.upsertNotificationPolicy(db, userId, {
+      soundProfile: "prominent",
+      graceSeconds: 30,
+      cadenceOverrides: { homework: { suppressSub5: true } },
+    });
+    // A second upsert changes only graceSeconds; the rest stay put.
+    const updated = repo.upsertNotificationPolicy(db, userId, { graceSeconds: 0 });
+    expect(updated.graceSeconds).toBe(0);
+    expect(updated.soundProfile).toBe("prominent");
+    expect(updated.cadenceOverridesJson).toEqual({ homework: { suppressSub5: true } });
+    // Still exactly one row for the user.
+    expect(repo.getNotificationPolicy(db, userId)).toEqual(updated);
+  });
+
+  it("clears cadence overrides back to null when passed null", () => {
+    repo.upsertNotificationPolicy(db, userId, { cadenceOverrides: { a: 1 } });
+    const cleared = repo.upsertNotificationPolicy(db, userId, { cadenceOverrides: null });
+    expect(cleared.cadenceOverridesJson).toBeNull();
+  });
+
+  it("deletes a persisted policy and cascades when the user is removed", () => {
+    repo.upsertNotificationPolicy(db, userId, { enabled: false });
+    expect(repo.deleteNotificationPolicy(db, userId)).toBe(true);
+    expect(repo.getNotificationPolicy(db, userId)).toBeUndefined();
+
+    repo.upsertNotificationPolicy(db, userId, { enabled: false });
+    repo.deleteUser(db, userId);
+    expect(repo.getNotificationPolicy(db, userId)).toBeUndefined();
+  });
+});
+
 describe("policy repository — group schedules & exceptions (#182)", () => {
   let db: TestDb;
   let groupId: number;
@@ -741,5 +832,85 @@ describe("policy repository — group schedules & exceptions (#182)", () => {
     repo.deleteUserGroup(db, groupId);
     expect(repo.listGroupSchedules(db, groupId)).toEqual([]);
     expect(repo.listGroupExceptions(db, groupId)).toEqual([]);
+  });
+});
+
+describe("policy repository — group budgets (#134)", () => {
+  let db: TestDb;
+  let groupId: number;
+  beforeEach(() => {
+    db = testDb();
+    groupId = repo.createUserGroup(db, { name: "Kids" }).id;
+  });
+  afterEach(() => {
+    db.$client.close();
+  });
+
+  it("creates, lists, gets, updates and deletes a group budget", () => {
+    const overall = repo.createGroupBudget(db, {
+      userGroupId: groupId,
+      scope: "overall",
+      window: "daily",
+      secondsAllowed: 7200,
+    });
+    expect(overall.targetId).toBeNull();
+    expect(overall.secondsAllowed).toBe(7200);
+
+    const weekly = repo.createGroupBudget(db, {
+      userGroupId: groupId,
+      scope: "overall",
+      window: "weekly",
+      secondsAllowed: 36000,
+    });
+    expect(repo.listGroupBudgets(db, groupId).map((r) => r.id)).toEqual([overall.id, weekly.id]);
+    expect(repo.getGroupBudget(db, overall.id)?.window).toBe("daily");
+
+    const updated = repo.updateGroupBudget(db, overall.id, { secondsAllowed: 5400 });
+    expect(updated?.secondsAllowed).toBe(5400);
+    expect(repo.deleteGroupBudget(db, overall.id)).toBe(true);
+    expect(repo.deleteGroupBudget(db, overall.id)).toBe(false);
+    expect(repo.getGroupBudget(db, overall.id)).toBeUndefined();
+  });
+
+  it("rejects a negative allowance at the storage CHECK", () => {
+    let caught: unknown;
+    try {
+      repo.createGroupBudget(db, {
+        userGroupId: groupId,
+        scope: "overall",
+        window: "daily",
+        secondsAllowed: -1,
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(repo.isCheckViolation(caught)).toBe(true);
+  });
+
+  it("rejects an overall budget carrying a target_id (coherence CHECK)", () => {
+    let caught: unknown;
+    try {
+      repo.createGroupBudget(db, {
+        userGroupId: groupId,
+        scope: "overall",
+        targetId: 1,
+        window: "daily",
+        secondsAllowed: 60,
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(repo.isCheckViolation(caught)).toBe(true);
+  });
+
+  it("cascades group budgets when the group is deleted", () => {
+    repo.createGroupBudget(db, {
+      userGroupId: groupId,
+      scope: "overall",
+      window: "daily",
+      secondsAllowed: 3600,
+    });
+    repo.deleteUserGroup(db, groupId);
+    expect(repo.listGroupBudgets(db, groupId)).toEqual([]);
   });
 });

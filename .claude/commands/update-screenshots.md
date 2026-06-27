@@ -61,8 +61,8 @@ automatically — it just needs a caption (see below).
      pick a sensible replacement from the manifest; or
    - a change is significant enough that a different view is now the best
      "hero" shot.
-   The current highlight set is: `admin-client-health`,
-   `admin-client-health-enrol`, `admin-budgets`, `admin-integrations`,
+   The current highlight set is: `admin-clients`,
+   `admin-clients-enrol`, `admin-budgets`, `admin-integrations`,
    `app-pwa`.
 
 4. **Review the images** before committing — open a couple (especially any new

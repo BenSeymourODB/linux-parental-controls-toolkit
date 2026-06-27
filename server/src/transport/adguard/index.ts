@@ -30,8 +30,17 @@ export {
   type DnsHealth,
   type DnsMode,
   type DnsStatus,
+  type ManagedInstanceSource,
   type PreflightLogger,
 } from "./service.js";
+export {
+  startAdGuardHealthPoll,
+  ADGUARD_HEALTH_LOG_COMPONENT,
+  DEFAULT_ADGUARD_HEALTH_POLL_PATTERN,
+  type AdGuardHealthPollHandle,
+  type AdGuardHealthPollOptions,
+  type PollableAdGuardService,
+} from "./health-poller.js";
 export {
   AdGuardManagedSupervisor,
   createAdGuardManagedSupervisor,

@@ -36,10 +36,20 @@ import {
   auditOutcomeValues,
   budgetWindowValues,
   matchTypeValues,
+  platformValues,
+  retentionCategoryValues,
   scheduleActionValues,
   scopeValues,
+  soundProfileValues,
   transportQueueStatusValues,
 } from "./enums.js";
+import {
+  DEFAULT_GRACE_SECONDS,
+  DEFAULT_NOTIFICATION_ENABLED,
+  DEFAULT_SOUND_PROFILE,
+  GRACE_SECONDS_MAX,
+  GRACE_SECONDS_MIN,
+} from "./notification.js";
 import {
   MINUTE_OF_DAY_MAX,
   MINUTE_OF_DAY_MIN,
@@ -126,6 +136,11 @@ export const userPins = sqliteTable("user_pins", {
  * that doesn't report versions (an older install script, an admin-CRUD client)
  * still enrols; `versions_reported_at` is set only when at least one version is
  * reported. `component_versions` is a JSON blob keyed by managed component.
+ *
+ * `platform` (#229) is the OS-family discriminator — `linux` today, `windows`
+ * reserved (post-Phase-14 epic #233). It defaults to `linux` so every existing
+ * row and every current enrolment carries it without a backfill; reserving it
+ * now keeps a future per-platform transport/UI branch off a schema migration.
  */
 export interface ComponentVersions {
   // `| undefined` on each optional field so this lines up with the zod-inferred
@@ -147,6 +162,14 @@ export const clients = sqliteTable(
     agentVersion: text("agent_version"),
     componentVersions: text("component_versions", { mode: "json" }).$type<ComponentVersions>(),
     versionsReportedAt: integer("versions_reported_at", { mode: "timestamp" }),
+    platform: text("platform", { enum: platformValues }).notNull().default("linux"),
+    /**
+     * Set when the client's event-stream `hello` was refused for being older
+     * than the supported protocol window (ADR 0007 §5, #165); cleared once it
+     * connects compatibly again. A flag + admin signal only — remediation
+     * (pushing an agent update) is the Phase-14 update mechanism.
+     */
+    updateRequired: integer("update_required", { mode: "boolean" }).notNull().default(false),
   },
   (table) => [
     uniqueIndex("clients_hostname_unique").on(table.hostname),
@@ -155,6 +178,7 @@ export const clients = sqliteTable(
     // by construction. SQLite treats multiple NULLs as distinct, so the
     // admin-CRUD clients that carry no bearer token are unaffected.
     uniqueIndex("clients_bearer_token_hash_unique").on(table.bearerTokenHash),
+    check("clients_platform_check", oneOf(table.platform, platformValues)),
   ],
 );
 
@@ -544,6 +568,46 @@ export const groupExceptions = sqliteTable(
 );
 
 /**
+ * A time allowance defined **once for a {@link userGroups group}** and inherited
+ * by every member as the baseline (#134,
+ * `docs/adr/0008-group-targeted-budgets.md`). Column-for-column the same shape
+ * as {@link budgets} — the same polymorphic `scope`/`target_id` (see the file
+ * header) and `window`/`seconds_allowed` — but keyed by `user_group_id` instead
+ * of `user_id`.
+ *
+ * Kept in a separate table rather than relaxing `budgets.user_id` to nullable,
+ * for the same reasons ADR 0007 chose separate tables for group schedules: the
+ * user-keyed table and its `BudgetResponse` wire contract stay untouched, and
+ * the two tables converge at *resolution*, not in storage. `policy/group-
+ * resolution.ts` → `gatherUserBudgets` resolves a member's effective baseline by
+ * taking the member's own budget for a `(scope, window, target)` slot when set,
+ * otherwise the inherited group budget for that slot (lowest group id wins). A
+ * `Budget` is a single baseline figure, not an additive layer — grants are the
+ * additive layer (architecture → "Policy model"), so override is full-replace
+ * per slot, never a sum.
+ */
+export const groupBudgets = sqliteTable(
+  "group_budgets",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    userGroupId: integer("user_group_id")
+      .notNull()
+      .references(() => userGroups.id, { onDelete: "cascade" }),
+    scope: text("scope", { enum: scopeValues }).notNull(),
+    targetId: integer("target_id"),
+    window: text("window", { enum: budgetWindowValues }).notNull(),
+    secondsAllowed: integer("seconds_allowed").notNull(),
+  },
+  (table) => [
+    index("group_budgets_group_scope_window_idx").on(table.userGroupId, table.scope, table.window),
+    check("group_budgets_scope_check", oneOf(table.scope, scopeValues)),
+    check("group_budgets_window_check", oneOf(table.window, budgetWindowValues)),
+    check("group_budgets_seconds_check", sql`${table.secondsAllowed} >= 0`),
+    check("group_budgets_target_coherence_check", targetCoherence(table.scope, table.targetId)),
+  ],
+);
+
+/**
  * A normalised usage interval pulled from ActivityWatch. Both `started_at`
  * and `ended_at` are UTC. Burndown views read these per user over a time
  * window, optionally narrowed to one activity — hence the two indexes.
@@ -668,10 +732,19 @@ export const adminCredentials = sqliteTable(
 );
 
 /**
- * Per-user knobs for the client-side notification experience (Phase 8b).
- * 1:1 with {@link users} (the `user_id` is the primary key).
- * `cadence_overrides_json` is an optional JSON blob of warning-cadence
- * overrides; NULL means "use the built-in 15/5/1-minute cadence".
+ * Per-user knobs for the client-side notification experience (#104, Phase 8b).
+ * 1:1 with {@link users} (the `user_id` is the primary key). The values and
+ * their defaults come from `docs/client-notifications.md` → "Configuration
+ * knobs" (the authoritative source); the shared bounds/defaults live in
+ * {@link ./notification.ts} so the storage `CHECK` and the API DTOs read one
+ * source.
+ *
+ * - `enabled` — master switch, default `true`.
+ * - `sound_profile` — `off` / `subtle` / `prominent` ({@link soundProfileValues}),
+ *   default `subtle`; a `CHECK` pins it to the enum the DTO validates against.
+ * - `grace_seconds` — 0–60, default 15 (0 disables the grace countdown).
+ * - `cadence_overrides_json` — optional JSON blob of warning-cadence overrides;
+ *   NULL means "use the built-in 15/5/1-minute cadence".
  */
 export const notificationPolicies = sqliteTable(
   "notification_policies",
@@ -679,14 +752,29 @@ export const notificationPolicies = sqliteTable(
     userId: integer("user_id")
       .primaryKey()
       .references(() => users.id, { onDelete: "cascade" }),
-    enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
-    soundProfile: text("sound_profile").notNull().default("default"),
-    graceSeconds: integer("grace_seconds").notNull().default(60),
+    enabled: integer("enabled", { mode: "boolean" })
+      .notNull()
+      .default(DEFAULT_NOTIFICATION_ENABLED),
+    soundProfile: text("sound_profile", { enum: soundProfileValues })
+      .notNull()
+      .default(DEFAULT_SOUND_PROFILE),
+    graceSeconds: integer("grace_seconds").notNull().default(DEFAULT_GRACE_SECONDS),
     cadenceOverridesJson: text("cadence_overrides_json", { mode: "json" }).$type<
       Record<string, unknown>
     >(),
   },
-  (table) => [check("notification_policies_grace_check", sql`${table.graceSeconds} >= 0`)],
+  (table) => [
+    check(
+      "notification_policies_sound_profile_check",
+      oneOf(table.soundProfile, soundProfileValues),
+    ),
+    // Grace period is a whole number of seconds in [0, 60] (ADR knobs: 0
+    // disables the countdown, 60 is the documented ceiling).
+    check(
+      "notification_policies_grace_check",
+      sql`${table.graceSeconds} between ${sql.raw(String(GRACE_SECONDS_MIN))} and ${sql.raw(String(GRACE_SECONDS_MAX))}`,
+    ),
+  ],
 );
 
 /**
@@ -787,5 +875,40 @@ export const transportQueue = sqliteTable(
     index("transport_queue_client_status_id_idx").on(table.clientId, table.status, table.id),
     check("transport_queue_status_check", oneOf(table.status, transportQueueStatusValues)),
     check("transport_queue_attempts_check", sql`${table.attempts} >= 0`),
+  ],
+);
+
+/**
+ * Per-category retention overrides (#136, epic #135).
+ *
+ * Retention has a global default window (env `PCT_RETENTION_DEFAULT_DAYS`, 365
+ * days) plus optional per-category overrides stored here — one row per
+ * {@link retentionCategoryValues} category that diverges from the default. A
+ * category with **no row** inherits the default; a row either pins a custom
+ * positive `days` count or sets `keep_forever`. The pure resolution rule and
+ * the `isExpired` predicate that the purge job (#137/#138) reuses live in
+ * `policy/retention.ts`; this table is just the persisted override layer.
+ *
+ * `category` is the primary key (at most one override per category). The
+ * coherence CHECK encodes the keepForever ⊕ days invariant the model also
+ * guards (`overrideToResolved`): keep-forever rows carry no day count, custom
+ * rows carry a positive one. `updated_at` is UTC epoch seconds (ADR 0001).
+ */
+export const retentionOverrides = sqliteTable(
+  "retention_overrides",
+  {
+    category: text("category", { enum: retentionCategoryValues }).primaryKey(),
+    keepForever: integer("keep_forever", { mode: "boolean" }).notNull().default(false),
+    days: integer("days"),
+    updatedAt: timestampNow("updated_at"),
+  },
+  (table) => [
+    check("retention_overrides_category_check", oneOf(table.category, retentionCategoryValues)),
+    // keepForever ⊕ days: keep-forever rows carry no day count; custom-window
+    // rows carry a strictly-positive one. Mirrors `overrideToResolved`.
+    check(
+      "retention_overrides_coherence_check",
+      sql`(${table.keepForever} = 1 and ${table.days} is null) or (${table.keepForever} = 0 and ${table.days} > 0)`,
+    ),
   ],
 );

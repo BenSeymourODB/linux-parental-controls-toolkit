@@ -34,11 +34,13 @@ import {
   createBudgetSchema,
   createClientSchema,
   createExceptionSchema,
+  createGroupBudgetSchema,
   createGroupExceptionSchema,
   createGroupScheduleSchema,
   createScheduleSchema,
   createUserGroupSchema,
   createUserSchema,
+  defaultNotificationPolicyResponse,
   groupActivityParamsSchema,
   groupIdParamsSchema,
   idParamsSchema,
@@ -47,9 +49,11 @@ import {
   toBudgetResponse,
   toClientResponse,
   toExceptionResponse,
+  toGroupBudgetResponse,
   toGroupExceptionResponse,
   toGroupScheduleResponse,
   toLinkResponse,
+  toNotificationPolicyResponse,
   toScheduleResponse,
   toUserGroupResponse,
   toUserResponse,
@@ -62,6 +66,7 @@ import {
   updateUserGroupSchema,
   updateUserSchema,
   upsertLinkSchema,
+  upsertNotificationPolicySchema,
   userClientParamsSchema,
   userGroupMemberParamsSchema,
   userIdParamsSchema,
@@ -71,9 +76,11 @@ import {
   type BudgetResponse,
   type ClientResponse,
   type ExceptionResponse,
+  type GroupBudgetResponse,
   type GroupExceptionResponse,
   type GroupScheduleResponse,
   type LinkResponse,
+  type NotificationPolicyResponse,
   type ScheduleResponse,
   type UserGroupResponse,
   type UserResponse,
@@ -392,11 +399,20 @@ export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushSt
     { ...guard, schema: { params: userClientParamsSchema } },
     async (request, reply) => {
       const { userId, clientId } = request.params;
-      assertRemoved(
-        repo.deleteLink(scope.db, userId, clientId),
-        `No link between user ${userId} and client ${clientId}`,
+      const removed = repo.deleteLink(scope.db, userId, clientId);
+      if (removed === undefined) {
+        throw notFound(`No link between user ${userId} and client ${clientId}`);
+      }
+      // Carry the now-cascaded-away OS account name so the executor can
+      // "unmanage" it on the client (lift stale timekpra limits back to
+      // unrestricted), #253 — the link row is gone, so the name can only come
+      // from here. Mirrors the `link.upserted` detail.
+      pushStub.push(
+        linkPushCommands("link.deleted", userId, clientId, {
+          osUsername: removed.osUsername,
+          osUserRef: removed.osUserRef,
+        }),
       );
-      pushStub.push(linkPushCommands("link.deleted", userId, clientId, {}));
       return reply.code(204).send();
     },
   );
@@ -951,6 +967,117 @@ export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushSt
     },
   );
 
+  // --- Group budgets (#134) ------------------------------------------------
+  // Group-targeted baseline allowances (ADR 0008). Nested under the group (the
+  // structural owner); a mutation fans the push out to every member's clients,
+  // reusing the user-scoped `budget.*` reasons. Item routes are flat by id,
+  // like `/budgets/:id`. The resolved per-user baseline (own budget for a slot,
+  // else the inherited group budget) is computed in `gatherUserBudgets`.
+
+  typed.get(
+    "/user-groups/:groupId/budgets",
+    { ...guard, schema: { params: groupIdParamsSchema } },
+    async (request): Promise<GroupBudgetResponse[]> => {
+      const { groupId } = request.params;
+      if (repo.getUserGroup(scope.db, groupId) === undefined) {
+        throw new ApiError(404, "not_found", `User group ${groupId} not found`);
+      }
+      return repo.listGroupBudgets(scope.db, groupId).map(toGroupBudgetResponse);
+    },
+  );
+
+  typed.post(
+    "/user-groups/:groupId/budgets",
+    { ...guard, schema: { params: groupIdParamsSchema, body: createGroupBudgetSchema } },
+    async (request, reply): Promise<GroupBudgetResponse> => {
+      const { groupId } = request.params;
+      if (repo.getUserGroup(scope.db, groupId) === undefined) {
+        throw new ApiError(404, "not_found", `User group ${groupId} not found`);
+      }
+      const { scope: budgetScope, targetId } = request.body;
+      assertTarget(scope.db, budgetScope, targetId);
+      const row = asValidated(
+        () => repo.createGroupBudget(scope.db, { userGroupId: groupId, ...request.body }),
+        "The group budget violates a storage constraint (target coherence or a negative allowance)",
+      );
+      pushStub.push(
+        groupMemberPushCommands(scope.db, "budget.created", groupId, {
+          groupBudgetId: row.id,
+          userGroupId: groupId,
+          scope: row.scope,
+          targetId: row.targetId,
+          window: row.window,
+          secondsAllowed: row.secondsAllowed,
+        }),
+      );
+      reply.code(201);
+      return toGroupBudgetResponse(row);
+    },
+  );
+
+  typed.get(
+    "/group-budgets/:id",
+    { ...guard, schema: { params: idParamsSchema } },
+    async (request): Promise<GroupBudgetResponse> => {
+      const row = repo.getGroupBudget(scope.db, request.params.id);
+      if (row === undefined) {
+        throw new ApiError(404, "not_found", `Group budget ${request.params.id} not found`);
+      }
+      return toGroupBudgetResponse(row);
+    },
+  );
+
+  typed.patch(
+    "/group-budgets/:id",
+    { ...guard, schema: { params: idParamsSchema, body: updateBudgetSchema } },
+    async (request): Promise<GroupBudgetResponse> => {
+      const existing = repo.getGroupBudget(scope.db, request.params.id);
+      if (existing === undefined) {
+        throw new ApiError(404, "not_found", `Group budget ${request.params.id} not found`);
+      }
+      // Re-validate coherence against the merged row: a PATCH may change only
+      // the scope or only the target.
+      const nextScope = request.body.scope ?? existing.scope;
+      const nextTargetId =
+        request.body.targetId !== undefined ? request.body.targetId : existing.targetId;
+      assertTarget(scope.db, nextScope, nextTargetId);
+      const row = asValidated(
+        () => repo.updateGroupBudget(scope.db, request.params.id, request.body),
+        "The group budget update violates a storage constraint",
+      );
+      if (row === undefined) {
+        throw new ApiError(404, "not_found", `Group budget ${request.params.id} not found`);
+      }
+      pushStub.push(
+        groupMemberPushCommands(scope.db, "budget.updated", row.userGroupId, {
+          groupBudgetId: row.id,
+          userGroupId: row.userGroupId,
+          ...request.body,
+        }),
+      );
+      return toGroupBudgetResponse(row);
+    },
+  );
+
+  typed.delete(
+    "/group-budgets/:id",
+    { ...guard, schema: { params: idParamsSchema } },
+    async (request, reply) => {
+      const existing = repo.getGroupBudget(scope.db, request.params.id);
+      if (existing === undefined) {
+        throw new ApiError(404, "not_found", `Group budget ${request.params.id} not found`);
+      }
+      // Resolve the fan-out from the row's group before the delete.
+      const commands = groupMemberPushCommands(scope.db, "budget.deleted", existing.userGroupId, {
+        groupBudgetId: existing.id,
+        userGroupId: existing.userGroupId,
+      });
+      repo.deleteGroupBudget(scope.db, request.params.id);
+      pushStub.push(commands);
+      return reply.code(204).send();
+    },
+  );
+
   // --- Budgets -------------------------------------------------------------
   // User-scoped: every mutation pushes to the clients that user is linked to.
 
@@ -1337,6 +1464,87 @@ export function registerPolicyRoutes(scope: FastifyInstance, push?: PolicyPushSt
           exceptionId: existing.id,
         }),
       );
+      return reply.code(204).send();
+    },
+  );
+
+  // --- Notification policy (#104) ------------------------------------------
+  // Per-user (1:1), pushed to the client "with the rest of policy" and cached
+  // there (docs/client-notifications.md). A user always *has* an effective
+  // policy: GET returns the persisted row or the documented defaults; PUT
+  // upserts; DELETE reverts to defaults. Mutations fan out to the user's
+  // linked clients exactly like budget.*/schedule.* (eventual wire delivery is
+  // the `policy.changed` event, #100).
+
+  typed.get(
+    "/users/:userId/notification-policy",
+    { ...guard, schema: { params: userIdParamsSchema } },
+    async (request): Promise<NotificationPolicyResponse> => {
+      const { userId } = request.params;
+      if (repo.getUser(scope.db, userId) === undefined) {
+        throw new ApiError(404, "not_found", `User ${userId} not found`);
+      }
+      const row = repo.getNotificationPolicy(scope.db, userId);
+      return row === undefined
+        ? defaultNotificationPolicyResponse(userId)
+        : toNotificationPolicyResponse(row);
+    },
+  );
+
+  typed.put(
+    "/users/:userId/notification-policy",
+    { ...guard, schema: { params: userIdParamsSchema, body: upsertNotificationPolicySchema } },
+    async (request): Promise<NotificationPolicyResponse> => {
+      const { userId } = request.params;
+      // Confirm the user exists so the caller gets a precise 404 rather than an
+      // opaque foreign-key failure.
+      if (repo.getUser(scope.db, userId) === undefined) {
+        throw new ApiError(404, "not_found", `User ${userId} not found`);
+      }
+      const row = asValidated(
+        () => repo.upsertNotificationPolicy(scope.db, userId, request.body),
+        "The notification policy violates a storage constraint",
+      );
+      pushStub.push(
+        userPushCommands(
+          "notification.upserted",
+          userId,
+          repo.listUserClientIds(scope.db, userId),
+          {
+            enabled: row.enabled,
+            soundProfile: row.soundProfile,
+            graceSeconds: row.graceSeconds,
+            // The full effective policy is pushed "with the rest of policy" and
+            // cached client-side (#100/#103), so carry the cadence overrides the
+            // upsert just persisted — `null` means the built-in cadence.
+            cadenceOverrides: row.cadenceOverridesJson ?? null,
+          },
+        ),
+      );
+      return toNotificationPolicyResponse(row);
+    },
+  );
+
+  typed.delete(
+    "/users/:userId/notification-policy",
+    { ...guard, schema: { params: userIdParamsSchema } },
+    async (request, reply) => {
+      const { userId } = request.params;
+      // Resolve the affected clients before deleting so the push still fans out.
+      const clientIds = repo.listUserClientIds(scope.db, userId);
+      if (!repo.deleteNotificationPolicy(scope.db, userId)) {
+        // No persisted row: either the user doesn't exist or they were already
+        // at defaults. Distinguish so "already default" isn't a silent 204 lie.
+        if (repo.getUser(scope.db, userId) === undefined) {
+          throw new ApiError(404, "not_found", `User ${userId} not found`);
+        }
+        throw new ApiError(
+          404,
+          "not_found",
+          `User ${userId} has no custom notification policy (already at defaults)`,
+        );
+      }
+      pushStub.push(userPushCommands("notification.deleted", userId, clientIds, {}));
       return reply.code(204).send();
     },
   );
