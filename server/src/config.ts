@@ -231,6 +231,14 @@ const settingsSchema = z
       })
       .default("2.18.1"),
     /**
+     * Path to the bundled `install-client.sh` served at `GET /install-client.sh`
+     * (`PCT_INSTALL_CLIENT_SCRIPT_PATH`). Defaults to the in-image path the
+     * Dockerfile copies the script into. Overridable so dev and tests can point
+     * at a different path; if absent the route 404s with a startup warning rather
+     * than blocking startup.
+     */
+    installClientScriptPath: z.string().min(1).default("/app/client-scripts/install-client.sh"),
+    /**
      * Read-only, in-image source directory the first-run bootstrap (#39) syncs
      * playbooks from into `<ansibleDir>/playbooks/` (`PCT_ANSIBLE_PLAYBOOK_SRC`).
      * Defaults to the path the image is expected to ship them at. A missing
@@ -436,6 +444,7 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
     adminPassword: env.PCT_ADMIN_PASSWORD,
     ansibleDir: env.PCT_ANSIBLE_DIR,
     ansibleCoreVersion: env.PCT_ANSIBLE_CORE_VERSION,
+    installClientScriptPath: env.PCT_INSTALL_CLIENT_SCRIPT_PATH,
     ansiblePlaybookSourceDir: env.PCT_ANSIBLE_PLAYBOOK_SRC,
     sshPublicKeyPath: env.PCT_SSH_PUBLIC_KEY_PATH,
     sshPrivateKeyPath: env.PCT_SSH_PRIVATE_KEY_PATH,

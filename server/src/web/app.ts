@@ -29,6 +29,7 @@ import {
   type PolicyPushTransport,
 } from "../transport/policy-push/index.js";
 import { registerFrontend } from "./frontend.js";
+import { registerInstallScript } from "./install-script.js";
 import { REQUEST_ID_HEADER, buildLoggerOptions, genRequestId, type LogStream } from "./logger.js";
 
 declare module "fastify" {
@@ -267,6 +268,10 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     policyPush.adjustTimeToday,
     options.eventStream,
   );
+
+  // Serve the client install script at /install-client.sh. Skipped (with a
+  // warning) when the bundled file is absent, so other routes are unaffected.
+  registerInstallScript(app, settings);
 
   // Serve the prerendered SvelteKit build at /admin and /app (#40). Skipped
   // (with a warning) when the build directory is absent, so /, /healthz, and
