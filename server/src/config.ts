@@ -237,10 +237,7 @@ const settingsSchema = z
      * at a different path; if absent the route 404s with a startup warning rather
      * than blocking startup.
      */
-    installClientScriptPath: z
-      .string()
-      .min(1)
-      .default("/app/client-scripts/install-client.sh"),
+    installClientScriptPath: z.string().min(1).default("/app/client-scripts/install-client.sh"),
     /**
      * Read-only, in-image source directory the first-run bootstrap (#39) syncs
      * playbooks from into `<ansibleDir>/playbooks/` (`PCT_ANSIBLE_PLAYBOOK_SRC`).
