@@ -78,6 +78,31 @@ Rationale:
 - PlayTime brings no graceful UX (it hard-terminates); the user-facing warning
   cadence and grace period are the agent's job (Phase 8b) regardless.
 
+### Second differentiator: what gets matched
+
+The two mechanisms match on **different identifiers**, and the custom path's is
+the more precise one for desktop apps:
+
+- **PlayTime** matches process **masks against the executable path + name** from
+  the live process table (e.g. `minetest`), or — with the "Enhanced activity
+  monitor" option — against the first 512 characters of the full command line
+  including arguments.
+- **The custom path** matches the **foreground application identity ActivityWatch
+  reports from the window/desktop layer** (the WM app id / class, e.g.
+  `google-chrome`, `org.gnome.Nautilus`, `firefox-esr`) through the
+  [ADR 0006](0006-activity-matcher-grammar.md) `match_type` grammar
+  (`exact`/`substring`/`glob`/`regex`). This is the app *as the desktop and the
+  user perceive it*, independent of which on-disk binary backs it.
+
+This matters whenever **one executable hosts many distinct apps**: Electron apps
+all run `electron`, JVM apps run `java`, and interpreter- or wrapper-launched
+apps (`python`, `wine`, Flatpak shims) share a binary. Executable-name masking
+conflates them; PlayTime's command-line option can sometimes disambiguate via
+arguments but is brittle. Matching the window-layer app identity separates them
+naturally — and it is the identity a parent actually wants to budget. It is a
+capability PlayTime does **not** offer, and it reinforces keeping per-activity
+matching on the AW-sourced custom path.
+
 The `setplaytime*` CLI wrappers shipped under #83 are **retained but
 intentionally unused** — they are correct, tested, and cheap to keep, and they
 leave the door open to the revisit below without re-deriving the grammar. They
