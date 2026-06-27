@@ -85,6 +85,7 @@ const EXPECTED_TABLES = [
   "usage_samples",
   "user_group_memberships",
   "user_groups",
+  "user_pins",
   "users",
   "users_on_clients",
 ];

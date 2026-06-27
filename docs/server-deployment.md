@@ -331,6 +331,34 @@ failed-attempt limiter" (#235).
   marked `Secure` (the default LAN deployment is plain HTTP on port
   8000); when terminating TLS at a reverse proxy, that proxy is the
   appropriate place to enforce HTTPS.
+- **Per-user PIN sessions (child `/app` access).** Separate from the admin
+  login above, a supervised `User` may be given a numeric PIN (4–10 digits)
+  so a child can open the mobile `/app` surface and see **only their own**
+  data (Phase 9, #112). This does **not** make `User` a general account or an
+  admin: it is a deliberately narrow, lightweight credential.
+  - The admin sets, resets, or clears a user's PIN from `/admin`
+    (`PUT`/`DELETE /api/users/:userId/pin`); only its Argon2id hash is stored
+    (in a dedicated `user_pins` table, never on the widely-read `users` row),
+    and the response only ever reveals *whether* a PIN is set.
+  - A child signs in at `/app` with their **user id + PIN**
+    (`POST /api/app/session`), which issues a second signed cookie
+    (`pct_pin_session`, `HttpOnly`, `SameSite=Strict`, **12-hour** expiry —
+    shorter than the admin week because it is a shared family device). Failed
+    attempts are throttled per `(user, source IP)` — enough to cut off online
+    guessing from any one source, without letting an attacker lock a child out
+    of their *own* device from a different IP — and an unknown user / unset PIN
+    takes the same time as a wrong PIN, so the endpoint cannot be used to
+    enumerate which accounts exist. There is intentionally **no unauthenticated endpoint that
+    lists users** — login is by id, not a roster picker.
+  - **Deny-by-default scoping.** A PIN session reaches a route only if that
+    route explicitly opts into the `requirePinSession` guard and serves *only*
+    the session's own user; every other route keeps the admin guard and rejects
+    a PIN session outright. So a PIN login can never read another user's data,
+    and a PIN session is never an admin session (or vice versa). The
+    own-data screens build on this guard in #110 / #111.
+  - This browser PIN path is distinct from the Phase-12 client "My Time"
+    dashboard, which authenticates from the Linux session (`linux-uid → User`),
+    not a PIN (see [`adr/0002-client-dashboard-shell.md`](adr/0002-client-dashboard-shell.md)).
 - Future: optional OIDC integration so a household identity provider
   (FreeIPA, Authentik) can be used. When that (Phase 11 multi-admin/OIDC)
   or the larger centralised-identity work (stretch epic #24 → #26:

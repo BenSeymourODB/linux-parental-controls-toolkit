@@ -13,6 +13,7 @@ import type { Settings } from "../config.js";
 import { registerEventStream, type EventHub, type EventStreamOptions } from "../events/index.js";
 import type { TimeTodayAdjuster } from "../transport/policy-push/index.js";
 import type { PolicyPushStub } from "../transport/stub.js";
+import { registerAppAuthRoutes } from "./app/index.js";
 import { registerAuditRoutes } from "./audit/index.js";
 import { registerClientEnrolmentRoutes, registerClientHealthRoutes } from "./clients/index.js";
 import { registerDnsRoutes } from "./dns/index.js";
@@ -70,6 +71,11 @@ export interface ApiPluginOptions {
 export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (scope, opts) => {
   installApiConventions(scope);
   await registerAuth(scope, opts.settings);
+  // Per-user PIN auth (#112): admin set/reset/clear of a child's PIN, the
+  // `/app` PIN session (login/logout/whoami), and the first own-data-only read
+  // (`GET /api/app/me`). Registered after auth so `scope.requireAdmin` /
+  // `scope.requirePinSession` exist and the cookie plugin is installed.
+  registerAppAuthRoutes(scope, opts.settings);
   registerMetaRoute(scope);
   // Policy CRUD (#51) — registered after auth so `scope.requireAdmin` exists.
   // The live SSH dispatcher (#201) is injected from buildApp; absent it, the

@@ -127,6 +127,13 @@
       "when": 1782509953861,
       "tag": "20260626213913_sparkling_genesis",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1782578822511,
+      "tag": "20260627164702_chunky_sentinels",
+      "breakpoints": true
     }
   ]
 }

@@ -100,6 +100,28 @@ export const users = sqliteTable("users", {
 });
 
 /**
+ * Per-user PIN credential for the `/app` child-scoped session (#112).
+ *
+ * A supervised `User` is normally a policy subject, not an auth principal
+ * (`docs/server-deployment.md` → "Authentication"); this is the one, optional
+ * exception — a child opens `/app`, enters a numeric PIN, and gets a session
+ * scoped to **their own** data only. The credential lives in its own table
+ * (not a `users` column) so the Argon2id hash never rides along on the
+ * widely-read `users` rows / DTOs, mirroring the `integration_tokens`
+ * credential-isolation precedent. One PIN per user (`user_id` is unique); the
+ * row is removed with its user (`ON DELETE CASCADE`). Only the hash is stored
+ * — the plaintext PIN is never persisted.
+ */
+export const userPins = sqliteTable("user_pins", {
+  userId: integer("user_id")
+    .primaryKey()
+    .references(() => users.id, { onDelete: "cascade" }),
+  hashedPin: text("hashed_pin").notNull(),
+  createdAt: timestampNow("created_at"),
+  updatedAt: timestampNow("updated_at"),
+});
+
+/**
  * An enrolled Linux desktop the dashboard orchestrates over SSH.
  *
  * `bearer_token_hash` is the SHA-256 of the per-client bearer token issued at
