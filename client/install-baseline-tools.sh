@@ -58,11 +58,39 @@ AW_PREFIX="${AW_PREFIX:-/opt/activitywatch}"
 AW_HOST="${AW_HOST:-127.0.0.1}"
 AW_PORT="${AW_PORT:-5600}"
 
-# Timekpr-nExT upstream PPA (Debian/Ubuntu/Mint).
+# Timekpr-nExT upstream PPA (Debian/Ubuntu/Mint). We add it ourselves rather
+# than via `add-apt-repository`, whose Launchpad lookup has a ~10s timeout
+# hardcoded in software-properties (no flag, no env var) — too short for a slow
+# link. Doing the two fetches (signing-key fingerprint + key) with curl lets us
+# set the timeout ourselves (PCT_PPA_FETCH_TIMEOUT), pins trust to that key, and
+# drops the software-properties dependency for this step.
 TIMEKPR_PPA="${TIMEKPR_PPA:-ppa:mjasnik/ppa}"
-# Glob matching the apt list file `add-apt-repository` writes for that PPA (its
-# exact name embeds the distro codename). Presence makes the "add repository"
-# step idempotent; overridable so tests can point it at a fixture.
+TIMEKPR_PPA_OWNER="${TIMEKPR_PPA_OWNER:-mjasnik}"
+TIMEKPR_PPA_NAME="${TIMEKPR_PPA_NAME:-ppa}"
+# Where the PPA publishes packages, and its Launchpad API record (queried for
+# the signing-key fingerprint). Overridable wholesale for tests / mirrors.
+TIMEKPR_PPA_URI="${TIMEKPR_PPA_URI:-https://ppa.launchpadcontent.net/${TIMEKPR_PPA_OWNER}/${TIMEKPR_PPA_NAME}/ubuntu}"
+TIMEKPR_PPA_LP_API="${TIMEKPR_PPA_LP_API:-https://api.launchpad.net/devel/~${TIMEKPR_PPA_OWNER}/+archive/ubuntu/${TIMEKPR_PPA_NAME}}"
+# Keyserver the signing key is fetched from, by fingerprint.
+PCT_KEYSERVER_URL="${PCT_KEYSERVER_URL:-https://keyserver.ubuntu.com/pks/lookup}"
+# Optionally pin the fingerprint to skip the Launchpad API entirely (most robust
+# on a flaky link).
+TIMEKPR_PPA_FINGERPRINT="${TIMEKPR_PPA_FINGERPRINT:-}"
+# Apt suite (the Ubuntu series the PPA is built for). Defaults to the host's
+# Ubuntu base codename (Mint reports it in UBUNTU_CODENAME, e.g. jammy);
+# overridable.
+TIMEKPR_PPA_SUITE="${TIMEKPR_PPA_SUITE:-}"
+# The apt source + (armoured) keyring we write. Modern apt accepts an armoured
+# key in Signed-By when the file ends .asc, so no gpg/dearmor step is needed.
+TIMEKPR_PPA_KEYRING="${TIMEKPR_PPA_KEYRING:-/etc/apt/keyrings/timekpr-next-ppa.asc}"
+TIMEKPR_PPA_SOURCES="${TIMEKPR_PPA_SOURCES:-/etc/apt/sources.list.d/timekpr-next-ppa.sources}"
+# Per-fetch network timeout (seconds) for the Launchpad/keyserver curls — the
+# whole point of adding the PPA ourselves: a value we control, unlike
+# add-apt-repository's fixed ~10s. Raise it on a slow link.
+PCT_PPA_FETCH_TIMEOUT="${PCT_PPA_FETCH_TIMEOUT:-60}"
+# Idempotency: presence of our sources file — or a legacy add-apt-repository
+# `*mjasnik*.list` from an earlier install — means the repo is already
+# configured. Overridable so tests can point it at a fixture.
 TIMEKPR_PPA_LIST_GLOB="${TIMEKPR_PPA_LIST_GLOB:-/etc/apt/sources.list.d/*mjasnik*.list}"
 
 # Timekpr-nExT's own config + client-indicator autostart (#268). In Alpha-1 the
@@ -96,16 +124,105 @@ E2G_PCT_DIR="${E2G_PCT_DIR:-${E2G_DIR}/pct.d}"
 
 # --- step: apt repositories ------------------------------------------------
 
+# Resolve the Ubuntu series (apt "Suite") the PPA is consumed for. Mint reports
+# its Ubuntu base in UBUNTU_CODENAME (e.g. jammy); plain Ubuntu uses
+# VERSION_CODENAME. Honours the TIMEKPR_PPA_SUITE override. Echoes the suite (or
+# the empty string if it can't be determined).
+pct_baseline_ppa_suite() {
+  if [ -n "$TIMEKPR_PPA_SUITE" ]; then
+    printf '%s' "$TIMEKPR_PPA_SUITE"
+    return 0
+  fi
+  local os_release="${PCT_OS_RELEASE:-/etc/os-release}" line ubuntu="" version=""
+  if [ -r "$os_release" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      case "$line" in
+      UBUNTU_CODENAME=*) ubuntu="${line#*=}" ;;
+      VERSION_CODENAME=*) version="${line#*=}" ;;
+      esac
+    done <"$os_release"
+  fi
+  local suite="${ubuntu:-$version}"
+  suite="${suite%\"}"
+  suite="${suite#\"}"
+  printf '%s' "$suite"
+}
+
+# Echo the PPA signing-key fingerprint: the pinned value if given, else fetched
+# from the Launchpad API with our own (configurable) timeout. Non-zero + empty
+# on failure.
+pct_baseline_ppa_fingerprint() {
+  if [ -n "$TIMEKPR_PPA_FINGERPRINT" ]; then
+    printf '%s' "$TIMEKPR_PPA_FINGERPRINT"
+    return 0
+  fi
+  local json
+  json="$(pct_retry curl --fail --silent --show-error \
+    --max-time "$PCT_PPA_FETCH_TIMEOUT" "$TIMEKPR_PPA_LP_API")" || return 1
+  # The LP API record carries "signing_key_fingerprint": "<40 hex>".
+  if [[ "$json" =~ \"signing_key_fingerprint\"[[:space:]]*:[[:space:]]*\"([0-9A-Fa-f]+)\" ]]; then
+    printf '%s' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+  return 1
+}
+
+# Add the Timekpr-nExT PPA without add-apt-repository: resolve the signing key
+# and write an apt source pinned to it, with every network fetch bounded by a
+# timeout we control (PCT_PPA_FETCH_TIMEOUT) rather than the fixed ~10s baked
+# into software-properties' Launchpad lookup.
+pct_baseline_add_timekpr_ppa() {
+  local suite
+  suite="$(pct_baseline_ppa_suite)"
+  pct_log "Adding Timekpr-nExT PPA ${TIMEKPR_PPA} (suite ${suite:-unknown}, fetch timeout ${PCT_PPA_FETCH_TIMEOUT}s)"
+
+  if pct_is_dry_run; then
+    printf '%s %s\n' "$PCT_DRYRUN_PREFIX" \
+      "resolve signing key (curl --max-time ${PCT_PPA_FETCH_TIMEOUT} ${TIMEKPR_PPA_LP_API} + ${PCT_KEYSERVER_URL})" >&2
+    printf '%s %s\n' "$PCT_DRYRUN_PREFIX" "write ${TIMEKPR_PPA_KEYRING}" >&2
+    printf '%s %s\n' "$PCT_DRYRUN_PREFIX" \
+      "write ${TIMEKPR_PPA_SOURCES} (deb ${TIMEKPR_PPA_URI} ${suite:-<suite>} main)" >&2
+    return 0
+  fi
+
+  if [ -z "$suite" ]; then
+    pct_err "could not determine the Ubuntu series for the PPA; set TIMEKPR_PPA_SUITE (e.g. jammy)"
+    return 1
+  fi
+
+  local fpr
+  if ! fpr="$(pct_baseline_ppa_fingerprint)" || [ -z "$fpr" ]; then
+    pct_err "could not resolve the Timekpr-nExT PPA signing key from ${TIMEKPR_PPA_LP_API} (slow/unreachable Launchpad?); raise PCT_PPA_FETCH_TIMEOUT, or pin TIMEKPR_PPA_FINGERPRINT"
+    return 1
+  fi
+
+  # Fetch the ASCII-armoured signing key by fingerprint, with our own timeout.
+  mkdir -p "$(dirname "$TIMEKPR_PPA_KEYRING")"
+  if ! pct_retry curl --fail --silent --show-error --max-time "$PCT_PPA_FETCH_TIMEOUT" \
+    --output "$TIMEKPR_PPA_KEYRING" \
+    "${PCT_KEYSERVER_URL}?op=get&options=mr&search=0x${fpr}"; then
+    pct_err "failed to fetch the PPA signing key 0x${fpr} from ${PCT_KEYSERVER_URL}"
+    return 1
+  fi
+  chmod 0644 "$TIMEKPR_PPA_KEYRING"
+
+  # Write a deb822 source pinned (Signed-By) to the key we just fetched.
+  pct_write_file "$TIMEKPR_PPA_SOURCES" <<EOF
+Types: deb
+URIs: ${TIMEKPR_PPA_URI}
+Suites: ${suite}
+Components: main
+Signed-By: ${TIMEKPR_PPA_KEYRING}
+EOF
+  pct_ok "Timekpr-nExT PPA configured (${TIMEKPR_PPA_SOURCES})"
+}
+
 pct_baseline_add_repositories() {
   pct_step "Add upstream package repositories"
-  if compgen -G "$TIMEKPR_PPA_LIST_GLOB" >/dev/null 2>&1; then
-    pct_ok "Timekpr-nExT PPA already present (${TIMEKPR_PPA_LIST_GLOB})"
+  if compgen -G "$TIMEKPR_PPA_LIST_GLOB" >/dev/null 2>&1 || [ -f "$TIMEKPR_PPA_SOURCES" ]; then
+    pct_ok "Timekpr-nExT PPA already present"
   else
-    pct_log "Adding Timekpr-nExT PPA ${TIMEKPR_PPA}"
-    # Network-dependent: add-apt-repository fetches the PPA key/metadata from
-    # launchpad.net and gives up after a short internal timeout. Retry so a
-    # transient blip on home internet doesn't abort the whole enrolment.
-    pct_retry add-apt-repository -y "$TIMEKPR_PPA"
+    pct_baseline_add_timekpr_ppa
   fi
   pct_retry apt-get update -q
   # ActivityWatch is an upstream release bundle (handled below); e2guardian

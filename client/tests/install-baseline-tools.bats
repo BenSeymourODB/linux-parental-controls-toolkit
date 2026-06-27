@@ -51,9 +51,29 @@ plan() { # run the script in dry-run with the given args, capture the plan
 @test "adds the Timekpr PPA and installs the three baseline tools" {
   plan --supervised-user alice
   [ "$status" -eq 0 ]
-  [[ "$output" == *"add-apt-repository -y ppa:mjasnik/ppa"* ]]
+  [[ "$output" == *"Adding Timekpr-nExT PPA ppa:mjasnik/ppa"* ]]
+  # We add the PPA ourselves (not via add-apt-repository) so the launchpad/key
+  # fetches use a timeout we control.
+  [[ "$output" != *"add-apt-repository"* ]]
+  [[ "$output" == *"write /etc/apt/sources.list.d/timekpr-next-ppa.sources"* ]]
   [[ "$output" == *"apt-get install"*"timekpr-next"* ]]
   [[ "$output" == *"e2guardian"* ]]
+}
+
+@test "the PPA fetch timeout is configurable (PCT_PPA_FETCH_TIMEOUT)" {
+  PCT_PPA_FETCH_TIMEOUT=120 plan --supervised-user alice
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"fetch timeout 120s"* ]]
+  [[ "$output" == *"curl --max-time 120"* ]]
+}
+
+@test "resolves the PPA suite from UBUNTU_CODENAME (Mint reports its Ubuntu base)" {
+  # Mint carries its own VERSION_CODENAME (e.g. virginia) but the PPA is built
+  # for the Ubuntu base in UBUNTU_CODENAME — that must win.
+  printf 'ID=linuxmint\nID_LIKE="ubuntu debian"\nVERSION_CODENAME=virginia\nUBUNTU_CODENAME=jammy\n' >"$OSREL"
+  plan --supervised-user alice
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"timekpr-next-ppa.sources (deb https://ppa.launchpadcontent.net/mjasnik/ppa/ubuntu jammy main)"* ]]
 }
 
 @test "pins the AW version and checksum-verifies the download" {
@@ -166,14 +186,23 @@ EOF
   [ "$status" -ne 0 ]
 }
 
-@test "PPA add is skipped when the list file already exists (idempotent)" {
+@test "PPA add is skipped when a legacy add-apt-repository list already exists (idempotent)" {
   local listfile="${TMP}/existing-mjasnik.list"
   : >"$listfile"
   TIMEKPR_PPA_LIST_GLOB="${TMP}/existing-*.list" \
     run env bash "$SCRIPT" --supervised-user alice
   [ "$status" -eq 0 ]
   [[ "$output" == *"Timekpr-nExT PPA already present"* ]]
-  [[ "$output" != *"add-apt-repository"* ]]
+  [[ "$output" != *"timekpr-next-ppa.sources"* ]]
+}
+
+@test "PPA add is skipped when our sources file already exists (idempotent re-run)" {
+  local sources="${TMP}/timekpr-next-ppa.sources"
+  : >"$sources"
+  TIMEKPR_PPA_SOURCES="$sources" plan --supervised-user alice
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Timekpr-nExT PPA already present"* ]]
+  [[ "$output" != *"Adding Timekpr-nExT PPA"* ]]
 }
 
 @test "ActivityWatch download is skipped when the pinned version is present" {

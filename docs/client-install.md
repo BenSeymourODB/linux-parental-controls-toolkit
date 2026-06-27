@@ -54,7 +54,16 @@ dashboard, has a short TTL, and is single-use.
 1. **Sanity checks** — confirm distro (parse `/etc/os-release`), confirm
    sudo, confirm network reachability of the server URL.
 2. **Add repositories**
-   - Timekpr-nExT PPA: `ppa:mjasnik/ppa`
+   - Timekpr-nExT PPA: `ppa:mjasnik/ppa`. Added **without**
+     `add-apt-repository`: its Launchpad lookup has a ~10s timeout hardcoded in
+     `software-properties` that can't be extended, which fails on a slow link.
+     Instead the script resolves the PPA's signing-key fingerprint from the
+     Launchpad API, fetches the (armoured) key from `keyserver.ubuntu.com`, and
+     writes a deb822 source pinned to it (`Signed-By`) — every fetch bounded by
+     `PCT_PPA_FETCH_TIMEOUT` (default 60s; raise it on a slow connection). Pin
+     the fingerprint directly via `TIMEKPR_PPA_FINGERPRINT` to skip the
+     Launchpad API entirely, and override the series with `TIMEKPR_PPA_SUITE`
+     if auto-detection (from `UBUNTU_CODENAME`) is wrong.
    - ActivityWatch: install the upstream `.deb` from
      `github.com/ActivityWatch/activitywatch/releases` (or use the
      official PPA when available).

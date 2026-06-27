@@ -80,7 +80,7 @@ teardown() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"Provision the pct-agent service account"* ]]
   # A line only install-baseline-tools.sh emits — proves the embedded module ran.
-  [[ "$output" == *"add-apt-repository -y ppa:mjasnik/ppa"* ]]
+  [[ "$output" == *"Adding Timekpr-nExT PPA ppa:mjasnik/ppa"* ]]
   [[ "$output" == *"POST https://dash.lan/api/clients/enrol"* ]]
   # The bundled self-test (executable in the bundle) is found, not skipped.
   [[ "$output" == *"self-test.sh evie"* ]]
