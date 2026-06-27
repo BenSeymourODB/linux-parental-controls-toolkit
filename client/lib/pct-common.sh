@@ -44,12 +44,18 @@ pct_err() { printf 'pct: [error] %s\n' "$*" >&2; }
 
 # --- dry-run ---------------------------------------------------------------
 
-# True when PCT_DRY_RUN is set to a non-empty, non-"0" value.
-pct_is_dry_run() {
-  case "${PCT_DRY_RUN:-}" in
+# True when $1 is a "truthy" toggle value: non-empty and not one of 0/false/no.
+# The shared predicate behind the PCT_* boolean switches.
+pct_is_true() {
+  case "${1:-}" in
   "" | 0 | false | no) return 1 ;;
   *) return 0 ;;
   esac
+}
+
+# True when PCT_DRY_RUN is set to a non-empty, non-"0" value.
+pct_is_dry_run() {
+  pct_is_true "${PCT_DRY_RUN:-}"
 }
 
 # Run a command, or — under dry-run — print it (prefixed) without executing.

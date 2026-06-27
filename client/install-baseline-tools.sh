@@ -58,12 +58,21 @@ AW_PREFIX="${AW_PREFIX:-/opt/activitywatch}"
 AW_HOST="${AW_HOST:-127.0.0.1}"
 AW_PORT="${AW_PORT:-5600}"
 
-# Timekpr-nExT upstream PPA (Debian/Ubuntu/Mint). We add it ourselves rather
-# than via `add-apt-repository`, whose Launchpad lookup has a ~10s timeout
-# hardcoded in software-properties (no flag, no env var) — too short for a slow
-# link. Doing the two fetches (signing-key fingerprint + key) with curl lets us
-# set the timeout ourselves (PCT_PPA_FETCH_TIMEOUT), pins trust to that key, and
-# drops the software-properties dependency for this step.
+# timekpr-next now ships in the Debian/Ubuntu repositories, so by default we
+# install it straight from the distro (a plain `apt-get install timekpr-next`,
+# no external repository). The upstream PPA is kept as an opt-in fallback for
+# older releases that predate the packaged version — set PCT_TIMEKPR_USE_PPA=1
+# to add it. We avoid the PPA by default because its add-apt-repository path has
+# proven flaky (the Launchpad lookup's fixed ~10s timeout fails on slow links).
+PCT_TIMEKPR_USE_PPA="${PCT_TIMEKPR_USE_PPA:-0}"
+
+# Timekpr-nExT upstream PPA (Ubuntu/Mint), used only when PCT_TIMEKPR_USE_PPA=1.
+# We add it ourselves rather than via `add-apt-repository`, whose Launchpad
+# lookup has a ~10s timeout hardcoded in software-properties (no flag, no env
+# var) — too short for a slow link. Doing the two fetches (signing-key
+# fingerprint + key) with curl lets us set the timeout ourselves
+# (PCT_PPA_FETCH_TIMEOUT), pins trust to that key, and drops the
+# software-properties dependency for this step.
 TIMEKPR_PPA="${TIMEKPR_PPA:-ppa:mjasnik/ppa}"
 TIMEKPR_PPA_OWNER="${TIMEKPR_PPA_OWNER:-mjasnik}"
 TIMEKPR_PPA_NAME="${TIMEKPR_PPA_NAME:-ppa}"
@@ -219,7 +228,11 @@ EOF
 
 pct_baseline_add_repositories() {
   pct_step "Add upstream package repositories"
-  if compgen -G "$TIMEKPR_PPA_LIST_GLOB" >/dev/null 2>&1 || [ -f "$TIMEKPR_PPA_SOURCES" ]; then
+  # timekpr-next: default to the distribution's own repositories (no external
+  # repo). The PPA is opt-in for older releases that don't carry the package.
+  if ! pct_is_true "$PCT_TIMEKPR_USE_PPA"; then
+    pct_ok "Installing timekpr-next from the distribution repositories (no PPA); set PCT_TIMEKPR_USE_PPA=1 to add ${TIMEKPR_PPA} on a release that lacks it"
+  elif compgen -G "$TIMEKPR_PPA_LIST_GLOB" >/dev/null 2>&1 || [ -f "$TIMEKPR_PPA_SOURCES" ]; then
     pct_ok "Timekpr-nExT PPA already present"
   else
     pct_baseline_add_timekpr_ppa
