@@ -96,7 +96,10 @@ Goal: dashboard pushes overall session limits to clients.
 
 - ssh2-based transport facade.
 - `timekpra` invocations for: set daily/weekly/monthly limits, set
-  allowed hours, set PlayTime configuration.
+  allowed hours. (The PlayTime CLI wrappers also shipped here under #83 but
+  are intentionally left unwired — per-activity enforcement uses the Phase 8
+  usage-poll path, not PlayTime; see
+  [ADR 0010](adr/0010-per-activity-enforcement-mechanism.md).)
 - [x] Offline-queue: changes for offline clients persisted and replayed on
   next reachable probe
   ([#84](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/84)).
@@ -170,6 +173,15 @@ Deliverables:
 Goal: when the dashboard sees a per-activity quota exhausted, the activity
 is stopped on the client — and the user gets the warning cadence and
 grace period from Phase 8b before that happens.
+
+> **Mechanism note.** This usage-poll → decide → force-close path is the
+> *sole* per-activity / app-group time-quota enforcement authority. Timekpr
+> PlayTime was evaluated as an alternative and **not adopted** — it offers only
+> a single shared budget across all its activities, not the independent
+> per-activity budgets the policy model requires. The `setplaytime*` CLI
+> wrappers shipped under #83 stay in the tree, unused, as the backstop the
+> revisit trigger in [ADR 0010](adr/0010-per-activity-enforcement-mechanism.md)
+> would reach for.
 
 - Decision logic in the dashboard based on `UsageSample` rollups.
 - Server emits `enforce.force_close` over the event stream once the
