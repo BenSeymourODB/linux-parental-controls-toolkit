@@ -154,6 +154,14 @@ describe("createPolicyPushTransport", () => {
       true,
     );
 
+    // The prober runs over the *un-audited* SSH surface (raw `ssh`, not the
+    // `auditing` decorator that wraps the `timekpra` pushes): a fleet-wide
+    // `systemctl is-active` on every Clients-page load must not bury admin
+    // actions in the audit log. This assertion is the regression guard for that
+    // wiring choice — a future "route it through `auditing` for consistency"
+    // refactor would otherwise silently flood the trail with a green suite.
+    expect(listAuditEntries(db, { limit: 50 }).length).toBe(0);
+
     transport.dispose();
     expect(ssh.disposed).toBe(1);
   });

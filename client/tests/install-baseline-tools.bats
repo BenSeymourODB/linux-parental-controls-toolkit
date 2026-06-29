@@ -150,7 +150,12 @@ plan() { # run the script in dry-run with the given args, capture the plan
 @test "installs the openssh-server package (the dashboard connects over SSH)" {
   plan --supervised-user alice
   [ "$status" -eq 0 ]
-  [[ "$output" == *"apt-get install"*"openssh-server"* ]]
+  # openssh-server is in the baseline package set. On a host that lacks it the
+  # package lands in the apt-get install argv; on one that already has it (e.g. a
+  # GitHub runner, which ships openssh-server) the step reports it present.
+  # Either branch proves the package is managed — assert host-independently.
+  [[ "$output" == *"apt-get install"*"openssh-server"* ]] \
+    || [[ "$output" == *"openssh-server already installed"* ]]
 }
 
 @test "enables the OpenSSH server so the dashboard can reach the client" {
@@ -163,6 +168,23 @@ plan() { # run the script in dry-run with the given args, capture the plan
   PCT_SSHD_SERVICE=sshd.service plan --supervised-user alice
   [ "$status" -eq 0 ]
   [[ "$output" == *"systemctl enable --now sshd.service"* ]]
+}
+
+@test "sequences the OpenSSH enable after the package-install step (guards orchestration order)" {
+  plan --supervised-user alice
+  [ "$status" -eq 0 ]
+  # The package-install and enable asserts above are independent substring
+  # matches on one plan, so a refactor that dropped pct_baseline_configure_sshd
+  # from pct_install_baseline_tools but left openssh-server in the package list
+  # could regress the order/coverage. Pin it: the enable step must run *after*
+  # the package-install step (anchored on the step headers so the assertion is
+  # robust to whichever packages a given host already has).
+  local install_step enable_step
+  install_step="$(printf '%s\n' "$output" | grep -n 'Install distro packages' | head -n1 | cut -d: -f1)"
+  enable_step="$(printf '%s\n' "$output" | grep -n 'Enable the OpenSSH server' | head -n1 | cut -d: -f1)"
+  [ -n "$install_step" ]
+  [ -n "$enable_step" ]
+  [ "$enable_step" -gt "$install_step" ]
 }
 
 @test "tunes Timekpr-nExT warning lead times generously for Alpha-1" {

@@ -228,6 +228,14 @@ context", not "hostile actor with root". Specifically:
 - The supervised user being able to disable ActivityWatch's user
   watchers is treated as a UX failure (missing telemetry) rather than a
   security failure; budgets do not credit uncovered time.
+- The baseline enables the OpenSSH server so the dashboard can reach the
+  client. This widens the host's network surface: it exposes SSH login for
+  every local account, not just `pct-agent`, persistently across reboots. The
+  threat model relies on `pct-agent` being key-only and sudoers-scoped, but
+  locking the daemon down further (disabling password auth, restricting
+  `AllowUsers`, hardening `sshd_config`) is **deliberately out of scope** —
+  doing it as anti-circumvention would breach the ceiling below. A household
+  that wants a tighter `sshd_config` is free to apply one; the toolkit will not.
 
 A determined user with root, or with physical access to a live USB, can
 defeat any of this. The product does not claim otherwise.
