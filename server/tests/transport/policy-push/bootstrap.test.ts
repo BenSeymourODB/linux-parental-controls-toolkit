@@ -88,6 +88,9 @@ describe("createPolicyPushTransport", () => {
     // The "Add time today" adjuster (#257) is absent in the fallback, so the
     // admin route can report the transport as unavailable rather than no-op.
     expect(transport.adjustTimeToday).toBeUndefined();
+    // The health prober (#81) is absent too, so /api/clients/health keeps
+    // degrading to `unknown` rather than probing over a non-existent SSH pool.
+    expect(transport.prober).toBeUndefined();
     // dispose is callable and harmless on the fallback.
     expect(() => transport.dispose()).not.toThrow();
   });
@@ -122,6 +125,34 @@ describe("createPolicyPushTransport", () => {
     expect(entries.length).toBeGreaterThan(0);
     expect(entries.every((e) => e.outcome === "ok")).toBe(true);
     expect(entries.some((e) => e.clientId === clientId && e.userId === userId)).toBe(true);
+
+    transport.dispose();
+    expect(ssh.disposed).toBe(1);
+  });
+
+  it("exposes a health prober that probes over the same pooled SSH transport (#81)", async () => {
+    // `systemctl is-active` is an unchecked `exec` (a non-zero exit is data, not
+    // an error), so have the fake report each probed unit as `active`.
+    const ssh = fakeSsh();
+    ssh.exec = async () => ({ stdout: "active\n", stderr: "", code: 0, signal: null });
+    const transport = createPolicyPushTransport({
+      settings,
+      db,
+      log,
+      loadCredentials: () => ({ privateKey: "FAKE-KEY" }),
+      sshTransport: ssh,
+    });
+
+    const prober = transport.prober;
+    expect(prober).toBeDefined();
+    if (prober === undefined) throw new Error("expected a live prober");
+    const result = await prober.probe({ hostname: "mint-01", sshUser: "pct-agent" });
+
+    expect(result.reachability).toBe("online");
+    // The system-service components probed via `systemctl is-active` are `ok`.
+    expect(result.components.some((c) => c.component === "timekpr-next" && c.status === "ok")).toBe(
+      true,
+    );
 
     transport.dispose();
     expect(ssh.disposed).toBe(1);

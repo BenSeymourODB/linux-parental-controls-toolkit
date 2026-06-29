@@ -147,6 +147,24 @@ plan() { # run the script in dry-run with the given args, capture the plan
   [[ "$output" == *"systemctl enable --now e2guardian.service"* ]]
 }
 
+@test "installs the openssh-server package (the dashboard connects over SSH)" {
+  plan --supervised-user alice
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"apt-get install"*"openssh-server"* ]]
+}
+
+@test "enables the OpenSSH server so the dashboard can reach the client" {
+  plan --supervised-user alice
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"systemctl enable --now ssh.service"* ]]
+}
+
+@test "the SSH daemon unit name is overridable (PCT_SSHD_SERVICE)" {
+  PCT_SSHD_SERVICE=sshd.service plan --supervised-user alice
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"systemctl enable --now sshd.service"* ]]
+}
+
 @test "tunes Timekpr-nExT warning lead times generously for Alpha-1" {
   plan --supervised-user alice
   [ "$status" -eq 0 ]

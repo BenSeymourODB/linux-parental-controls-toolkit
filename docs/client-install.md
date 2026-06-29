@@ -75,7 +75,13 @@ dashboard, has a short TTL, and is single-use.
    - e2guardian: the Mint/Ubuntu package, plus the recommended
      `libssl-dev` and bundled lists as needed.
 3. **Install packages**
-   - `apt install timekpr-next activitywatch e2guardian iptables-persistent libnotify-bin libcanberra-gtk3-module`
+   - `apt install timekpr-next activitywatch e2guardian openssh-server iptables-persistent libnotify-bin libcanberra-gtk3-module`
+   - `openssh-server` is the SSH daemon the dashboard connects to (as the
+     `pct-agent` principal) for `timekpra` policy pushes, health probes (#81),
+     and the ActivityWatch telemetry tunnel (#86). A fresh Linux Mint installs
+     no SSH server by default, so the baseline step installs it and enables
+     `ssh.service`; without it the dashboard can never reach the client and the
+     self-test's `sshd` check (step 3 below) fails.
    - Install the `pct-client` agent package (the system-level
      `pct-client-bridge` service plus the per-user
      `pct-client-agent` user service). Built from this repo's
