@@ -11,6 +11,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/sve
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { UserResponse } from "../../src/lib/api/contract.js";
+import { resetResources } from "../../src/lib/data/resources.svelte.js";
 
 const listUsers = vi.fn<() => Promise<UserResponse[]>>();
 const createUser = vi.fn<(input: unknown) => Promise<UserResponse>>();
@@ -26,8 +27,9 @@ vi.mock("$lib/api/users", () => ({
 
 // UsersView now composes `UserGroupsView` as a second section (UI
 // consolidation). That child fetches user groups on mount; stub its API to a
-// quiet empty state so it doesn't reach for a live backend or render a second
-// error alert that would clash with the assertions below.
+// quiet empty state so it doesn't reach for a live backend. The shared user
+// list is read through `usersResource` by both sections, so a single load
+// (and a single error surface) is shared between them.
 vi.mock("$lib/api/user-groups", () => ({
   listUserGroups: () => Promise.resolve([]),
   createUserGroup: vi.fn(),
@@ -51,6 +53,7 @@ function user(overrides: Partial<UserResponse> = {}): UserResponse {
 }
 
 beforeEach(() => {
+  resetResources();
   listUsers.mockReset();
   createUser.mockReset();
   updateUser.mockReset();
@@ -68,9 +71,10 @@ describe("UsersView CRUD", () => {
     render(UsersView);
 
     expect(await screen.findByText("Alice")).toBeInTheDocument();
-    // Called at least once by the view itself; the embedded UserGroupsView also
-    // loads the user list for its membership picker, so don't assert "once".
-    expect(listUsers).toHaveBeenCalled();
+    // The view and the embedded UserGroupsView both read the shared
+    // `usersResource`, whose concurrent loads coalesce onto one request — so the
+    // underlying wrapper is hit exactly once despite two consumers.
+    expect(listUsers).toHaveBeenCalledOnce();
   });
 
   it("shows the empty state when there are no users", async () => {
@@ -148,11 +152,10 @@ describe("UsersView CRUD", () => {
 
     render(UsersView);
 
-    // The composed UserGroupsView also loads the user list (for its membership
-    // picker) through the same wrapper, so a list-load failure surfaces in both
-    // sections. Assert the Users section's own alert (the first in the DOM).
-    const alerts = await screen.findAllByRole("alert");
-    expect(alerts[0]).toHaveTextContent("The server exploded.");
+    // The shared user list is owned here, and the composed UserGroupsView no
+    // longer reports the shared-list load error — so a single alert surfaces.
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("The server exploded.");
   });
 
   it("keeps the create error inline without losing the existing rows", async () => {

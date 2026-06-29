@@ -12,6 +12,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/sve
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ActivityResponse } from "../../src/lib/api/contract.js";
+import { resetResources } from "../../src/lib/data/resources.svelte.js";
 
 const listActivities = vi.fn<() => Promise<ActivityResponse[]>>();
 const createActivity = vi.fn<(input: unknown) => Promise<ActivityResponse>>();
@@ -52,6 +53,7 @@ function activity(overrides: Partial<ActivityResponse> = {}): ActivityResponse {
 }
 
 beforeEach(() => {
+  resetResources();
   listActivities.mockReset();
   createActivity.mockReset();
   updateActivity.mockReset();

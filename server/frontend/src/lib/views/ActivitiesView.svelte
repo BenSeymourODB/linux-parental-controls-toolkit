@@ -25,12 +25,8 @@
   import { onMount } from "svelte";
   import { ApiError } from "$lib/api/client.js";
   import type { ActivityKind, ActivityResponse, MatchType } from "$lib/api/contract.js";
-  import {
-    createActivity,
-    deleteActivity,
-    listActivities,
-    updateActivity,
-  } from "$lib/api/activities.js";
+  import { createActivity, deleteActivity, updateActivity } from "$lib/api/activities.js";
+  import { activitiesResource } from "$lib/data/resources.svelte.js";
   import ActivityGroupsView from "./ActivityGroupsView.svelte";
 
   const KIND_OPTIONS: ReadonlyArray<{ value: ActivityKind; label: string }> = [
@@ -55,9 +51,11 @@
     return MATCH_TYPE_OPTIONS.find((o) => o.value === matchType)?.label ?? matchType;
   }
 
-  let activities = $state<ActivityResponse[]>([]);
-  let loading = $state(true);
+  // The activity list is a shared resource (so the composed ActivityGroupsView
+  // reads the same copy rather than re-fetching). This view owns the list, so it
+  // shows the resource's load error; `error` below is for its own mutations.
   let error = $state<string | null>(null);
+  let displayError = $derived(error ?? activitiesResource.error);
 
   // Create form.
   let newKind = $state<ActivityKind>("app");
@@ -72,19 +70,7 @@
   let editMatchType = $state<MatchType>("exact");
   let saving = $state(false);
 
-  onMount(load);
-
-  async function load(): Promise<void> {
-    loading = true;
-    error = null;
-    try {
-      activities = await listActivities();
-    } catch (err) {
-      error = messageOf(err);
-    } finally {
-      loading = false;
-    }
-  }
+  onMount(() => activitiesResource.load());
 
   async function handleCreate(event: SubmitEvent): Promise<void> {
     event.preventDefault();
@@ -96,7 +82,7 @@
         matcher: newMatcher.trim(),
         matchType: newMatchType,
       });
-      activities = [...activities, created];
+      activitiesResource.set([...activitiesResource.items, created]);
       newKind = "app";
       newMatcher = "";
       newMatchType = "exact";
@@ -128,7 +114,7 @@
         matcher: editMatcher.trim(),
         matchType: editMatchType,
       });
-      activities = activities.map((a) => (a.id === id ? updated : a));
+      activitiesResource.set(activitiesResource.items.map((a) => (a.id === id ? updated : a)));
       editingId = null;
     } catch (err) {
       error = messageOf(err);
@@ -144,7 +130,7 @@
     error = null;
     try {
       await deleteActivity(activity.id);
-      activities = activities.filter((a) => a.id !== activity.id);
+      activitiesResource.set(activitiesResource.items.filter((a) => a.id !== activity.id));
     } catch (err) {
       error = messageOf(err);
     }
@@ -168,8 +154,8 @@
     </p>
   </header>
 
-  {#if error}
-    <p class="error" role="alert">{error}</p>
+  {#if displayError}
+    <p class="error" role="alert">{displayError}</p>
   {/if}
 
   <form class="create" onsubmit={handleCreate}>
@@ -196,9 +182,9 @@
     </button>
   </form>
 
-  {#if loading}
+  {#if activitiesResource.loading}
     <p class="muted">Loading activities…</p>
-  {:else if activities.length === 0}
+  {:else if activitiesResource.items.length === 0}
     <p class="muted">No activities yet. Add one above.</p>
   {:else}
     <table>
@@ -211,7 +197,7 @@
         </tr>
       </thead>
       <tbody>
-        {#each activities as activity (activity.id)}
+        {#each activitiesResource.items as activity (activity.id)}
           <tr>
             {#if editingId === activity.id}
               <td>

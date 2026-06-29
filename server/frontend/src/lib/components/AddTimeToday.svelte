@@ -13,15 +13,14 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { ApiError } from "$lib/api/client.js";
-  import type { ClientResponse, TimeTodayResponse, UserResponse } from "$lib/api/contract.js";
-  import { listUsers } from "$lib/api/users.js";
-  import { listClients } from "$lib/api/clients.js";
+  import type { TimeTodayResponse } from "$lib/api/contract.js";
   import { adjustTimeToday } from "$lib/api/time-today.js";
+  import { clientsResource, usersResource } from "$lib/data/resources.svelte.js";
 
-  let users = $state<UserResponse[]>([]);
-  let clients = $state<ClientResponse[]>([]);
-  let loading = $state(true);
-  let error = $state<string | null>(null);
+  // Users + clients are shared resources; this is their only consumer on the
+  // Dashboard, so it surfaces their load error.
+  let loading = $derived(usersResource.loading || clientsResource.loading);
+  let loadError = $derived(usersResource.error ?? clientsResource.error);
 
   // The user the adjustment targets.
   let selectedUserId = $state<number | null>(null);
@@ -31,22 +30,13 @@
   let adjustResult = $state<TimeTodayResponse | null>(null);
   let customMinutes = $state("");
 
-  onMount(load);
-
-  async function load(): Promise<void> {
-    loading = true;
-    error = null;
-    try {
-      [users, clients] = await Promise.all([listUsers(), listClients()]);
-    } catch (err) {
-      error = messageOf(err);
-    } finally {
-      loading = false;
-    }
-  }
+  onMount(() => {
+    void usersResource.load();
+    void clientsResource.load();
+  });
 
   function clientName(id: number): string {
-    return clients.find((c) => c.id === id)?.hostname ?? `Client ${id}`;
+    return clientsResource.items.find((c) => c.id === id)?.hostname ?? `Client ${id}`;
   }
 
   /** Clear any prior result when the target user changes. */
@@ -113,20 +103,20 @@
     </p>
   </header>
 
-  {#if error}
-    <p class="error" role="alert">{error}</p>
+  {#if loadError}
+    <p class="error" role="alert">{loadError}</p>
   {/if}
 
   {#if loading}
     <p class="muted">Loading…</p>
-  {:else if users.length === 0}
+  {:else if usersResource.items.length === 0}
     <p class="muted">Add a user first — there's nobody to adjust time for yet.</p>
   {:else}
     <div class="picker">
       <label for="add-time-user">User</label>
       <select id="add-time-user" bind:value={selectedUserId} onchange={onSelectUser}>
         <option value={null} disabled selected>Choose a user…</option>
-        {#each users as user (user.id)}
+        {#each usersResource.items as user (user.id)}
           <option value={user.id}>{user.displayName}</option>
         {/each}
       </select>

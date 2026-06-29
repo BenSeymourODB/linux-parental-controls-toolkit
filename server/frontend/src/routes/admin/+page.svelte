@@ -18,6 +18,7 @@
   import { ApiError } from "$lib/api/client.js";
   import { fetchSession, login, logout } from "$lib/api/auth.js";
   import { fetchAnsibleStatus } from "$lib/api/system.js";
+  import { resetResources } from "$lib/data/resources.svelte.js";
   import type { SessionResponse, AnsibleVenvStatusResponse } from "$lib/api/contract.js";
   import AppShell, { type NavItem } from "$lib/components/AppShell.svelte";
   import LoginForm from "$lib/components/LoginForm.svelte";
@@ -171,6 +172,8 @@
       loginError = null;
       setupStatus = null;
       setupGatePassed = false;
+      // Drop cached lists so a different admin session starts clean.
+      resetResources();
     }
   }
 </script>

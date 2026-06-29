@@ -13,6 +13,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/sve
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ClientResponse, TimeTodayResponse, UserResponse } from "../../src/lib/api/contract.js";
+import { resetResources } from "../../src/lib/data/resources.svelte.js";
 
 const listUsers = vi.fn<() => Promise<UserResponse[]>>();
 const listClients = vi.fn<() => Promise<ClientResponse[]>>();
@@ -57,6 +58,7 @@ async function selectAlice(): Promise<void> {
 }
 
 beforeEach(() => {
+  resetResources();
   listUsers.mockReset().mockResolvedValue([user()]);
   listClients.mockReset().mockResolvedValue([client()]);
   adjustTimeToday.mockReset();
