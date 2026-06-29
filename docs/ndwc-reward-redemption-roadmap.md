@@ -195,10 +195,21 @@ lands, the same way #118 pins the inbound grant contract.
 
 ## Milestones
 
-Each milestone is roughly one PR-sized slice and should become one or more
-issues on the [roadmap project](https://github.com/users/BenSeymourODB/projects/2),
-labelled against Phase 10 (or a new `phase-10b` milestone). Dependencies are
-called out so they can be sequenced against the existing build plan.
+Each milestone is roughly one PR-sized slice and is tracked by an issue on the
+[roadmap project](https://github.com/users/BenSeymourODB/projects/2).
+Dependencies are called out so they can be sequenced against the existing
+build plan.
+
+| Milestone | Issue | Label |
+|---|---|---|
+| R0 — contract + ADR 0011 | [#333](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/333) | `phase-10` |
+| R1 — outbound NDWC client | [#334](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/334) | `phase-10` |
+| R2 — reward mapping + admin UI | [#335](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/335) | `phase-10` |
+| R3 — redemption engine | [#336](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/336) | `phase-10` |
+| R4a — generic interactive-notification framework | [#337](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/337) | **`phase-8b`** |
+| R4b — redeem.offer/redeem.action binding | [#338](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/338) | `phase-10` |
+| R5 — running-activity resolution + affordability UX | [#339](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/339) | `phase-10` |
+| R6 — controls, audit & edge cases | [#340](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/340) | `phase-10` |
 
 ### R0 — Joint API contract + ADR (coordination gate)
 
