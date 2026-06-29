@@ -283,6 +283,15 @@ so chore/calendar completions can grant screen-time rewards.
 - Stretch: outbound webhook from dashboard → calendar (e.g. "Alice has
   10 min left") to enable richer cross-app behaviour.
 
+A deeper, **user-initiated** follow-on — the supervised user redeeming NDWC
+points for a screen-time extension straight from a low-time notification — is
+planned separately in
+[`ndwc-reward-redemption-roadmap.md`](ndwc-reward-redemption-roadmap.md). It
+reuses this phase's grant pipeline (#113/#117) and the Phase 8b agent/bridge,
+and adds the reciprocal *outbound* call to NDWC (read balance, debit points)
+plus interactive notification buttons. Its contract-and-ADR milestone (R0) can
+start in parallel with this phase, exactly as #118 precedes #113.
+
 ## Phase 11 — Hardening and polish
 
 - Reverse-proxy + TLS instructions for non-LAN deployments
