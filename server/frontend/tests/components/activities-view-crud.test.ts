@@ -12,6 +12,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/sve
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ActivityResponse } from "../../src/lib/api/contract.js";
+import { resetResources } from "../../src/lib/data/resources.svelte.js";
 
 const listActivities = vi.fn<() => Promise<ActivityResponse[]>>();
 const createActivity = vi.fn<(input: unknown) => Promise<ActivityResponse>>();
@@ -23,6 +24,20 @@ vi.mock("$lib/api/activities", () => ({
   createActivity: (input: unknown) => createActivity(input),
   updateActivity: (id: number, input: unknown) => updateActivity(id, input),
   deleteActivity: (id: number) => deleteActivity(id),
+}));
+
+// ActivitiesView now composes `ActivityGroupsView` as a second section (UI
+// consolidation). That child fetches activity groups on mount; stub its API to
+// a quiet empty state so it doesn't reach for a live backend or render a second
+// error alert that would clash with the assertions below.
+vi.mock("$lib/api/activity-groups", () => ({
+  listActivityGroups: () => Promise.resolve([]),
+  createActivityGroup: vi.fn(),
+  updateActivityGroup: vi.fn(),
+  deleteActivityGroup: vi.fn(),
+  listGroupActivities: vi.fn(),
+  addActivityToGroup: vi.fn(),
+  removeActivityFromGroup: vi.fn(),
 }));
 
 const { default: ActivitiesView } = await import("../../src/lib/views/ActivitiesView.svelte");
@@ -38,6 +53,7 @@ function activity(overrides: Partial<ActivityResponse> = {}): ActivityResponse {
 }
 
 beforeEach(() => {
+  resetResources();
   listActivities.mockReset();
   createActivity.mockReset();
   updateActivity.mockReset();

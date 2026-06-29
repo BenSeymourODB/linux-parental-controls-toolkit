@@ -48,12 +48,41 @@ plan() { # run the script in dry-run with the given args, capture the plan
   [[ "$output" == *"unsupported distro"* ]]
 }
 
-@test "adds the Timekpr PPA and installs the three baseline tools" {
+@test "by default installs timekpr-next from the distro repos (no PPA)" {
   plan --supervised-user alice
   [ "$status" -eq 0 ]
-  [[ "$output" == *"add-apt-repository -y ppa:mjasnik/ppa"* ]]
+  # Default: no external repository at all — straight apt install.
+  [[ "$output" == *"Installing timekpr-next from the distribution repositories"* ]]
+  [[ "$output" != *"add-apt-repository"* ]]
+  [[ "$output" != *"timekpr-next-ppa.sources"* ]]
   [[ "$output" == *"apt-get install"*"timekpr-next"* ]]
   [[ "$output" == *"e2guardian"* ]]
+}
+
+@test "adds the PPA when opted in (PCT_TIMEKPR_USE_PPA=1)" {
+  PCT_TIMEKPR_USE_PPA=1 plan --supervised-user alice
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Adding Timekpr-nExT PPA ppa:mjasnik/ppa"* ]]
+  # We add the PPA ourselves (not via add-apt-repository) so the launchpad/key
+  # fetches use a timeout we control.
+  [[ "$output" != *"add-apt-repository"* ]]
+  [[ "$output" == *"write /etc/apt/sources.list.d/timekpr-next-ppa.sources"* ]]
+}
+
+@test "the PPA fetch timeout is configurable (PCT_PPA_FETCH_TIMEOUT)" {
+  PCT_TIMEKPR_USE_PPA=1 PCT_PPA_FETCH_TIMEOUT=120 plan --supervised-user alice
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"fetch timeout 120s"* ]]
+  [[ "$output" == *"curl --max-time 120"* ]]
+}
+
+@test "resolves the PPA suite from UBUNTU_CODENAME (Mint reports its Ubuntu base)" {
+  # Mint carries its own VERSION_CODENAME (e.g. virginia) but the PPA is built
+  # for the Ubuntu base in UBUNTU_CODENAME — that must win.
+  printf 'ID=linuxmint\nID_LIKE="ubuntu debian"\nVERSION_CODENAME=virginia\nUBUNTU_CODENAME=jammy\n' >"$OSREL"
+  PCT_TIMEKPR_USE_PPA=1 plan --supervised-user alice
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"timekpr-next-ppa.sources (deb https://ppa.launchpadcontent.net/mjasnik/ppa/ubuntu jammy main)"* ]]
 }
 
 @test "pins the AW version and checksum-verifies the download" {
@@ -118,6 +147,46 @@ plan() { # run the script in dry-run with the given args, capture the plan
   [[ "$output" == *"systemctl enable --now e2guardian.service"* ]]
 }
 
+@test "installs the openssh-server package (the dashboard connects over SSH)" {
+  plan --supervised-user alice
+  [ "$status" -eq 0 ]
+  # openssh-server is in the baseline package set. On a host that lacks it the
+  # package lands in the apt-get install argv; on one that already has it (e.g. a
+  # GitHub runner, which ships openssh-server) the step reports it present.
+  # Either branch proves the package is managed — assert host-independently.
+  [[ "$output" == *"apt-get install"*"openssh-server"* ]] \
+    || [[ "$output" == *"openssh-server already installed"* ]]
+}
+
+@test "enables the OpenSSH server so the dashboard can reach the client" {
+  plan --supervised-user alice
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"systemctl enable --now ssh.service"* ]]
+}
+
+@test "the SSH daemon unit name is overridable (PCT_SSHD_SERVICE)" {
+  PCT_SSHD_SERVICE=sshd.service plan --supervised-user alice
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"systemctl enable --now sshd.service"* ]]
+}
+
+@test "sequences the OpenSSH enable after the package-install step (guards orchestration order)" {
+  plan --supervised-user alice
+  [ "$status" -eq 0 ]
+  # The package-install and enable asserts above are independent substring
+  # matches on one plan, so a refactor that dropped pct_baseline_configure_sshd
+  # from pct_install_baseline_tools but left openssh-server in the package list
+  # could regress the order/coverage. Pin it: the enable step must run *after*
+  # the package-install step (anchored on the step headers so the assertion is
+  # robust to whichever packages a given host already has).
+  local install_step enable_step
+  install_step="$(printf '%s\n' "$output" | grep -n 'Install distro packages' | head -n1 | cut -d: -f1)"
+  enable_step="$(printf '%s\n' "$output" | grep -n 'Enable the OpenSSH server' | head -n1 | cut -d: -f1)"
+  [ -n "$install_step" ]
+  [ -n "$enable_step" ]
+  [ "$enable_step" -gt "$install_step" ]
+}
+
 @test "tunes Timekpr-nExT warning lead times generously for Alpha-1" {
   plan --supervised-user alice
   [ "$status" -eq 0 ]
@@ -166,14 +235,23 @@ EOF
   [ "$status" -ne 0 ]
 }
 
-@test "PPA add is skipped when the list file already exists (idempotent)" {
+@test "PPA add is skipped when a legacy add-apt-repository list already exists (idempotent)" {
   local listfile="${TMP}/existing-mjasnik.list"
   : >"$listfile"
-  TIMEKPR_PPA_LIST_GLOB="${TMP}/existing-*.list" \
+  PCT_TIMEKPR_USE_PPA=1 TIMEKPR_PPA_LIST_GLOB="${TMP}/existing-*.list" \
     run env bash "$SCRIPT" --supervised-user alice
   [ "$status" -eq 0 ]
   [[ "$output" == *"Timekpr-nExT PPA already present"* ]]
-  [[ "$output" != *"add-apt-repository"* ]]
+  [[ "$output" != *"timekpr-next-ppa.sources"* ]]
+}
+
+@test "PPA add is skipped when our sources file already exists (idempotent re-run)" {
+  local sources="${TMP}/timekpr-next-ppa.sources"
+  : >"$sources"
+  PCT_TIMEKPR_USE_PPA=1 TIMEKPR_PPA_SOURCES="$sources" plan --supervised-user alice
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Timekpr-nExT PPA already present"* ]]
+  [[ "$output" != *"Adding Timekpr-nExT PPA"* ]]
 }
 
 @test "ActivityWatch download is skipped when the pinned version is present" {

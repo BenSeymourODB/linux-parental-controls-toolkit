@@ -14,7 +14,7 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import { registerApi } from "../api/index.js";
 import { loadSettings, type Settings } from "../config.js";
-import { EventHub } from "../events/index.js";
+import { EventHub, type EventStreamOptions } from "../events/index.js";
 import { createDb, type PolicyDb } from "../policy/db.js";
 import { createAnsibleVenvSupervisor, type AnsibleVenvSupervisor } from "../setup/ansible-venv.js";
 import {
@@ -29,6 +29,7 @@ import {
   type PolicyPushTransport,
 } from "../transport/policy-push/index.js";
 import { registerFrontend } from "./frontend.js";
+import { registerInstallScript } from "./install-script.js";
 import { REQUEST_ID_HEADER, buildLoggerOptions, genRequestId, type LogStream } from "./logger.js";
 
 declare module "fastify" {
@@ -119,6 +120,12 @@ export interface BuildAppOptions {
    * without SSH. An injected transport is left for its provider to dispose.
    */
   policyPush?: PolicyPushTransport;
+  /**
+   * Tuning/test seam for the `/api/events/stream` handshake (heartbeat
+   * interval, hello timeout, negotiated server protocol). Omitted in
+   * production; tests use it to exercise the N-1 refusal branches.
+   */
+  eventStream?: EventStreamOptions;
 }
 
 /**
@@ -156,9 +163,11 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   // Outbound policy-push transport (#201): the live `timekpra`-over-SSH
   // dispatcher when the SSH key exists (#39), else the logging stub. It also
   // owns the offline-queue drainer + pooled SSH connections, torn down on close
-  // — before the db it reads from (when buildApp owns that db). A test may
-  // inject one (e.g. with a fake `adjustTimeToday`); only the handle buildApp
-  // creates is disposed here, mirroring the `db` seam.
+  // — before the db it reads from (when buildApp owns that db). When live it
+  // also exposes the client health prober (#81), built over that same pooled
+  // SSH transport and injected into the /api/clients/health routes below. A
+  // test may inject one (e.g. with a fake `adjustTimeToday`); only the handle
+  // buildApp creates is disposed here, mirroring the `db` seam.
   const policyPush =
     options.policyPush ?? createPolicyPushTransport({ settings, db, log: app.log });
   const ownsPolicyPush = options.policyPush === undefined;
@@ -253,7 +262,19 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   // within this prefix, leaving /, /healthz, /admin and /app untouched. Auth
   // (#52) is wired inside this scope and needs the settings (PCT_SECRET_KEY,
   // first-admin bootstrap) threaded through.
-  registerApi(app, settings, eventHub, policyPush.dispatcher, policyPush.adjustTimeToday);
+  registerApi(
+    app,
+    settings,
+    eventHub,
+    policyPush.dispatcher,
+    policyPush.adjustTimeToday,
+    policyPush.prober,
+    options.eventStream,
+  );
+
+  // Serve the client install script at /install-client.sh. Skipped (with a
+  // warning) when the bundled file is absent, so other routes are unaffected.
+  registerInstallScript(app, settings);
 
   // Serve the prerendered SvelteKit build at /admin and /app (#40). Skipped
   // (with a warning) when the build directory is absent, so /, /healthz, and

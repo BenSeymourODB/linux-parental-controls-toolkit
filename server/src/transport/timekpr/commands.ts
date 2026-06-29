@@ -32,6 +32,15 @@
  * schema reservation (#146) lands. Keeping that mapping out keeps this layer
  * decoupled from the policy schema currently being reshaped.
  *
+ * **PlayTime builders are intentionally unwired.** The `buildSetPlayTime*`
+ * builders below are correct and tested but deliberately have no caller in the
+ * policy push: per-activity enforcement uses the usage-poll → force-close path
+ * (#98/#99), not PlayTime, because PlayTime is a single shared budget across all
+ * its activities rather than the independent per-activity budgets the policy
+ * model needs. This is a decision, not dead code — see
+ * `docs/adr/0010-per-activity-enforcement-mechanism.md`. Keep them; they are the
+ * backstop that ADR's revisit trigger would reach for.
+ *
  * License boundary: none touched — plain TypeScript building an argv vector for
  * a subprocess. No GPL code is linked in-process (`CLAUDE.md` → "License
  * boundaries"; `docs/licensing-analysis.md`).

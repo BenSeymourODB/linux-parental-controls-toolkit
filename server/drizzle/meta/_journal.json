@@ -106,6 +106,34 @@
       "when": 1782278078461,
       "tag": "20260624051438_sleepy_lila_cheney",
       "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "6",
+      "when": 1782505100437,
+      "tag": "20260626201820_material_ultimatum",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "6",
+      "when": 1782507527442,
+      "tag": "20260626205847_ambiguous_wasp",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1782509953861,
+      "tag": "20260626213913_sparkling_genesis",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1782578822511,
+      "tag": "20260627164702_chunky_sentinels",
+      "breakpoints": true
     }
   ]
 }

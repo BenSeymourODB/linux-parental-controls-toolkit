@@ -8,6 +8,10 @@
 #   - ActivityWatch  (activity telemetry; pulled later over an SSH tunnel)
 #   - e2guardian     (web filtering; real rules managed later by Ansible)
 #
+# It also ensures the OpenSSH server is installed and running: the dashboard
+# reaches every client over SSH (as the pct-agent principal #78), and a fresh
+# Linux Mint ships no SSH server by default.
+#
 # This lays the tools down and writes a *safe baseline* only — enough that the
 # post-install self-test (#80) passes. The managed configuration (real
 # e2guardian filter rules, the iptables OUTPUT redirect, ActivityWatch
@@ -58,11 +62,48 @@ AW_PREFIX="${AW_PREFIX:-/opt/activitywatch}"
 AW_HOST="${AW_HOST:-127.0.0.1}"
 AW_PORT="${AW_PORT:-5600}"
 
-# Timekpr-nExT upstream PPA (Debian/Ubuntu/Mint).
+# timekpr-next now ships in the Debian/Ubuntu repositories, so by default we
+# install it straight from the distro (a plain `apt-get install timekpr-next`,
+# no external repository). The upstream PPA is kept as an opt-in fallback for
+# older releases that predate the packaged version — set PCT_TIMEKPR_USE_PPA=1
+# to add it. We avoid the PPA by default because its add-apt-repository path has
+# proven flaky (the Launchpad lookup's fixed ~10s timeout fails on slow links).
+PCT_TIMEKPR_USE_PPA="${PCT_TIMEKPR_USE_PPA:-0}"
+
+# Timekpr-nExT upstream PPA (Ubuntu/Mint), used only when PCT_TIMEKPR_USE_PPA=1.
+# We add it ourselves rather than via `add-apt-repository`, whose Launchpad
+# lookup has a ~10s timeout hardcoded in software-properties (no flag, no env
+# var) — too short for a slow link. Doing the two fetches (signing-key
+# fingerprint + key) with curl lets us set the timeout ourselves
+# (PCT_PPA_FETCH_TIMEOUT), pins trust to that key, and drops the
+# software-properties dependency for this step.
 TIMEKPR_PPA="${TIMEKPR_PPA:-ppa:mjasnik/ppa}"
-# Glob matching the apt list file `add-apt-repository` writes for that PPA (its
-# exact name embeds the distro codename). Presence makes the "add repository"
-# step idempotent; overridable so tests can point it at a fixture.
+TIMEKPR_PPA_OWNER="${TIMEKPR_PPA_OWNER:-mjasnik}"
+TIMEKPR_PPA_NAME="${TIMEKPR_PPA_NAME:-ppa}"
+# Where the PPA publishes packages, and its Launchpad API record (queried for
+# the signing-key fingerprint). Overridable wholesale for tests / mirrors.
+TIMEKPR_PPA_URI="${TIMEKPR_PPA_URI:-https://ppa.launchpadcontent.net/${TIMEKPR_PPA_OWNER}/${TIMEKPR_PPA_NAME}/ubuntu}"
+TIMEKPR_PPA_LP_API="${TIMEKPR_PPA_LP_API:-https://api.launchpad.net/devel/~${TIMEKPR_PPA_OWNER}/+archive/ubuntu/${TIMEKPR_PPA_NAME}}"
+# Keyserver the signing key is fetched from, by fingerprint.
+PCT_KEYSERVER_URL="${PCT_KEYSERVER_URL:-https://keyserver.ubuntu.com/pks/lookup}"
+# Optionally pin the fingerprint to skip the Launchpad API entirely (most robust
+# on a flaky link).
+TIMEKPR_PPA_FINGERPRINT="${TIMEKPR_PPA_FINGERPRINT:-}"
+# Apt suite (the Ubuntu series the PPA is built for). Defaults to the host's
+# Ubuntu base codename (Mint reports it in UBUNTU_CODENAME, e.g. jammy);
+# overridable.
+TIMEKPR_PPA_SUITE="${TIMEKPR_PPA_SUITE:-}"
+# The apt source + (armoured) keyring we write. Modern apt accepts an armoured
+# key in Signed-By when the file ends .asc, so no gpg/dearmor step is needed.
+TIMEKPR_PPA_KEYRING="${TIMEKPR_PPA_KEYRING:-/etc/apt/keyrings/timekpr-next-ppa.asc}"
+TIMEKPR_PPA_SOURCES="${TIMEKPR_PPA_SOURCES:-/etc/apt/sources.list.d/timekpr-next-ppa.sources}"
+# Per-fetch network timeout (seconds) for the Launchpad/keyserver curls — the
+# whole point of adding the PPA ourselves: a value we control, unlike
+# add-apt-repository's fixed ~10s. Raise it on a slow link.
+PCT_PPA_FETCH_TIMEOUT="${PCT_PPA_FETCH_TIMEOUT:-60}"
+# Idempotency: presence of our sources file — or a legacy add-apt-repository
+# `*mjasnik*.list` from an earlier install — means the repo is already
+# configured. Overridable so tests can point it at a fixture.
 TIMEKPR_PPA_LIST_GLOB="${TIMEKPR_PPA_LIST_GLOB:-/etc/apt/sources.list.d/*mjasnik*.list}"
 
 # Timekpr-nExT's own config + client-indicator autostart (#268). In Alpha-1 the
@@ -94,17 +135,118 @@ PCT_TIMEKPR_CLIENT_DESKTOP="${PCT_TIMEKPR_CLIENT_DESKTOP:-timekpr-client.desktop
 E2G_DIR="${E2G_DIR:-/etc/e2guardian}"
 E2G_PCT_DIR="${E2G_PCT_DIR:-${E2G_DIR}/pct.d}"
 
+# The OpenSSH server's systemd unit. On Debian/Ubuntu/Mint the openssh-server
+# package's unit is ssh.service (sshd.service is an alias). Kept overridable and
+# named to match self-test.sh's PCT_SSHD_SERVICE so the two stay in lockstep.
+PCT_SSHD_SERVICE="${PCT_SSHD_SERVICE:-ssh.service}"
+
 # --- step: apt repositories ------------------------------------------------
+
+# Resolve the Ubuntu series (apt "Suite") the PPA is consumed for. Mint reports
+# its Ubuntu base in UBUNTU_CODENAME (e.g. jammy); plain Ubuntu uses
+# VERSION_CODENAME. Honours the TIMEKPR_PPA_SUITE override. Echoes the suite (or
+# the empty string if it can't be determined).
+pct_baseline_ppa_suite() {
+  if [ -n "$TIMEKPR_PPA_SUITE" ]; then
+    printf '%s' "$TIMEKPR_PPA_SUITE"
+    return 0
+  fi
+  local os_release="${PCT_OS_RELEASE:-/etc/os-release}" line ubuntu="" version=""
+  if [ -r "$os_release" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      case "$line" in
+      UBUNTU_CODENAME=*) ubuntu="${line#*=}" ;;
+      VERSION_CODENAME=*) version="${line#*=}" ;;
+      esac
+    done <"$os_release"
+  fi
+  local suite="${ubuntu:-$version}"
+  suite="${suite%\"}"
+  suite="${suite#\"}"
+  printf '%s' "$suite"
+}
+
+# Echo the PPA signing-key fingerprint: the pinned value if given, else fetched
+# from the Launchpad API with our own (configurable) timeout. Non-zero + empty
+# on failure.
+pct_baseline_ppa_fingerprint() {
+  if [ -n "$TIMEKPR_PPA_FINGERPRINT" ]; then
+    printf '%s' "$TIMEKPR_PPA_FINGERPRINT"
+    return 0
+  fi
+  local json
+  json="$(pct_retry curl --fail --silent --show-error \
+    --max-time "$PCT_PPA_FETCH_TIMEOUT" "$TIMEKPR_PPA_LP_API")" || return 1
+  # The LP API record carries "signing_key_fingerprint": "<40 hex>".
+  if [[ "$json" =~ \"signing_key_fingerprint\"[[:space:]]*:[[:space:]]*\"([0-9A-Fa-f]+)\" ]]; then
+    printf '%s' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+  return 1
+}
+
+# Add the Timekpr-nExT PPA without add-apt-repository: resolve the signing key
+# and write an apt source pinned to it, with every network fetch bounded by a
+# timeout we control (PCT_PPA_FETCH_TIMEOUT) rather than the fixed ~10s baked
+# into software-properties' Launchpad lookup.
+pct_baseline_add_timekpr_ppa() {
+  local suite
+  suite="$(pct_baseline_ppa_suite)"
+  pct_log "Adding Timekpr-nExT PPA ${TIMEKPR_PPA} (suite ${suite:-unknown}, fetch timeout ${PCT_PPA_FETCH_TIMEOUT}s)"
+
+  if pct_is_dry_run; then
+    printf '%s %s\n' "$PCT_DRYRUN_PREFIX" \
+      "resolve signing key (curl --max-time ${PCT_PPA_FETCH_TIMEOUT} ${TIMEKPR_PPA_LP_API} + ${PCT_KEYSERVER_URL})" >&2
+    printf '%s %s\n' "$PCT_DRYRUN_PREFIX" "write ${TIMEKPR_PPA_KEYRING}" >&2
+    printf '%s %s\n' "$PCT_DRYRUN_PREFIX" \
+      "write ${TIMEKPR_PPA_SOURCES} (deb ${TIMEKPR_PPA_URI} ${suite:-<suite>} main)" >&2
+    return 0
+  fi
+
+  if [ -z "$suite" ]; then
+    pct_err "could not determine the Ubuntu series for the PPA; set TIMEKPR_PPA_SUITE (e.g. jammy)"
+    return 1
+  fi
+
+  local fpr
+  if ! fpr="$(pct_baseline_ppa_fingerprint)" || [ -z "$fpr" ]; then
+    pct_err "could not resolve the Timekpr-nExT PPA signing key from ${TIMEKPR_PPA_LP_API} (slow/unreachable Launchpad?); raise PCT_PPA_FETCH_TIMEOUT, or pin TIMEKPR_PPA_FINGERPRINT"
+    return 1
+  fi
+
+  # Fetch the ASCII-armoured signing key by fingerprint, with our own timeout.
+  mkdir -p "$(dirname "$TIMEKPR_PPA_KEYRING")"
+  if ! pct_retry curl --fail --silent --show-error --max-time "$PCT_PPA_FETCH_TIMEOUT" \
+    --output "$TIMEKPR_PPA_KEYRING" \
+    "${PCT_KEYSERVER_URL}?op=get&options=mr&search=0x${fpr}"; then
+    pct_err "failed to fetch the PPA signing key 0x${fpr} from ${PCT_KEYSERVER_URL}"
+    return 1
+  fi
+  chmod 0644 "$TIMEKPR_PPA_KEYRING"
+
+  # Write a deb822 source pinned (Signed-By) to the key we just fetched.
+  pct_write_file "$TIMEKPR_PPA_SOURCES" <<EOF
+Types: deb
+URIs: ${TIMEKPR_PPA_URI}
+Suites: ${suite}
+Components: main
+Signed-By: ${TIMEKPR_PPA_KEYRING}
+EOF
+  pct_ok "Timekpr-nExT PPA configured (${TIMEKPR_PPA_SOURCES})"
+}
 
 pct_baseline_add_repositories() {
   pct_step "Add upstream package repositories"
-  if compgen -G "$TIMEKPR_PPA_LIST_GLOB" >/dev/null 2>&1; then
-    pct_ok "Timekpr-nExT PPA already present (${TIMEKPR_PPA_LIST_GLOB})"
+  # timekpr-next: default to the distribution's own repositories (no external
+  # repo). The PPA is opt-in for older releases that don't carry the package.
+  if ! pct_is_true "$PCT_TIMEKPR_USE_PPA"; then
+    pct_ok "Installing timekpr-next from the distribution repositories (no PPA); set PCT_TIMEKPR_USE_PPA=1 to add ${TIMEKPR_PPA} on a release that lacks it"
+  elif compgen -G "$TIMEKPR_PPA_LIST_GLOB" >/dev/null 2>&1 || [ -f "$TIMEKPR_PPA_SOURCES" ]; then
+    pct_ok "Timekpr-nExT PPA already present"
   else
-    pct_log "Adding Timekpr-nExT PPA ${TIMEKPR_PPA}"
-    pct_run add-apt-repository -y "$TIMEKPR_PPA"
+    pct_baseline_add_timekpr_ppa
   fi
-  pct_run apt-get update -q
+  pct_retry apt-get update -q
   # ActivityWatch is an upstream release bundle (handled below); e2guardian
   # ships in the distro repositories — no extra repo needed for either.
 }
@@ -119,9 +261,12 @@ pct_pkg_installed() {
 pct_baseline_install_packages() {
   pct_step "Install distro packages"
   # timekpr-next + e2guardian are the enforcement tools; curl/unzip are needed
-  # to fetch + extract the ActivityWatch bundle.
+  # to fetch + extract the ActivityWatch bundle; openssh-server is the SSH daemon
+  # the dashboard connects to (as pct-agent) for policy pushes, health probes,
+  # and the telemetry tunnel. Fresh Linux Mint does not ship openssh-server by
+  # default — without it the dashboard can never reach this client.
   local pkg want=()
-  for pkg in timekpr-next e2guardian curl unzip; do
+  for pkg in timekpr-next e2guardian openssh-server curl unzip; do
     if pct_pkg_installed "$pkg"; then
       pct_ok "${pkg} already installed"
     else
@@ -133,7 +278,24 @@ pct_baseline_install_packages() {
     return 0
   fi
   pct_log "Installing: ${want[*]}"
-  pct_run env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${want[@]}"
+  # Network-dependent (downloads packages from the mirrors); retry on a
+  # transient fetch failure rather than aborting the enrolment.
+  pct_retry env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${want[@]}"
+}
+
+# --- step: SSH daemon ------------------------------------------------------
+
+# Enable + start the OpenSSH server so the dashboard's SSH transport can reach
+# this client. The dashboard connects as the pct-agent principal (account +
+# authorized_keys provisioned by lib/provision-agent-user.sh, #78) to push
+# `timekpra` policy, run health probes (#81), and tunnel telemetry (#86). The
+# openssh-server PACKAGE is installed in pct_baseline_install_packages above;
+# this step only ensures the daemon is running and persists across reboots.
+# Fresh Linux Mint installs no SSH server by default, so without this both the
+# dashboard connection and self-test.sh's sshd check (#80) fail.
+pct_baseline_configure_sshd() {
+  pct_step "Enable the OpenSSH server (the dashboard connects over SSH)"
+  pct_run systemctl enable --now "$PCT_SSHD_SERVICE"
 }
 
 # --- step: ActivityWatch upstream bundle -----------------------------------
@@ -162,7 +324,8 @@ pct_baseline_install_activitywatch() {
 
   pct_run mkdir -p "$tmp" "$AW_PREFIX"
   pct_log "Downloading ${url}"
-  pct_run curl --fail --location --silent --show-error --output "$zip_path" "$url"
+  # Network-dependent: retry the GitHub release download on a transient failure.
+  pct_retry curl --fail --location --silent --show-error --output "$zip_path" "$url"
 
   # Verify the checksum before extracting anything we downloaded.
   pct_log "Verifying SHA-256"
@@ -398,6 +561,7 @@ pct_install_baseline_tools() {
   pct_require_supported_client
   pct_baseline_add_repositories
   pct_baseline_install_packages
+  pct_baseline_configure_sshd
   pct_baseline_install_activitywatch
   pct_baseline_configure_timekpr
   pct_baseline_configure_activitywatch "$@"

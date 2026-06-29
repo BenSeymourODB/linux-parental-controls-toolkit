@@ -14,6 +14,7 @@
  */
 import { z } from "zod";
 import { isValidTimeZone } from "./policy/budget-window.js";
+import { DEFAULT_RETENTION_DAYS, MAX_RETENTION_DAYS } from "./policy/retention.js";
 import { isValidCronPattern } from "./transport/activitywatch/telemetry.js";
 
 /** pino log levels, in increasing severity, plus `silent`. */
@@ -230,6 +231,14 @@ const settingsSchema = z
       })
       .default("2.18.1"),
     /**
+     * Path to the bundled `install-client.sh` served at `GET /install-client.sh`
+     * (`PCT_INSTALL_CLIENT_SCRIPT_PATH`). Defaults to the in-image path the
+     * Dockerfile copies the script into. Overridable so dev and tests can point
+     * at a different path; if absent the route 404s with a startup warning rather
+     * than blocking startup.
+     */
+    installClientScriptPath: z.string().min(1).default("/app/client-scripts/install-client.sh"),
+    /**
      * Read-only, in-image source directory the first-run bootstrap (#39) syncs
      * playbooks from into `<ansibleDir>/playbooks/` (`PCT_ANSIBLE_PLAYBOOK_SRC`).
      * Defaults to the path the image is expected to ship them at. A missing
@@ -276,6 +285,24 @@ const settingsSchema = z
        * (`PCT_TELEMETRY_PULL_CONCURRENCY`). Defaults to 4.
        */
       pullConcurrency: z.coerce.number().int().positive().default(4),
+    }),
+    /**
+     * Data retention (#136, epic #135). `defaultDays` is the global default
+     * window applied to every dated-data category that has no per-category
+     * override in the policy store (`PCT_RETENTION_DEFAULT_DAYS`, default 365).
+     * Per-category overrides (custom window or "keep forever") are persisted in
+     * `retention_overrides` and managed via `/api/retention`; only the default
+     * lives in the environment. Bounded by {@link MAX_RETENTION_DAYS} so an
+     * absurd value is rejected at startup — "effectively forever" is the
+     * explicit per-category keep-forever mode, not a giant day count.
+     */
+    retention: z.object({
+      defaultDays: z.coerce
+        .number()
+        .int()
+        .min(1)
+        .max(MAX_RETENTION_DAYS)
+        .default(DEFAULT_RETENTION_DAYS),
     }),
     /**
      * Phase-6 periodic re-apply / tamper-reversion scheduler (#93): the croner
@@ -339,9 +366,10 @@ const settingsSchema = z
     }),
     /**
      * Phase-3 client health probe (#198): how the `GET /api/clients/health`
-     * list walk bounds its live SSH fan-out. Parsed-and-ready ahead of the
-     * prober wiring (#39) — like the `telemetry`/`reapply` blocks above — so the
-     * page can't take ~N×`readyTimeout` once a fleet of offline hosts is probed.
+     * list walk bounds its live SSH fan-out (the prober is wired from buildApp
+     * once the SSH key exists, #39) — like the `telemetry`/`reapply` blocks
+     * above — so the page can't take ~N×`readyTimeout` once a fleet of offline
+     * hosts is probed.
      */
     clientHealth: z.object({
       /**
@@ -417,12 +445,16 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
     adminPassword: env.PCT_ADMIN_PASSWORD,
     ansibleDir: env.PCT_ANSIBLE_DIR,
     ansibleCoreVersion: env.PCT_ANSIBLE_CORE_VERSION,
+    installClientScriptPath: env.PCT_INSTALL_CLIENT_SCRIPT_PATH,
     ansiblePlaybookSourceDir: env.PCT_ANSIBLE_PLAYBOOK_SRC,
     sshPublicKeyPath: env.PCT_SSH_PUBLIC_KEY_PATH,
     sshPrivateKeyPath: env.PCT_SSH_PRIVATE_KEY_PATH,
     telemetry: {
       pullCron: env.PCT_TELEMETRY_PULL_CRON,
       pullConcurrency: env.PCT_TELEMETRY_PULL_CONCURRENCY,
+    },
+    retention: {
+      defaultDays: env.PCT_RETENTION_DEFAULT_DAYS,
     },
     reapply: {
       cron: env.PCT_REAPPLY_CRON,

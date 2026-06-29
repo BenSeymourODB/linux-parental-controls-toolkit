@@ -163,6 +163,38 @@ jobs:
             echo "No scripts bats tests yet — skipping"
           fi
 
+  client-agent:
+    name: Client agent (TypeScript)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: client/agent/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          if [ -f client/agent/package.json ]; then
+            cd client/agent && npm ci
+          else
+            echo "client/agent not yet scaffolded — skipping install"
+          fi
+
+      - name: prettier + eslint + tsc + vitest (with coverage gate)
+        run: |
+          if [ -f client/agent/package.json ]; then
+            cd client/agent
+            npm run format:check
+            npm run lint
+            npm run typecheck
+            npm test
+          else
+            echo "client/agent not yet scaffolded — skipping checks"
+          fi
+
   ansible-lint:
     name: ansible-lint
     runs-on: ubuntu-22.04
@@ -197,10 +229,11 @@ jobs:
         run: |
           if [ -f server/Dockerfile ]; then
             docker buildx build \
+              --file server/Dockerfile \
               --cache-from type=gha \
               --cache-to type=gha,mode=max \
               --tag pct-dashboard:ci \
-              server/
+              .
           else
             echo "server/Dockerfile not yet present — skipping Docker build"
           fi

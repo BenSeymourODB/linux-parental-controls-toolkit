@@ -177,6 +177,36 @@ NotificationPolicy (user_id, enabled, sound_profile,
                   (see docs/client-notifications.md)
 ```
 
+### Group-targeted policy (user groups)
+
+A second axis lets policy be defined **once for a group of supervised users** and
+inherited, with an individual's own rule taking precedence — "set bedtime for all
+the kids once, but let Alice's calendar override it". `UserGroup` + a
+many-to-many membership (a user belongs to ≥0 groups) carry the axis (#124/#181),
+and the rule entities gain group-keyed twins kept in **separate tables** rather
+than relaxing the user-keyed tables to nullable owners (ADR 0007 / ADR 0008 →
+"Why separate tables"):
+
+```
+UserGroup     (id, name)  --  many-to-many with User (#124)
+GroupSchedule (id, user_group_id, <Schedule shape minus user_id>)  --  #182
+GroupException(id, user_group_id, <Exception shape minus user_id>) --  #182
+GroupBudget   (id, user_group_id, scope, target_id?, window,
+                seconds_allowed)  --  #134, the Budget shape minus user_id
+```
+
+The two tables for each axis converge at **resolution**, not storage. For
+schedules, `policy/group-resolution.ts` → `gatherUserScheduleRules` merges a
+member's own rules (first) with each group's rules into one precedence-ordered
+list the existing resolver consumes (ADR 0007). For budgets,
+`gatherUserBudgets` resolves the member's **effective baseline** per
+`(scope, window, target)` slot: the member's own budget for the slot if set,
+otherwise the inherited group budget (lowest group id wins on a multi-group tie)
+— full-replace, never a sum, because a `Budget` is a single baseline figure and
+**grants are the additive layer** on top (ADR 0008). Doling reward time to an
+individual therefore adjusts only *that* member's effective numbers (the grant
+is `user_id`-keyed); the group baseline and other members are untouched.
+
 ### Recurrence and date-scoping
 
 Time-varying policy — "no Discord weekdays 16:00–18:00", "extra hour during
@@ -254,7 +284,11 @@ overall policy and pushes it over the SSH + `timekpra` transport:
   unreachable ones are queued and replayed on the next successful SSH probe
   (step 5);
 - recorded in the **audit log** (#85): every issued command, with attribution,
-  for the admin Clients/audit views.
+  for the admin Clients/audit views. Read-only **health probes** (the
+  `systemctl is-active` liveness checks the Clients page runs over SSH, #81)
+  are deliberately **excluded** from this trail — they carry no admin intent and
+  a fleet-wide probe on every page load would drown the real commands in noise,
+  so the prober runs over the un-audited SSH surface by design.
 
 Removing a user↔client link is an **unmanage** push (#253): the deleting route
 captures the supervised account's `os_username` before the link cascades
@@ -271,8 +305,10 @@ server's SSH key (generated on first run, #39); until it exists the dispatcher
 falls back to the **logging stub** (`server/src/transport/stub.ts`, #54,
 `component: "transport/stub"`) so the dashboard still starts and CRUD still
 works (the change is logged, not dispatched). The file-level Ansible push
-(step 4) is still Phase 6, and PlayTime / per-activity limits are Phase 8 — both
-plug into the same call sites without reshaping them.
+(step 4) is still Phase 6, and per-activity limit enforcement is Phase 8
+(#98/#99, via usage-poll + agent force-close — not Timekpr PlayTime; see
+[ADR 0010](adr/0010-per-activity-enforcement-mechanism.md)) — both plug into the
+same call sites without reshaping them.
 
 #### "Add time today" — the same-day adjustment lever (#257)
 
@@ -314,8 +350,10 @@ transport_unavailable` rather than silently no-op'ing.
 3. Events are normalised into `UsageSample` rows. Raw event blobs are
    discarded; only aggregated samples are kept.
 4. The dashboard re-checks budgets; if a per-activity quota is exhausted,
-   it triggers the enforcement step (kill the process via Ansible
-   ad-hoc command, or adjust Timekpr-nExT PlayTime).
+   it triggers the enforcement step — `enforce.force_close` to the per-user
+   agent, with an SSH ad-hoc `pkill` fallback (#98/#99). This is the single
+   per-activity enforcement authority; Timekpr PlayTime is not used (see
+   [ADR 0010](adr/0010-per-activity-enforcement-mechanism.md)).
 
 ActivityWatch's REST API is unauthenticated. We never expose it on the
 network — all access goes through SSH port forwarding initiated by the
@@ -326,12 +364,18 @@ server, which is consistent with the upstream project's guidance.
 | Concern | Enforced by | Configured by |
 |---|---|---|
 | Total session time | Timekpr-nExT (logind) | `timekpra` over SSH |
-| App-group time | Timekpr-nExT PlayTime | `timekpra` over SSH |
 | Per-app deny (hard block) | AppArmor | Ansible-deployed profile |
-| Per-app time quota (granular) | Dashboard polling + process kill | Ansible ad-hoc / signal |
+| Per-app / app-group time quota | Dashboard polling + agent force-close (SSH `pkill` fallback) | usage-poll decision (#98/#99) |
 | Per-website filter | e2guardian | Ansible-deployed config |
 | Per-website time-window | e2guardian config swap on schedule | Ansible + systemd timer |
 | DNS-level block | AdGuard Home | Dashboard via REST API |
+
+Per-app *and* app-group time quotas share **one** enforcement authority: the
+custom usage-poll → decision → agent force-close path. Timekpr-nExT PlayTime was
+evaluated as the app-group mechanism and **not adopted** — it provides only a
+single shared budget across all its activities, not the independent per-activity
+budgets the policy model requires; see
+[ADR 0010](adr/0010-per-activity-enforcement-mechanism.md).
 
 ## External integrations
 

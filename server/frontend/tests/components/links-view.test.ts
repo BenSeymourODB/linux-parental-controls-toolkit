@@ -11,6 +11,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/sve
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ClientResponse, LinkResponse, UserResponse } from "../../src/lib/api/contract.js";
+import { resetResources } from "../../src/lib/data/resources.svelte.js";
 
 const listUsers = vi.fn<() => Promise<UserResponse[]>>();
 const listClients = vi.fn<() => Promise<ClientResponse[]>>();
@@ -46,6 +47,7 @@ function client(overrides: Partial<ClientResponse> = {}): ClientResponse {
     sshUser: "admin",
     enrolledAt: "2026-01-01T00:00:00.000Z",
     lastSeen: null,
+    enrolled: true,
     platform: "linux",
     ...overrides,
   };
@@ -59,6 +61,7 @@ const MINT = client({ id: 5, hostname: "mint-box" });
 const LAPTOP = client({ id: 6, hostname: "laptop" });
 
 beforeEach(() => {
+  resetResources();
   listUsers.mockReset().mockResolvedValue([user()]);
   listClients.mockReset().mockResolvedValue([MINT, LAPTOP]);
   listUserLinks.mockReset().mockResolvedValue([]);

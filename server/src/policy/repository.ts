@@ -24,10 +24,12 @@ import type {
   ActivityKind,
   BudgetWindow,
   MatchType,
+  RetentionCategory,
   ScheduleAction,
   Scope,
   SoundProfile,
 } from "./enums.js";
+import type { ResolvedRetention } from "./retention.js";
 import { reorder } from "./schedule-precedence.js";
 import {
   activities,
@@ -36,9 +38,11 @@ import {
   budgets,
   clients,
   exceptions,
+  groupBudgets,
   groupExceptions,
   groupSchedules,
   notificationPolicies,
+  retentionOverrides,
   schedules,
   userGroupMemberships,
   userGroups,
@@ -195,6 +199,33 @@ export function touchClientLastSeen(db: PolicyDb, id: number, at: Date): void {
  */
 export function recordClientLastSeen(db: PolicyDb, id: number, at: Date): ClientRow | undefined {
   return db.update(clients).set({ lastSeen: at }).where(eq(clients.id, id)).returning().get();
+}
+
+/**
+ * Refresh a client's reported `agent_version` + `versions_reported_at` from the
+ * value the bridge sends in its event-stream `hello` (#165/#101 heartbeat,
+ * ADR 0007). `agent_version` / `versions_reported_at` are system-observed
+ * inventory columns (#164), not admin-editable, so this writes them directly
+ * rather than going through {@link updateClient}. A no-op if no such client.
+ */
+export function recordClientAgentVersion(
+  db: PolicyDb,
+  id: number,
+  agentVersion: string,
+  at: Date,
+): void {
+  db.update(clients).set({ agentVersion, versionsReportedAt: at }).where(eq(clients.id, id)).run();
+}
+
+/**
+ * Set or clear a client's `update_required` flag (ADR 0007 §5, #165): set when
+ * its event-stream `hello` is refused for being older than the supported
+ * protocol window, cleared when it next connects compatibly. A system-observed
+ * signal (not admin-editable), written directly like the other event-stream
+ * liveness columns. A no-op if no client with `id` exists.
+ */
+export function setClientUpdateRequired(db: PolicyDb, id: number, value: boolean): void {
+  db.update(clients).set({ updateRequired: value }).where(eq(clients.id, id)).run();
 }
 
 // --- User-on-client links --------------------------------------------------
@@ -1188,6 +1219,150 @@ export function deleteGroupException(db: PolicyDb, id: number): boolean {
       .delete(groupExceptions)
       .where(eq(groupExceptions.id, id))
       .returning({ id: groupExceptions.id })
+      .get() !== undefined
+  );
+}
+
+// --- Group budgets (#134) --------------------------------------------------
+// Group-targeted time allowances, keyed by `user_group_id` (ADR 0008). The
+// same shape as {@link budgets} minus the owner; `policy/group-resolution.ts`
+// resolves a member's effective baseline (own budget for a slot, else the
+// inherited group budget).
+
+/** A persisted {@link groupBudgets} row. */
+export type GroupBudgetRow = typeof groupBudgets.$inferSelect;
+
+/**
+ * Fields accepted when creating a {@link groupBudgets} row — {@link BudgetCreate}
+ * with `userGroupId` in place of `userId`. The route layer enforces scope/target
+ * coherence and referent existence before this is called, so the storage `CHECK`
+ * is a backstop, not the primary guard.
+ */
+export interface GroupBudgetCreate {
+  userGroupId: number;
+  scope: Scope;
+  targetId?: number | null | undefined;
+  window: BudgetWindow;
+  secondsAllowed: number;
+}
+
+/** Mutable fields on a {@link groupBudgets} row; omitted keys are left unchanged. */
+export interface GroupBudgetUpdate {
+  scope?: Scope | undefined;
+  targetId?: number | null | undefined;
+  window?: BudgetWindow | undefined;
+  secondsAllowed?: number | undefined;
+}
+
+/** All budgets for one group, ascending by id. */
+export function listGroupBudgets(db: PolicyDb, groupId: number): GroupBudgetRow[] {
+  return db
+    .select()
+    .from(groupBudgets)
+    .where(eq(groupBudgets.userGroupId, groupId))
+    .orderBy(groupBudgets.id)
+    .all();
+}
+
+/** One group budget by id, or `undefined` if absent. */
+export function getGroupBudget(db: PolicyDb, id: number): GroupBudgetRow | undefined {
+  return db.select().from(groupBudgets).where(eq(groupBudgets.id, id)).get();
+}
+
+/**
+ * Insert a group budget and return the stored row. The caller confirms the
+ * group (and any activity/group referent) exists first; an FK violation
+ * otherwise surfaces opaquely.
+ */
+export function createGroupBudget(db: PolicyDb, input: GroupBudgetCreate): GroupBudgetRow {
+  return db
+    .insert(groupBudgets)
+    .values({
+      userGroupId: input.userGroupId,
+      scope: input.scope,
+      targetId: input.targetId ?? null,
+      window: input.window,
+      secondsAllowed: input.secondsAllowed,
+    })
+    .returning()
+    .get();
+}
+
+/**
+ * Apply a partial update and return the stored row, or `undefined` if no group
+ * budget with `id` exists. The route re-validates scope/target coherence on the
+ * merged row before calling this.
+ */
+export function updateGroupBudget(
+  db: PolicyDb,
+  id: number,
+  patch: GroupBudgetUpdate,
+): GroupBudgetRow | undefined {
+  return db.update(groupBudgets).set(patch).where(eq(groupBudgets.id, id)).returning().get();
+}
+
+/** Delete a group budget. Returns whether a row was removed. */
+export function deleteGroupBudget(db: PolicyDb, id: number): boolean {
+  return (
+    db
+      .delete(groupBudgets)
+      .where(eq(groupBudgets.id, id))
+      .returning({ id: groupBudgets.id })
+      .get() !== undefined
+  );
+}
+
+// --- Retention overrides (#136) --------------------------------------------
+
+/** A persisted {@link retentionOverrides} row. */
+export type RetentionOverrideRow = typeof retentionOverrides.$inferSelect;
+
+/**
+ * Every per-category retention override, ascending by category. A category
+ * absent from this list inherits the global default (see `policy/retention.ts`
+ * → {@link RetentionPolicy.fromOverrides}); the row layer never invents a
+ * default-inheriting row.
+ */
+export function listRetentionOverrides(db: PolicyDb): RetentionOverrideRow[] {
+  return db.select().from(retentionOverrides).orderBy(retentionOverrides.category).all();
+}
+
+/**
+ * Set (insert or replace) the override for one category and return the stored
+ * row. The {@link ResolvedRetention} is split onto the `keep_forever` / `days`
+ * columns the storage CHECK enforces: keep-forever rows carry no day count,
+ * custom rows carry the positive count. `updated_at` is refreshed on every
+ * write so the admin surface can show when a window last changed.
+ */
+export function upsertRetentionOverride(
+  db: PolicyDb,
+  category: RetentionCategory,
+  retention: ResolvedRetention,
+): RetentionOverrideRow {
+  const keepForever = retention.keepForever;
+  const days = retention.keepForever ? null : retention.days;
+  const now = new Date();
+  return db
+    .insert(retentionOverrides)
+    .values({ category, keepForever, days, updatedAt: now })
+    .onConflictDoUpdate({
+      target: retentionOverrides.category,
+      set: { keepForever, days, updatedAt: now },
+    })
+    .returning()
+    .get();
+}
+
+/**
+ * Clear the override for one category, reverting it to the global default.
+ * Returns whether a row was actually removed (false when none was set).
+ */
+export function deleteRetentionOverride(db: PolicyDb, category: RetentionCategory): boolean {
+  return (
+    db
+      .delete(retentionOverrides)
+      .where(eq(retentionOverrides.category, category))
+      .returning({ category: retentionOverrides.category })
       .get() !== undefined
   );
 }

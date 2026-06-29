@@ -37,18 +37,19 @@ describe("policy DTO mappers", () => {
     });
   });
 
-  it("serializes a client's lastSeen when present", () => {
+  it("serializes a client's lastSeen when present and flags it as enrolled", () => {
     const row: ClientRow = {
       id: 2,
       hostname: "mint-01",
       sshUser: "pct-agent",
-      bearerTokenHash: null,
+      bearerTokenHash: "deadbeef",
       enrolledAt: new Date("2026-06-17T00:00:00.000Z"),
       lastSeen: new Date("2026-06-17T08:30:00.000Z"),
       agentVersion: null,
       componentVersions: null,
       versionsReportedAt: null,
       platform: "linux",
+      updateRequired: false,
     };
     expect(toClientResponse(row)).toEqual({
       id: 2,
@@ -56,8 +57,26 @@ describe("policy DTO mappers", () => {
       sshUser: "pct-agent",
       enrolledAt: "2026-06-17T00:00:00.000Z",
       lastSeen: "2026-06-17T08:30:00.000Z",
+      enrolled: true,
       platform: "linux",
     });
+  });
+
+  it("flags a manual-CRUD client (no bearer token) as not enrolled", () => {
+    const row: ClientRow = {
+      id: 5,
+      hostname: "mint-manual",
+      sshUser: "pct-agent",
+      bearerTokenHash: null,
+      enrolledAt: new Date("2026-06-17T00:00:00.000Z"),
+      lastSeen: null,
+      agentVersion: null,
+      componentVersions: null,
+      versionsReportedAt: null,
+      platform: "linux",
+      updateRequired: false,
+    };
+    expect(toClientResponse(row).enrolled).toBe(false);
   });
 
   it("maps a client's lastSeen of null to null", () => {
@@ -72,6 +91,7 @@ describe("policy DTO mappers", () => {
       componentVersions: null,
       versionsReportedAt: null,
       platform: "linux",
+      updateRequired: false,
     };
     expect(toClientResponse(row).lastSeen).toBeNull();
   });
@@ -88,6 +108,7 @@ describe("policy DTO mappers", () => {
       componentVersions: null,
       versionsReportedAt: null,
       platform: "windows",
+      updateRequired: false,
     };
     expect(toClientResponse(row).platform).toBe("windows");
   });

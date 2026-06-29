@@ -14,6 +14,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SessionResponse } from "../../src/lib/api/contract.js";
+import { resetResources } from "../../src/lib/data/resources.svelte.js";
 
 vi.mock("$app/environment", () => ({ browser: true }));
 
@@ -33,6 +34,7 @@ vi.mock("$lib/api/auth", () => ({
 const { default: AdminPage } = await import("../../src/routes/admin/+page.svelte");
 
 beforeEach(() => {
+  resetResources();
   fetchSession.mockReset();
   login.mockReset();
   logout.mockReset();

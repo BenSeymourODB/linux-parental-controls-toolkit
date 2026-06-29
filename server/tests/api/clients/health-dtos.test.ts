@@ -69,6 +69,7 @@ describe("health DTO contract", () => {
       lastSeen: "2026-06-19T12:00:00.000Z",
       enrolledAt: "2026-06-01T00:00:00.000Z",
       probedAt: "2026-06-19T12:00:00.000Z",
+      updateRequired: false,
       components: [{ component: "timekpr-next", status: "ok", detail: "active" }],
       queue: { pending: 1, failed: 0, actions: [toQueuedActionSummary(row)] },
     });
@@ -83,6 +84,7 @@ describe("health DTO contract", () => {
       lastSeen: null,
       enrolledAt: "2026-06-01T00:00:00.000Z",
       probedAt: null,
+      updateRequired: true,
       components: [],
       queue: { pending: 0, failed: 0, actions: [] },
     });

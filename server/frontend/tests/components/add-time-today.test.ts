@@ -1,39 +1,31 @@
 /**
- * Component test for the "Add time today" control on `LinksView` (#257).
+ * Component test for the "Add time today" lever (#257), now its own
+ * `AddTimeToday` component on the Dashboard (UI consolidation — it used to be
+ * embedded at the bottom of `LinksView`).
  *
- * Exercises the logic this view adds beyond the link CRUD skeleton: picking a
- * user, the quick +15/+30 and custom-minutes adjustments (minutes → seconds),
- * and rendering the per-client applied/unreachable result. Drives the real
- * component against a mocked `$lib/api` (no live backend), following the
- * established `tests/components/*` pattern.
+ * Exercises the behaviour the component owns: loading users + clients, picking
+ * a target user, the quick +15/+30 and custom-minutes adjustments
+ * (minutes → seconds), and rendering the per-client applied/unreachable result.
+ * Drives the real component against a mocked `$lib/api` (no live backend),
+ * following the established `tests/components/*` pattern.
  */
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type {
-  ClientResponse,
-  LinkResponse,
-  TimeTodayResponse,
-  UserResponse,
-} from "../../src/lib/api/contract.js";
+import type { ClientResponse, TimeTodayResponse, UserResponse } from "../../src/lib/api/contract.js";
+import { resetResources } from "../../src/lib/data/resources.svelte.js";
 
 const listUsers = vi.fn<() => Promise<UserResponse[]>>();
 const listClients = vi.fn<() => Promise<ClientResponse[]>>();
-const listUserLinks = vi.fn<(userId: number) => Promise<LinkResponse[]>>();
 const adjustTimeToday = vi.fn<(userId: number, input: unknown) => Promise<TimeTodayResponse>>();
 
 vi.mock("$lib/api/users", () => ({ listUsers: () => listUsers() }));
 vi.mock("$lib/api/clients", () => ({ listClients: () => listClients() }));
-vi.mock("$lib/api/links", () => ({
-  listUserLinks: (userId: number) => listUserLinks(userId),
-  upsertLink: vi.fn(),
-  deleteLink: vi.fn(),
-}));
 vi.mock("$lib/api/time-today", () => ({
   adjustTimeToday: (userId: number, input: unknown) => adjustTimeToday(userId, input),
 }));
 
-const { default: LinksView } = await import("../../src/lib/views/LinksView.svelte");
+const { default: AddTimeToday } = await import("../../src/lib/components/AddTimeToday.svelte");
 
 function user(overrides: Partial<UserResponse> = {}): UserResponse {
   return {
@@ -46,24 +38,29 @@ function user(overrides: Partial<UserResponse> = {}): UserResponse {
 }
 
 function client(overrides: Partial<ClientResponse> = {}): ClientResponse {
-  return { id: 7, hostname: "mint-01", ...overrides } as ClientResponse;
+  return {
+    id: 7,
+    hostname: "mint-01",
+    sshUser: "pct-agent",
+    enrolledAt: "2026-01-01T00:00:00.000Z",
+    lastSeen: null,
+    enrolled: true,
+    platform: "linux",
+    ...overrides,
+  } as ClientResponse;
 }
 
-function link(overrides: Partial<LinkResponse> = {}): LinkResponse {
-  return { userId: 1, clientId: 7, osUsername: "alice", osUserRef: "1001" } as LinkResponse;
-}
-
-/** Pick "Alice" in the user dropdown and wait for her links to load. */
+/** Pick "Alice" in the user dropdown and wait for the adjustment controls. */
 async function selectAlice(): Promise<void> {
   await screen.findByRole("option", { name: "Alice" });
   await fireEvent.change(screen.getByLabelText("User"), { target: { value: "1" } });
-  await screen.findByText("Add time today");
+  await screen.findByRole("button", { name: "+30 min" });
 }
 
 beforeEach(() => {
+  resetResources();
   listUsers.mockReset().mockResolvedValue([user()]);
   listClients.mockReset().mockResolvedValue([client()]);
-  listUserLinks.mockReset().mockResolvedValue([link()]);
   adjustTimeToday.mockReset();
 });
 
@@ -71,7 +68,15 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("LinksView — Add time today (#257)", () => {
+describe("AddTimeToday (#257)", () => {
+  it("hides the controls until a user is chosen", async () => {
+    render(AddTimeToday);
+    // The heading/caveat are always present; the levers are not, until a user
+    // is selected.
+    await screen.findByRole("option", { name: "Alice" });
+    expect(screen.queryByRole("button", { name: "+30 min" })).not.toBeInTheDocument();
+  });
+
   it("sends +30 minutes as a 1800-second delta and renders the per-client result", async () => {
     adjustTimeToday.mockResolvedValue({
       userId: 1,
@@ -80,7 +85,7 @@ describe("LinksView — Add time today (#257)", () => {
       results: [{ clientId: 7, osUsername: "alice", status: "applied" }],
     });
 
-    render(LinksView);
+    render(AddTimeToday);
     await selectAlice();
 
     await fireEvent.click(screen.getByRole("button", { name: "+30 min" }));
@@ -100,7 +105,7 @@ describe("LinksView — Add time today (#257)", () => {
       results: [{ clientId: 7, osUsername: "alice", status: "applied" }],
     });
 
-    render(LinksView);
+    render(AddTimeToday);
     await selectAlice();
 
     await fireEvent.input(screen.getByLabelText("Custom minutes (negative to remove time)"), {
@@ -112,7 +117,7 @@ describe("LinksView — Add time today (#257)", () => {
   });
 
   it("does not call the API for a zero / empty custom amount", async () => {
-    render(LinksView);
+    render(AddTimeToday);
     await selectAlice();
 
     await fireEvent.input(screen.getByLabelText("Custom minutes (negative to remove time)"), {
@@ -132,7 +137,7 @@ describe("LinksView — Add time today (#257)", () => {
       results: [{ clientId: 7, osUsername: "alice", status: "unreachable", error: "offline" }],
     });
 
-    render(LinksView);
+    render(AddTimeToday);
     await selectAlice();
 
     await fireEvent.click(screen.getByRole("button", { name: "+15 min" }));
@@ -145,7 +150,7 @@ describe("LinksView — Add time today (#257)", () => {
   it("shows an error when the adjustment request fails", async () => {
     adjustTimeToday.mockRejectedValue(new Error("transport unavailable"));
 
-    render(LinksView);
+    render(AddTimeToday);
     await selectAlice();
 
     await fireEvent.click(screen.getByRole("button", { name: "+15 min" }));
