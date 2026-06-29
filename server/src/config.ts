@@ -366,9 +366,10 @@ const settingsSchema = z
     }),
     /**
      * Phase-3 client health probe (#198): how the `GET /api/clients/health`
-     * list walk bounds its live SSH fan-out. Parsed-and-ready ahead of the
-     * prober wiring (#39) — like the `telemetry`/`reapply` blocks above — so the
-     * page can't take ~N×`readyTimeout` once a fleet of offline hosts is probed.
+     * list walk bounds its live SSH fan-out (the prober is wired from buildApp
+     * once the SSH key exists, #39) — like the `telemetry`/`reapply` blocks
+     * above — so the page can't take ~N×`readyTimeout` once a fleet of offline
+     * hosts is probed.
      */
     clientHealth: z.object({
       /**

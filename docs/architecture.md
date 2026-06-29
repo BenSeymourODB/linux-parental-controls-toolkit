@@ -284,7 +284,11 @@ overall policy and pushes it over the SSH + `timekpra` transport:
   unreachable ones are queued and replayed on the next successful SSH probe
   (step 5);
 - recorded in the **audit log** (#85): every issued command, with attribution,
-  for the admin Clients/audit views.
+  for the admin Clients/audit views. Read-only **health probes** (the
+  `systemctl is-active` liveness checks the Clients page runs over SSH, #81)
+  are deliberately **excluded** from this trail — they carry no admin intent and
+  a fleet-wide probe on every page load would drown the real commands in noise,
+  so the prober runs over the un-audited SSH surface by design.
 
 Removing a user↔client link is an **unmanage** push (#253): the deleting route
 captures the supervised account's `os_username` before the link cascades

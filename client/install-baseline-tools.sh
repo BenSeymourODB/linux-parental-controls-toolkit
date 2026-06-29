@@ -8,6 +8,10 @@
 #   - ActivityWatch  (activity telemetry; pulled later over an SSH tunnel)
 #   - e2guardian     (web filtering; real rules managed later by Ansible)
 #
+# It also ensures the OpenSSH server is installed and running: the dashboard
+# reaches every client over SSH (as the pct-agent principal #78), and a fresh
+# Linux Mint ships no SSH server by default.
+#
 # This lays the tools down and writes a *safe baseline* only — enough that the
 # post-install self-test (#80) passes. The managed configuration (real
 # e2guardian filter rules, the iptables OUTPUT redirect, ActivityWatch
@@ -131,6 +135,11 @@ PCT_TIMEKPR_CLIENT_DESKTOP="${PCT_TIMEKPR_CLIENT_DESKTOP:-timekpr-client.desktop
 E2G_DIR="${E2G_DIR:-/etc/e2guardian}"
 E2G_PCT_DIR="${E2G_PCT_DIR:-${E2G_DIR}/pct.d}"
 
+# The OpenSSH server's systemd unit. On Debian/Ubuntu/Mint the openssh-server
+# package's unit is ssh.service (sshd.service is an alias). Kept overridable and
+# named to match self-test.sh's PCT_SSHD_SERVICE so the two stay in lockstep.
+PCT_SSHD_SERVICE="${PCT_SSHD_SERVICE:-ssh.service}"
+
 # --- step: apt repositories ------------------------------------------------
 
 # Resolve the Ubuntu series (apt "Suite") the PPA is consumed for. Mint reports
@@ -252,9 +261,12 @@ pct_pkg_installed() {
 pct_baseline_install_packages() {
   pct_step "Install distro packages"
   # timekpr-next + e2guardian are the enforcement tools; curl/unzip are needed
-  # to fetch + extract the ActivityWatch bundle.
+  # to fetch + extract the ActivityWatch bundle; openssh-server is the SSH daemon
+  # the dashboard connects to (as pct-agent) for policy pushes, health probes,
+  # and the telemetry tunnel. Fresh Linux Mint does not ship openssh-server by
+  # default — without it the dashboard can never reach this client.
   local pkg want=()
-  for pkg in timekpr-next e2guardian curl unzip; do
+  for pkg in timekpr-next e2guardian openssh-server curl unzip; do
     if pct_pkg_installed "$pkg"; then
       pct_ok "${pkg} already installed"
     else
@@ -269,6 +281,21 @@ pct_baseline_install_packages() {
   # Network-dependent (downloads packages from the mirrors); retry on a
   # transient fetch failure rather than aborting the enrolment.
   pct_retry env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${want[@]}"
+}
+
+# --- step: SSH daemon ------------------------------------------------------
+
+# Enable + start the OpenSSH server so the dashboard's SSH transport can reach
+# this client. The dashboard connects as the pct-agent principal (account +
+# authorized_keys provisioned by lib/provision-agent-user.sh, #78) to push
+# `timekpra` policy, run health probes (#81), and tunnel telemetry (#86). The
+# openssh-server PACKAGE is installed in pct_baseline_install_packages above;
+# this step only ensures the daemon is running and persists across reboots.
+# Fresh Linux Mint installs no SSH server by default, so without this both the
+# dashboard connection and self-test.sh's sshd check (#80) fail.
+pct_baseline_configure_sshd() {
+  pct_step "Enable the OpenSSH server (the dashboard connects over SSH)"
+  pct_run systemctl enable --now "$PCT_SSHD_SERVICE"
 }
 
 # --- step: ActivityWatch upstream bundle -----------------------------------
@@ -534,6 +561,7 @@ pct_install_baseline_tools() {
   pct_require_supported_client
   pct_baseline_add_repositories
   pct_baseline_install_packages
+  pct_baseline_configure_sshd
   pct_baseline_install_activitywatch
   pct_baseline_configure_timekpr
   pct_baseline_configure_activitywatch "$@"
