@@ -12,6 +12,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/sve
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { UserGroupResponse, UserResponse } from "../../src/lib/api/contract.js";
+import { resetResources } from "../../src/lib/data/resources.svelte.js";
 
 const listUserGroups = vi.fn<() => Promise<UserGroupResponse[]>>();
 const createUserGroup = vi.fn<(input: unknown) => Promise<UserGroupResponse>>();
@@ -45,6 +46,7 @@ const BOB = user({ id: 11, displayName: "Bob" });
 const GROUP: UserGroupResponse = { id: 20, name: "Kids", createdAt: "2026-06-23T00:00:00.000Z" };
 
 beforeEach(() => {
+  resetResources();
   listUserGroups.mockReset().mockResolvedValue([GROUP]);
   createUserGroup.mockReset();
   updateUserGroup.mockReset();

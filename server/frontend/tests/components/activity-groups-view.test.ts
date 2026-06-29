@@ -12,6 +12,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/sve
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ActivityGroupResponse, ActivityResponse } from "../../src/lib/api/contract.js";
+import { resetResources } from "../../src/lib/data/resources.svelte.js";
 
 const listActivityGroups = vi.fn<() => Promise<ActivityGroupResponse[]>>();
 const createActivityGroup = vi.fn<(input: unknown) => Promise<ActivityGroupResponse>>();
@@ -46,6 +47,7 @@ const STEAM = activity({ id: 10, matcher: "steam" });
 const DISCORD = activity({ id: 11, matcher: "discord" });
 
 beforeEach(() => {
+  resetResources();
   listActivityGroups.mockReset().mockResolvedValue([{ id: 20, name: "Games" }]);
   createActivityGroup.mockReset();
   updateActivityGroup.mockReset();

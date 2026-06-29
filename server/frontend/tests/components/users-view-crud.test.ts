@@ -11,6 +11,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/sve
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { UserResponse } from "../../src/lib/api/contract.js";
+import { resetResources } from "../../src/lib/data/resources.svelte.js";
 
 const listUsers = vi.fn<() => Promise<UserResponse[]>>();
 const createUser = vi.fn<(input: unknown) => Promise<UserResponse>>();
@@ -22,6 +23,21 @@ vi.mock("$lib/api/users", () => ({
   createUser: (input: unknown) => createUser(input),
   updateUser: (id: number, input: unknown) => updateUser(id, input),
   deleteUser: (id: number) => deleteUser(id),
+}));
+
+// UsersView now composes `UserGroupsView` as a second section (UI
+// consolidation). That child fetches user groups on mount; stub its API to a
+// quiet empty state so it doesn't reach for a live backend. The shared user
+// list is read through `usersResource` by both sections, so a single load
+// (and a single error surface) is shared between them.
+vi.mock("$lib/api/user-groups", () => ({
+  listUserGroups: () => Promise.resolve([]),
+  createUserGroup: vi.fn(),
+  updateUserGroup: vi.fn(),
+  deleteUserGroup: vi.fn(),
+  listGroupMembers: vi.fn(),
+  addUserToGroup: vi.fn(),
+  removeUserFromGroup: vi.fn(),
 }));
 
 const { default: UsersView } = await import("../../src/lib/views/UsersView.svelte");
@@ -37,6 +53,7 @@ function user(overrides: Partial<UserResponse> = {}): UserResponse {
 }
 
 beforeEach(() => {
+  resetResources();
   listUsers.mockReset();
   createUser.mockReset();
   updateUser.mockReset();
@@ -54,6 +71,9 @@ describe("UsersView CRUD", () => {
     render(UsersView);
 
     expect(await screen.findByText("Alice")).toBeInTheDocument();
+    // The view and the embedded UserGroupsView both read the shared
+    // `usersResource`, whose concurrent loads coalesce onto one request — so the
+    // underlying wrapper is hit exactly once despite two consumers.
     expect(listUsers).toHaveBeenCalledOnce();
   });
 
@@ -132,6 +152,8 @@ describe("UsersView CRUD", () => {
 
     render(UsersView);
 
+    // The shared user list is owned here, and the composed UserGroupsView no
+    // longer reports the shared-list load error — so a single alert surfaces.
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("The server exploded.");
   });

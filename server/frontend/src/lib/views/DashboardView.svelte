@@ -2,8 +2,16 @@
   Admin landing view (#53). A lightweight welcome panel for the foundation
   slice; the burndown charts and live status are Phase 5 / 8b and land with
   their own roadmap items.
+
+  UI consolidation: the "Add time today" lever now lives here. It was buried at
+  the bottom of the per-user "User ↔ Client links" editor, where it was hard to
+  find for what is one of the most common day-to-day admin actions. It is the
+  self-contained `AddTimeToday` component (with its own user picker), so the
+  Dashboard just hosts it.
 -->
 <script lang="ts">
+  import AddTimeToday from "$lib/components/AddTimeToday.svelte";
+
   interface Props {
     username: string;
     /** Jump to a section by id (wired to the shell nav). */
@@ -20,6 +28,8 @@
     milestones.
   </p>
   <button onclick={() => onnavigate("users")}>Manage users →</button>
+
+  <AddTimeToday />
 </section>
 
 <style>
@@ -41,5 +51,9 @@
     color: #fff;
     font-size: 0.95rem;
     cursor: pointer;
+  }
+  /* The "Add time today" card stands apart from the welcome blurb. */
+  section :global(.add-time) {
+    margin-top: 2rem;
   }
 </style>

@@ -17,7 +17,7 @@
   import { onMount } from "svelte";
   import { ApiError } from "$lib/api/client.js";
   import type { UserGroupResponse, UserResponse } from "$lib/api/contract.js";
-  import { listUsers } from "$lib/api/users.js";
+  import { usersResource } from "$lib/data/resources.svelte.js";
   import {
     addUserToGroup,
     createUserGroup,
@@ -29,8 +29,9 @@
   } from "$lib/api/user-groups.js";
 
   let groups = $state<UserGroupResponse[]>([]);
-  let users = $state<UserResponse[]>([]);
   let loading = $state(true);
+  // This view's own errors (group/membership ops). The shared user-list load
+  // error is owned and surfaced by the parent UsersView, not duplicated here.
   let error = $state<string | null>(null);
 
   // Create form.
@@ -54,8 +55,11 @@
   async function load(): Promise<void> {
     loading = true;
     error = null;
+    // The user list is shared; fire its load (coalesced with the parent's) and
+    // let the parent own its error. This view only awaits its own groups list.
+    void usersResource.load();
     try {
-      [groups, users] = await Promise.all([listUserGroups(), listUsers()]);
+      groups = await listUserGroups();
     } catch (err) {
       error = messageOf(err);
     } finally {
@@ -65,11 +69,11 @@
 
   /** Users by id, for resolving the chosen add-member option to a row. */
   function userById(id: number): UserResponse | undefined {
-    return users.find((u) => u.id === id);
+    return usersResource.items.find((u) => u.id === id);
   }
 
   /** Users not yet in the open group — the add-dropdown candidates. */
-  let candidates = $derived(users.filter((u) => !members.some((m) => m.id === u.id)));
+  let candidates = $derived(usersResource.items.filter((u) => !members.some((m) => m.id === u.id)));
 
   async function handleCreate(event: SubmitEvent): Promise<void> {
     event.preventDefault();
