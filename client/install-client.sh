@@ -28,8 +28,15 @@
 # Nothing here exists to "make circumvention harder".
 #
 # Idempotent and re-runnable: each sub-step reconciles rather than re-bootstraps.
-# A second enrolment needs a fresh token (enrolment tokens are single-use); the
-# orchestrator surfaces the server's rejection cleanly rather than masking it.
+# Re-running to apply a client-side patch (e.g. enabling sshd) to an already-
+# enrolled box has two supported shapes:
+#   * --skip-enrol: re-run provision + baseline + self-test ONLY, leaving the
+#     existing enrolment, per-client token, and authorized dashboard key intact.
+#     This needs no token and no reachable dashboard.
+#   * a plain re-run: the orchestrator now TOLERATES the dashboard's "already
+#     enrolled" 409 — it keeps the existing enrolment and continues to the
+#     self-test rather than aborting. (A genuinely bad/expired token still 401s
+#     and aborts with a clear message; mint a fresh one for a true re-enrol.)
 #
 # Dry-run aware: set PCT_DRY_RUN=1 to print the intended plan without touching
 # the system, network, or the upstream tools — that is how CI and the bats tests
@@ -70,6 +77,24 @@ PCT_STATE_DIR="${PCT_STATE_DIR:-/etc/pct}"
 # orchestrator itself needs (the enrol request/response JSON is handled in pure
 # bash — see pct_orch_build_enrol_body / pct_orch_json_*).
 PCT_CURL="${PCT_CURL:-curl}"
+
+# Upgrade-in-place: skip the enrolment exchange (and the steps that depend on
+# its response — authorizing the SSH key, persisting the bearer token). Re-runs
+# provision + baseline + self-test only, leaving an existing enrolment, its
+# per-client token, and the already-authorized dashboard key untouched. This is
+# the supported way to re-apply a client-side patch (e.g. enabling sshd) to a
+# box that is already enrolled, where a fresh enrol would 401 (single-use token)
+# or 409 (hostname already registered). Set via --skip-enrol or PCT_SKIP_ENROL.
+PCT_SKIP_ENROL="${PCT_SKIP_ENROL:-}"
+
+# Distinct exit code pct_orch_enrol returns to signal "this host is already
+# enrolled" (the dashboard's 409). The caller treats it as a tolerable re-run
+# condition — keep the existing enrolment and carry on to the self-test —
+# rather than a hard failure (return 1), so a plain re-run does not abort.
+PCT_ENROL_ALREADY_CODE=3
+
+# Whether enrolment is being skipped this run (--skip-enrol / PCT_SKIP_ENROL).
+pct_orch_skip_enrol() { pct_is_true "${PCT_SKIP_ENROL:-}"; }
 
 # Version-reporting probes (#164). The enrol body reports the pct-client agent
 # `.deb` version and the installed managed-tool versions so the dashboard has a
@@ -112,10 +137,19 @@ Options:
                             be supplied via PCT_SUPERVISED_USERS (space list).
   --ssh-user NAME           SSH principal the dashboard connects as
                             (default: pct-agent).
+  --skip-enrol              Upgrade-in-place: re-run the provision + baseline +
+                            self-test steps on an ALREADY-enrolled client and
+                            skip the enrolment exchange (and authorizing the SSH
+                            key / persisting the token). Use this to re-apply a
+                            client-side patch without minting a fresh token or
+                            re-registering. Needs no --enrolment-token; the
+                            --server-url is optional (no network is touched).
+                            May also be set via PCT_SKIP_ENROL=1.
   -h, --help                Show this help.
 
 Environment:
   PCT_DRY_RUN=1             Print the plan without changing anything.
+  PCT_SKIP_ENROL=1          Same as --skip-enrol (upgrade-in-place).
 EOF
 }
 
@@ -325,18 +359,44 @@ pct_orch_enrol() {
   # Feed the Authorization header through `curl --config -` on stdin so the
   # secret enrolment token never appears in this process's argv (and thus not in
   # `ps`). The token is base64url, so the config-file quoting is safe. The body
-  # is not secret, so it stays on argv. --fail makes a non-2xx an error; the
-  # endpoint returns 201 on success.
-  if ! printf 'header = "Authorization: Bearer %s"\n' "$token" |
+  # is not secret, so it stays on argv.
+  #
+  # We capture the body to a temp file and the HTTP status via --write-out
+  # (rather than --fail, which collapses every non-2xx into one exit code) so an
+  # "already enrolled" 409 can be told apart from a real failure: a re-run
+  # against an already-registered host is a tolerable upgrade condition, not an
+  # abort. The body file is created 0600 by mktemp and removed on every path.
+  local body_file http
+  body_file="$(mktemp)"
+  if ! http="$(printf 'header = "Authorization: Bearer %s"\n' "$token" |
     "$PCT_CURL" --config - \
-      --fail --silent --show-error --max-time 30 \
+      --silent --show-error --max-time 30 \
+      --output "$body_file" --write-out '%{http_code}' \
       --request POST \
       --header "Content-Type: application/json" \
       --data "$body" \
-      "$url"; then
-    pct_err "enrolment request to ${url} failed (the token may be expired or already used; mint a fresh one)"
+      "$url")"; then
+    rm -f "$body_file"
+    pct_err "enrolment request to ${url} failed (network error; check --server-url and connectivity)"
     return 1
   fi
+
+  case "$http" in
+  2??)
+    cat "$body_file"
+    rm -f "$body_file"
+    ;;
+  409)
+    rm -f "$body_file"
+    pct_warn "this host is already enrolled (the dashboard returned 409); keeping the existing enrolment and skipping re-enrol"
+    return "$PCT_ENROL_ALREADY_CODE"
+    ;;
+  *)
+    rm -f "$body_file"
+    pct_err "enrolment to ${url} returned HTTP ${http} (the token may be expired or already used; mint a fresh one)"
+    return 1
+    ;;
+  esac
 }
 
 # Persist the per-client credentials the enrolment produced. This is the hand-off
@@ -435,7 +495,13 @@ pct_install_client() {
   pct_orch_require_root
   pct_orch_require_tools
   pct_require_supported_client
-  pct_orch_check_reachable "$server_url"
+  # The reachability probe only matters when we are going to talk to the
+  # dashboard. Under --skip-enrol with no --server-url there is nothing to reach.
+  if [ -n "$server_url" ]; then
+    pct_orch_check_reachable "$server_url"
+  else
+    pct_log "no --server-url given; skipping the dashboard reachability check (--skip-enrol)"
+  fi
 
   # Resolve each supervised user's UID up front (fails fast on a missing user)
   # and build the flat (username uid) pair list the enrol body needs.
@@ -453,18 +519,38 @@ pct_install_client() {
   pct_step "Install + baseline-configure the upstream tools"
   pct_install_baseline_tools "${users[@]}"
 
-  # Step: register with the dashboard.
+  # Step: register with the dashboard (unless this is an upgrade-in-place).
   pct_step "Register this client with the dashboard"
-  local response client_id bearer ssh_pubkey
-  response="$(pct_orch_enrol "$server_url" "$enrol_token" "$hostname" "$ssh_user" "${pairs[@]}")"
-  client_id="$(printf '%s' "$response" | pct_orch_json_number clientId)"
-  bearer="$(printf '%s' "$response" | pct_orch_json_string bearerToken)"
-  ssh_pubkey="$(printf '%s' "$response" | pct_orch_json_string sshPublicKey)"
-  pct_ok "enrolled as client #${client_id:-?} (host '${hostname}', ssh user '${ssh_user}')"
-
-  # Step: authorize the dashboard SSH key + persist the client bearer token.
-  pct_orch_authorize_key "$ssh_pubkey"
-  pct_orch_persist_credentials "$server_url" "$client_id" "$bearer"
+  if pct_orch_skip_enrol; then
+    pct_warn "--skip-enrol: leaving the existing enrolment, per-client token, and authorized SSH key untouched (upgrade-in-place)"
+  else
+    # Declare first, THEN assign via command substitution: combining `local`
+    # with the capture would mask pct_orch_enrol's exit code (local always
+    # returns 0), and we need it to tell success from the tolerable "already
+    # enrolled" (409) signal. `|| status=$?` keeps `set -e` from aborting here.
+    local response client_id bearer ssh_pubkey status=0
+    response="$(pct_orch_enrol "$server_url" "$enrol_token" "$hostname" "$ssh_user" "${pairs[@]}")" || status=$?
+    if [ "$status" -eq 0 ]; then
+      client_id="$(printf '%s' "$response" | pct_orch_json_number clientId)"
+      bearer="$(printf '%s' "$response" | pct_orch_json_string bearerToken)"
+      ssh_pubkey="$(printf '%s' "$response" | pct_orch_json_string sshPublicKey)"
+      pct_ok "enrolled as client #${client_id:-?} (host '${hostname}', ssh user '${ssh_user}')"
+      # Step: authorize the dashboard SSH key + persist the client bearer token.
+      pct_orch_authorize_key "$ssh_pubkey"
+      pct_orch_persist_credentials "$server_url" "$client_id" "$bearer"
+    elif [ "$status" -eq "$PCT_ENROL_ALREADY_CODE" ]; then
+      # Already enrolled (409): the account, sudoers, authorized key, and
+      # baseline tools have still been reconciled above, so this is a successful
+      # upgrade — carry on to the self-test rather than aborting. (Re-run with
+      # --skip-enrol to silence the warning, or delete + re-enrol with a fresh
+      # token for a true re-registration.)
+      pct_warn "continuing without re-enrol; provision + baseline were still reconciled. Use --skip-enrol on an already-enrolled host, or delete the client and mint a fresh token to re-register."
+    else
+      # A real failure (bad/expired token, network) — pct_orch_enrol already
+      # explained why; propagate so the run aborts.
+      return 1
+    fi
+  fi
 
   # Step: self-test.
   PCT_SUPERVISED_LIST="${users[*]}" pct_orch_self_test
@@ -481,6 +567,7 @@ pct_orch_main() {
   local server_url="${PCT_SERVER_URL:-}"
   local enrol_token="${PCT_ENROLMENT_TOKEN:-}"
   local ssh_user="$PCT_SSH_USER"
+  local skip_enrol="${PCT_SKIP_ENROL:-}"
   local users=()
   if [ -n "${PCT_SUPERVISED_USERS:-}" ]; then
     # shellcheck disable=SC2206  # intentional word-split of a space list
@@ -537,6 +624,10 @@ pct_orch_main() {
       ssh_user="${1#*=}"
       shift
       ;;
+    --skip-enrol | --skip-enrolment | --skip-enrollment)
+      skip_enrol=1
+      shift
+      ;;
     -h | --help)
       pct_orch_usage
       return 0
@@ -549,8 +640,13 @@ pct_orch_main() {
     esac
   done
 
+  # Surface the skip-enrol decision (flag or env) to pct_install_client.
+  PCT_SKIP_ENROL="$skip_enrol"
+
   # A real run hard-requires the server URL, a one-time token, and at least one
-  # supervised user. A dry run is a side-effect-free PREVIEW: it fills clearly
+  # supervised user. --skip-enrol relaxes the first two (no dashboard is
+  # contacted) but still needs the supervised users, since provision + baseline
+  # are per-user. A dry run is a side-effect-free PREVIEW: it fills clearly
   # labelled placeholders for anything missing so it can always render the full
   # plan (this is also what the minimal CI smoke test exercises — no token, no
   # user, just PCT_SERVER_URL).
@@ -558,18 +654,20 @@ pct_orch_main() {
     if pct_is_dry_run; then
       server_url="https://dashboard.example"
       pct_warn "no --server-url given; using placeholder '${server_url}' for the dry-run preview"
+    elif pct_orch_skip_enrol; then
+      : # --skip-enrol contacts no dashboard, so a server URL is not required
     else
       pct_err "missing --server-url (or PCT_SERVER_URL)"
       pct_orch_usage
       return 2
     fi
   fi
-  if [ -z "$enrol_token" ]; then
+  if [ -z "$enrol_token" ] && ! pct_orch_skip_enrol; then
     if pct_is_dry_run; then
       enrol_token="DRY-RUN-PLACEHOLDER-TOKEN"
       pct_warn "no --enrolment-token given; using a placeholder for the dry-run preview"
     else
-      pct_err "missing --enrolment-token (or PCT_ENROLMENT_TOKEN)"
+      pct_err "missing --enrolment-token (or PCT_ENROLMENT_TOKEN); pass --skip-enrol to re-run an already-enrolled client without one"
       pct_orch_usage
       return 2
     fi

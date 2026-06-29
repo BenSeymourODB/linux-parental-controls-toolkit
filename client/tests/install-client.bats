@@ -310,10 +310,21 @@ plan_strict() {
 
 @test "the enrolment token is sent via stdin config, never on the curl argv" {
   local stub="${TMP}/curl-echo"
+  # Emulate the slice of curl pct_orch_enrol relies on: honour --output by
+  # writing a fake 2xx body there and print the status code for --write-out, so
+  # the captured stdout is just the code. ARGV/STDIN go to stderr so they don't
+  # pollute the captured status but are still visible in the merged test output.
   cat >"$stub" <<'EOS'
 #!/usr/bin/env bash
-echo "ARGV: $*"
-echo "STDIN: $(cat)"
+out="" prev=""
+for a in "$@"; do
+  [ "$prev" = "--output" ] && out="$a"
+  prev="$a"
+done
+echo "ARGV: $*" >&2
+echo "STDIN: $(cat)" >&2
+[ -n "$out" ] && printf '{"clientId":1,"bearerToken":"b","sshPublicKey":null,"supervisedUsers":[]}' >"$out"
+printf '201'
 EOS
   chmod +x "$stub"
   run env -u PCT_DRY_RUN bash -c '
@@ -329,6 +340,56 @@ EOS
   [[ "$argv_line" != *SECRETTOKEN* ]]
   # ... but must be delivered through the stdin config file.
   [[ "$stdin_line" == *"Authorization: Bearer SECRETTOKEN"* ]]
+}
+
+@test "an already-enrolled host (409) is tolerated, not a hard failure" {
+  local stub="${TMP}/curl-409"
+  # Emulate curl returning the dashboard's 409: write the (conflict) body to the
+  # --output path and print 409 for --write-out.
+  cat >"$stub" <<'EOS'
+#!/usr/bin/env bash
+out="" prev=""
+for a in "$@"; do
+  [ "$prev" = "--output" ] && out="$a"
+  prev="$a"
+done
+[ -n "$out" ] && printf '{"error":{"code":"conflict"}}' >"$out"
+printf '409'
+EOS
+  chmod +x "$stub"
+  run env -u PCT_DRY_RUN bash -c '
+    PCT_CURL="'"$stub"'"
+    source "'"$SCRIPT"'"
+    rc=0
+    pct_orch_enrol https://dash.lan TOK host pct-agent alice 1000 || rc=$?
+    echo "RC=${rc}"
+  '
+  # pct_orch_enrol signals the distinct already-enrolled code (PCT_ENROL_ALREADY_CODE=3),
+  # not a hard failure (1), so the orchestrator can carry on to the self-test.
+  [[ "$output" == *"already enrolled"* ]]
+  [[ "$output" == *"RC=3"* ]]
+}
+
+# --- upgrade-in-place (--skip-enrol) ---------------------------------------
+
+@test "with --skip-enrol, re-runs provision + baseline + self-test and skips enrol (no token needed)" {
+  # No --enrolment-token and no --server-url: --skip-enrol must require neither.
+  run env bash "$SCRIPT" --skip-enrol --supervised-user alice
+  [ "$status" -eq 0 ]
+  # The enrolment exchange and its dependents are skipped ...
+  [[ "$output" == *"--skip-enrol"* ]]
+  [[ "$output" != *"/api/clients/enrol"* ]]
+  [[ "$output" != *"authorize dashboard ssh key"* ]]
+  # ... but provision + baseline still run.
+  [[ "$output" == *"Provision the pct-agent service account"* ]]
+  [[ "$output" == *"Install + baseline-configure the upstream tools"* ]]
+}
+
+@test "PCT_SKIP_ENROL=1 is equivalent to --skip-enrol" {
+  PCT_SKIP_ENROL=1 run env bash "$SCRIPT" --supervised-user alice
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"/api/clients/enrol"* ]]
+  [[ "$output" == *"Install + baseline-configure the upstream tools"* ]]
 }
 
 # --- dry-run guarantee -----------------------------------------------------
