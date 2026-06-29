@@ -25,6 +25,20 @@ vi.mock("$lib/api/activities", () => ({
   deleteActivity: (id: number) => deleteActivity(id),
 }));
 
+// ActivitiesView now composes `ActivityGroupsView` as a second section (UI
+// consolidation). That child fetches activity groups on mount; stub its API to
+// a quiet empty state so it doesn't reach for a live backend or render a second
+// error alert that would clash with the assertions below.
+vi.mock("$lib/api/activity-groups", () => ({
+  listActivityGroups: () => Promise.resolve([]),
+  createActivityGroup: vi.fn(),
+  updateActivityGroup: vi.fn(),
+  deleteActivityGroup: vi.fn(),
+  listGroupActivities: vi.fn(),
+  addActivityToGroup: vi.fn(),
+  removeActivityFromGroup: vi.fn(),
+}));
+
 const { default: ActivitiesView } = await import("../../src/lib/views/ActivitiesView.svelte");
 
 function activity(overrides: Partial<ActivityResponse> = {}): ActivityResponse {

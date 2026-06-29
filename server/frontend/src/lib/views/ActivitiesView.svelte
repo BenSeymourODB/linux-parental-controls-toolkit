@@ -13,6 +13,13 @@
   The kind/match-type option lists are declared locally and typed against the
   inferred `ActivityKind`/`MatchType` so they stay in step with the source enums
   without importing server runtime values into the bundle.
+
+  UI consolidation: the Activity Groups editor used to be its own top-level nav
+  section. It is closely related (groups bundle the activities managed here), so
+  it now lives below the activities CRUD as a second section of this view. It is
+  still the self-contained `ActivityGroupsView` component — unchanged and
+  independently testable — just composed in here rather than reached via its own
+  nav entry.
 -->
 <script lang="ts">
   import { onMount } from "svelte";
@@ -24,6 +31,7 @@
     listActivities,
     updateActivity,
   } from "$lib/api/activities.js";
+  import ActivityGroupsView from "./ActivityGroupsView.svelte";
 
   const KIND_OPTIONS: ReadonlyArray<{ value: ActivityKind; label: string }> = [
     { value: "app", label: "App" },
@@ -246,10 +254,19 @@
   {/if}
 </section>
 
+<div class="subview">
+  <ActivityGroupsView />
+</div>
+
 <style>
   h1 {
     margin: 0;
     font-size: 1.3rem;
+  }
+  .subview {
+    margin-top: 2.5rem;
+    padding-top: 1.75rem;
+    border-top: 1px solid #e5e7eb;
   }
   .hint {
     margin: 0.25rem 0 1rem;

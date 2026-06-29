@@ -11,16 +11,18 @@
   and read ActivityWatch for the right OS account. `osUserRef` is the OS-neutral
   account reference (#230): a uid on Linux, a SID on Windows. The `PUT` is
   idempotent, so the same form both creates and updates a link.
+
+  The "Add time today" lever used to live at the bottom of this view; UI
+  consolidation moved it to the Dashboard (the `AddTimeToday` component), where
+  it is far easier to find.
 -->
 <script lang="ts">
   import { onMount } from "svelte";
   import { ApiError } from "$lib/api/client.js";
   import type { ClientResponse, LinkResponse, UserResponse } from "$lib/api/contract.js";
-  import type { TimeTodayResponse } from "$lib/api/contract.js";
   import { listUsers } from "$lib/api/users.js";
   import { listClients } from "$lib/api/clients.js";
   import { listUserLinks, upsertLink, deleteLink } from "$lib/api/links.js";
-  import { adjustTimeToday } from "$lib/api/time-today.js";
 
   let users = $state<UserResponse[]>([]);
   let clients = $state<ClientResponse[]>([]);
@@ -37,13 +39,6 @@
   let formOsUsername = $state("");
   let formOsUserRef = $state("");
   let submitting = $state(false);
-
-  // "Add time today" lever (#257): a same-day remaining-time nudge applied to
-  // every client this user is linked to. Not a Grant — see the caveat in the UI.
-  let adjusting = $state(false);
-  let adjustError = $state<string | null>(null);
-  let adjustResult = $state<TimeTodayResponse | null>(null);
-  let customMinutes = $state("");
 
   onMount(load);
 
@@ -81,9 +76,6 @@
 
   async function onSelectUser(): Promise<void> {
     resetForm();
-    adjustResult = null;
-    adjustError = null;
-    customMinutes = "";
     if (selectedUserId === null) {
       links = [];
       return;
@@ -160,41 +152,6 @@
     } catch (err) {
       error = messageOf(err);
     }
-  }
-
-  /**
-   * Apply a same-day time adjustment (in minutes) to every client this user is
-   * linked to. A positive value adds time, a negative value takes it back; the
-   * server records the `--settimeleft` command in the audit log. Online-only —
-   * the result lists each client's applied/unreachable/failed outcome.
-   */
-  async function addTimeToday(minutes: number): Promise<void> {
-    if (selectedUserId === null || minutes === 0 || !Number.isFinite(minutes)) {
-      return;
-    }
-    adjusting = true;
-    adjustError = null;
-    adjustResult = null;
-    try {
-      adjustResult = await adjustTimeToday(selectedUserId, {
-        deltaSeconds: Math.round(minutes * 60),
-      });
-    } catch (err) {
-      adjustError = messageOf(err);
-    } finally {
-      adjusting = false;
-    }
-  }
-
-  /** Apply the custom-minutes field, then clear it. */
-  async function addCustomMinutes(): Promise<void> {
-    const minutes = Number(customMinutes);
-    if (!Number.isFinite(minutes) || minutes === 0) {
-      adjustError = "Enter a non-zero number of minutes";
-      return;
-    }
-    await addTimeToday(minutes);
-    customMinutes = "";
   }
 
   /** Render any thrown value as a UI-safe message. */
@@ -302,66 +259,6 @@
               {/each}
             </tbody>
           </table>
-
-          <section class="add-time" aria-label="Add time today">
-            <h2>Add time today</h2>
-            <p class="caveat">
-              A one-off adjustment to this user's <strong>remaining time
-              today</strong> on every linked client — it does not change their
-              standing daily limit and is forgotten at the next daily rollover.
-              This is <strong>not</strong> a logged reward grant (that's coming
-              later); the change takes effect on the client when it's online.
-            </p>
-            <div class="add-time-controls">
-              <button
-                class="grant"
-                disabled={adjusting}
-                onclick={() => addTimeToday(15)}
-              >
-                +15 min
-              </button>
-              <button
-                class="grant"
-                disabled={adjusting}
-                onclick={() => addTimeToday(30)}
-              >
-                +30 min
-              </button>
-              <span class="custom">
-                <input
-                  type="number"
-                  inputmode="numeric"
-                  step="1"
-                  placeholder="minutes (± )"
-                  bind:value={customMinutes}
-                  disabled={adjusting}
-                  aria-label="Custom minutes (negative to remove time)"
-                />
-                <button class="ghost" disabled={adjusting} onclick={addCustomMinutes}>
-                  {adjusting ? "Applying…" : "Apply"}
-                </button>
-              </span>
-            </div>
-
-            {#if adjustError}
-              <p class="error" role="alert">{adjustError}</p>
-            {/if}
-
-            {#if adjustResult}
-              <ul class="results" aria-label="Adjustment results">
-                {#each adjustResult.results as r (r.clientId)}
-                  <li class={`result result-${r.status}`}>
-                    <span class="result-client">{clientName(r.clientId)}</span>
-                    <span class="result-status">{r.status}</span>
-                    {#if r.error}<span class="result-error">{r.error}</span>{/if}
-                  </li>
-                {/each}
-                {#if adjustResult.results.length === 0}
-                  <li class="muted">No linked clients were affected.</li>
-                {/if}
-              </ul>
-            {/if}
-          </section>
         {/if}
       {/if}
     {/if}
@@ -469,73 +366,6 @@
     background: #dc2626;
   }
   .muted {
-    color: #6b7280;
-  }
-  .add-time {
-    margin-top: 1.5rem;
-    padding: 1rem;
-    border: 1px solid #e5e7eb;
-    border-radius: 0.5rem;
-    background: #f9fafb;
-  }
-  .add-time h2 {
-    margin: 0 0 0.4rem;
-    font-size: 1rem;
-  }
-  .caveat {
-    margin: 0 0 0.75rem;
-    color: #6b7280;
-    font-size: 0.85rem;
-    max-width: 40rem;
-  }
-  .add-time-controls {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    flex-wrap: wrap;
-  }
-  .custom {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.4rem;
-  }
-  .custom input {
-    width: 9rem;
-    padding: 0.4rem 0.5rem;
-    border: 1px solid #d1d5db;
-    border-radius: 0.4rem;
-  }
-  button.grant {
-    background: #047857;
-  }
-  .results {
-    list-style: none;
-    margin: 0.75rem 0 0;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0.3rem;
-  }
-  .result {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    font-size: 0.85rem;
-  }
-  .result-status {
-    font-weight: 600;
-    text-transform: capitalize;
-  }
-  .result-applied .result-status {
-    color: #047857;
-  }
-  .result-unreachable .result-status {
-    color: #b45309;
-  }
-  .result-failed .result-status {
-    color: #b91c1c;
-  }
-  .result-error {
     color: #6b7280;
   }
   .error {

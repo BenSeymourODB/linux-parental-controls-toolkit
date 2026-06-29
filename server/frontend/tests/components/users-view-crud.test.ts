@@ -24,6 +24,20 @@ vi.mock("$lib/api/users", () => ({
   deleteUser: (id: number) => deleteUser(id),
 }));
 
+// UsersView now composes `UserGroupsView` as a second section (UI
+// consolidation). That child fetches user groups on mount; stub its API to a
+// quiet empty state so it doesn't reach for a live backend or render a second
+// error alert that would clash with the assertions below.
+vi.mock("$lib/api/user-groups", () => ({
+  listUserGroups: () => Promise.resolve([]),
+  createUserGroup: vi.fn(),
+  updateUserGroup: vi.fn(),
+  deleteUserGroup: vi.fn(),
+  listGroupMembers: vi.fn(),
+  addUserToGroup: vi.fn(),
+  removeUserFromGroup: vi.fn(),
+}));
+
 const { default: UsersView } = await import("../../src/lib/views/UsersView.svelte");
 
 function user(overrides: Partial<UserResponse> = {}): UserResponse {
@@ -54,7 +68,9 @@ describe("UsersView CRUD", () => {
     render(UsersView);
 
     expect(await screen.findByText("Alice")).toBeInTheDocument();
-    expect(listUsers).toHaveBeenCalledOnce();
+    // Called at least once by the view itself; the embedded UserGroupsView also
+    // loads the user list for its membership picker, so don't assert "once".
+    expect(listUsers).toHaveBeenCalled();
   });
 
   it("shows the empty state when there are no users", async () => {
@@ -132,8 +148,11 @@ describe("UsersView CRUD", () => {
 
     render(UsersView);
 
-    const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("The server exploded.");
+    // The composed UserGroupsView also loads the user list (for its membership
+    // picker) through the same wrapper, so a list-load failure surfaces in both
+    // sections. Assert the Users section's own alert (the first in the DOM).
+    const alerts = await screen.findAllByRole("alert");
+    expect(alerts[0]).toHaveTextContent("The server exploded.");
   });
 
   it("keeps the create error inline without losing the existing rows", async () => {
