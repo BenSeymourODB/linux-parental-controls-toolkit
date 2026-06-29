@@ -95,7 +95,8 @@ Everything else **reuses existing machinery** rather than reinventing it.
 | Outbound NDWC client in the dashboard | R1 | REST client + per-integration outbound endpoint config; reverse of the inbound path. |
 | Reward-mapping model + admin UI | R2 | Bind an NDWC reward → grant `scope`/`target`/`seconds`; surface point cost. |
 | Redemption engine (server) | R3 | Affordability check → idempotent debit → `Grant` → recompute/push → `grant.applied`. New user/agent-facing `/api` routes. |
-| Interactive notification framework | R4 | Action-button frame (capability-gated), agent button rendering, client→server redeem action over the bridge. |
+| **Generic** interactive-notification framework | **R4a (Phase 8b)** | Agent renders toast action buttons; a generic, capability-gated client→server action frame. *Infrastructure, not redemption-specific — see "Should the buttons move earlier?" below.* |
+| Redemption **binding** of the framework | R4b | The `redeem.offer`/`redeem.action` semantics layered on R4a. |
 | Running-activity → reward resolution + affordability UX | R5 | Agent surfaces the *right* offer for the active budget; redeem-vs-"earn more" gating. |
 | Redemption controls, audit, edge cases | R6 | Per-user self-redeem policy + caps, redemption ledger view, offline/abuse/failure handling. |
 
@@ -263,23 +264,37 @@ The transaction core. Headless — drivable from `/api` before any client UI.
 - **Depends on:** R1, R2, #113/#117 (grant write + recompute), #108 (unlock
   for the overall-budget case).
 
-### R4 — Interactive notification framework
+### R4a — Generic interactive-notification framework *(proposed for Phase 8b)*
 
-Make the button real and make the click reach R3.
+Make toast buttons that call home a real, reusable capability — independent
+of redemption. See "Should the buttons move earlier?" below for why this
+belongs in Phase 8b rather than here.
 
-- New capability-gated frame types under ADR 0007: `redeem.offer` (server→
-  client, carries the quote) and `redeem.action` (client→server, carries the
-  click + `source_ref`). Bump `eventProtocol`; advertise the capability in
-  the bridge `hello` (#303/#288); model the client→server direction on the
-  pause-on-lock frame (#316).
-- `pct-client-agent`: render action buttons via `gdbus`
+- `pct-client-agent`: render toast action buttons via `gdbus`
   `org.freedesktop.Notifications` actions (it already uses `gdbus` for the
   in-place countdown), with a `notify-send --action` fallback; wire the
-  button's invoked-action signal to send `redeem.action` over the AF_UNIX
-  socket to the bridge.
-- Bridge: forward `redeem.action` to the dashboard and route the resulting
-  `grant.applied` back to the agent (existing path).
-- **Depends on:** R3, #101/#103, #288/#303, ADR 0007.
+  button's invoked-action signal to a handler.
+- A **generic** capability-gated client→server action frame (`notif.action`
+  with a typed payload) under ADR 0007: bump `eventProtocol`, advertise the
+  capability in the bridge `hello` (#303/#288), model the client→server
+  direction on the pause-on-lock frame (#316). The bridge forwards the action
+  to the dashboard; an old agent simply renders no buttons.
+- First consumer is the *local* "Save & quit now" force-close button the
+  Phase 8b mockup already shows; the frame lets later features (redemption,
+  "ask a parent for more time") add new action types without new transport.
+- **Depends on:** #101/#103, #288/#303, ADR 0007. **Does not depend on the
+  NDWC work** — that is the point of pulling it forward.
+
+### R4b — Redemption binding of the framework
+
+Layer the redeem semantics on R4a's generic frame.
+
+- Define the `redeem.offer` (server→client quote) and `redeem.action`
+  (client→client→server redeem + `source_ref`) action types on top of R4a.
+- Agent renders the redeem button from an offer and routes the click; bridge
+  forwards it to R3 and routes the resulting `grant.applied` back (existing
+  path).
+- **Depends on:** R3, R4a.
 
 ### R5 — Running-activity resolution + affordability UX
 
@@ -321,6 +336,41 @@ Make it safe for a non-technical household (Alpha-2 bar).
 
 ---
 
+## Should the interactive buttons move earlier?
+
+**Yes — the generic half (R4a), into Phase 8b.** The design has *already*
+reached for clickable notification actions without a backing plan:
+[`design/client/notifications.html`](../design/client/notifications.html)
+defines a `.toast .actions` row, a `.tbtn` action button, **and a primary
+`.tbtn.go` variant that is styled but never used** — and the one rendered
+button, *"Save & quit now,"* is a Phase 8b force-close affordance. The "earn
+more / want more time?" framing recurs across the `My Time` (#61) and
+`child-status` surfaces. The UI keeps gesturing at "a button on the toast that
+does something," but nothing in the build plan delivers the ability to *render
+an action button and route its click*.
+
+That capability is **infrastructure, not redemption-specific**, and three
+things argue for building it in Phase 8b alongside the agent/bridge:
+
+1. **The substrate is being built there anyway.** The client→server frame
+   direction already lands in Phase 8b via the pause-on-lock frame (#316), and
+   the capability-gating + handshake via #288/#303. Action-button rendering is
+   the same `gdbus` notification surface #103 already uses for the countdown.
+2. **It's cheap now, awkward later.** ADR 0007's N-1 window exists precisely so
+   new frame types reach already-deployed clients gracefully — but the agent's
+   *ability to render actions at all* and a *generic action envelope* are far
+   cheaper to establish while the agent is first written than to retrofit. One
+   capability flag in the `hello` now buys every future button.
+3. **It has non-redemption consumers.** The local "Save & quit now" button
+   (Phase 8b) and a Phase 8c "ask a parent for more time" button both want it.
+   Redemption is just the first *remote* action type.
+
+So **R4a (generic framework) is proposed for Phase 8b**, filed as a `phase-8b`
+issue and cross-linked from #103/#316. **R4b (the redeem-specific binding)
+stays here**, dependent on R4a and the R3 engine. The redemption *feature*
+still lands in its natural late slot; only the reusable *capability* moves
+forward.
+
 ## What we need from NDWC (their repo)
 
 Tracked in next-digital-wall-calendar; listed here so the contract is
@@ -352,6 +402,10 @@ after the Phase 10 grant core and the Phase 8b agent are in place:
   flow), well after the Alpha-2 gate (which already requires Phase 8b).
 - R0 (contract + ADR) can begin **now**, in parallel with Phase 10, because
   it's coordination, not code — exactly like #118 started before #113.
+- **R4a is pulled forward to Phase 8b** (see "Should the buttons move
+  earlier?"); it is the only piece of this roadmap that does not depend on the
+  NDWC work, and it unblocks the local "Save & quit now" button and a Phase 8c
+  "ask a parent" button regardless of whether redemption ever ships.
 
 ## License & tamper-resistance notes
 
