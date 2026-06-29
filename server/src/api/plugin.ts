@@ -11,6 +11,7 @@ import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import { registerAuth } from "../auth/index.js";
 import type { Settings } from "../config.js";
 import { registerEventStream, type EventHub, type EventStreamOptions } from "../events/index.js";
+import type { ClientProber } from "../transport/health/index.js";
 import type { TimeTodayAdjuster } from "../transport/policy-push/index.js";
 import type { PolicyPushStub } from "../transport/stub.js";
 import { registerAppAuthRoutes } from "./app/index.js";
@@ -54,6 +55,13 @@ export interface ApiPluginOptions {
    * `503 transport_unavailable`.
    */
   timeToday?: TimeTodayAdjuster;
+  /**
+   * The live SSH client health prober (#81), present only when the live
+   * transport is wired (SSH key exists). Injected into the
+   * `/api/clients/health` routes; absent, those routes report
+   * reachability/components as `unknown` (queue + enrolment state stays real).
+   */
+  prober?: ClientProber;
   /**
    * Tuning/test seam for the event-stream handshake (heartbeat interval, hello
    * timeout, negotiated server protocol). Omitted in production, where the
@@ -107,11 +115,13 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (scope, opt
   // the same registry. Async because it registers @fastify/websocket.
   await registerEventStream(scope, opts.eventHub, opts.eventStream ?? {});
   // Client health/status (#81): the read-only Clients-page reads. The live SSH
-  // prober is injected once the SSH-key bootstrap (#39) plumbs credentials;
-  // until then the routes degrade to `unknown` reachability/components while
-  // still surfacing real enrolment + offline-queue state. The fan-out bounds
-  // (#198) are passed now so they're ready when the prober lands.
+  // prober is injected from buildApp when the SSH-key bootstrap (#39) has run
+  // and the policy-push transport is live; without it (dev/CI/tests, or a
+  // server before first-run keygen) the routes degrade to `unknown`
+  // reachability/components while still surfacing real enrolment +
+  // offline-queue state. The fan-out bounds (#198) bound the live probe walk.
   registerClientHealthRoutes(scope, {
+    ...(opts.prober !== undefined ? { prober: opts.prober } : {}),
     probeConcurrency: opts.settings.clientHealth.probeConcurrency,
     probeDeadlineMs: opts.settings.clientHealth.probeDeadlineMs,
   });
@@ -138,6 +148,7 @@ export function registerApi(
   eventHub: EventHub,
   policyPush?: PolicyPushStub,
   timeToday?: TimeTodayAdjuster,
+  prober?: ClientProber,
   eventStream?: EventStreamOptions,
 ): void {
   app.register(apiPlugin, {
@@ -148,6 +159,7 @@ export function registerApi(
     // `undefined` is not assignable to the optional `policyPush?` field.
     ...(policyPush !== undefined ? { policyPush } : {}),
     ...(timeToday !== undefined ? { timeToday } : {}),
+    ...(prober !== undefined ? { prober } : {}),
     ...(eventStream !== undefined ? { eventStream } : {}),
   });
 }

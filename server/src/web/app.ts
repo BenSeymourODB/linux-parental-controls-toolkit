@@ -163,9 +163,11 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   // Outbound policy-push transport (#201): the live `timekpra`-over-SSH
   // dispatcher when the SSH key exists (#39), else the logging stub. It also
   // owns the offline-queue drainer + pooled SSH connections, torn down on close
-  // — before the db it reads from (when buildApp owns that db). A test may
-  // inject one (e.g. with a fake `adjustTimeToday`); only the handle buildApp
-  // creates is disposed here, mirroring the `db` seam.
+  // — before the db it reads from (when buildApp owns that db). When live it
+  // also exposes the client health prober (#81), built over that same pooled
+  // SSH transport and injected into the /api/clients/health routes below. A
+  // test may inject one (e.g. with a fake `adjustTimeToday`); only the handle
+  // buildApp creates is disposed here, mirroring the `db` seam.
   const policyPush =
     options.policyPush ?? createPolicyPushTransport({ settings, db, log: app.log });
   const ownsPolicyPush = options.policyPush === undefined;
@@ -266,6 +268,7 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     eventHub,
     policyPush.dispatcher,
     policyPush.adjustTimeToday,
+    policyPush.prober,
     options.eventStream,
   );
 
