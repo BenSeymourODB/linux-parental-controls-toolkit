@@ -62,9 +62,9 @@ against the issue tracker through #327):
    built — as a read/write client, not just a webhook.
 2. **The notification channel must carry a user action back to the server.**
    `client-notifications.md` and the `pct-client-agent` (#103) render
-   notifications **one-way**. The agent has local buttons (*"Save & quit
-   now"*) but none that call home. We need an interactive button whose handler
-   reaches the dashboard.
+   notifications **one-way**. The agent has a local force-close button on the
+   grace toast but none that call home. We need an interactive button whose
+   handler reaches the dashboard.
 
 Everything else **reuses existing machinery** rather than reinventing it.
 
@@ -290,9 +290,11 @@ belongs in Phase 8b rather than here.
   capability in the bridge `hello` (#303/#288), model the client→server
   direction on the pause-on-lock frame (#316). The bridge forwards the action
   to the dashboard; an old agent simply renders no buttons.
-- First consumer is the *local* "Save & quit now" force-close button the
-  Phase 8b mockup already shows; the frame lets later features (redemption,
-  "ask a parent for more time") add new action types without new transport.
+- First consumer is the *local* force-close button on the grace toast —
+  honestly labelled "Close now" / "Quit now" (`SIGTERM`→`SIGKILL`, no server
+  round-trip); the frame lets later features (redemption, "ask a parent for
+  more time") add new action types without new transport. (The mockup's
+  "Save & quit now" label overstates feasibility — see the note below.)
 - **Depends on:** #101/#103, #288/#303, ADR 0007. **Does not depend on the
   NDWC work** — that is the point of pulling it forward.
 
@@ -354,11 +356,22 @@ reached for clickable notification actions without a backing plan:
 [`design/client/notifications.html`](../design/client/notifications.html)
 defines a `.toast .actions` row, a `.tbtn` action button, **and a primary
 `.tbtn.go` variant that is styled but never used** — and the one rendered
-button, *"Save & quit now,"* is a Phase 8b force-close affordance. The "earn
+button is a Phase 8b force-close affordance (mislabelled *"Save & quit now"* —
+see the feasibility caveat below). The "earn
 more / want more time?" framing recurs across the `My Time` (#61) and
 `child-status` surfaces. The UI keeps gesturing at "a button on the toast that
 does something," but nothing in the build plan delivers the ability to *render
 an action button and route its click*.
+
+> **Feasibility caveat on that button.** The mockup labels the force-close
+> button *"Save & quit now,"* but the agent **cannot** make an arbitrary
+> application save its work — it can only force-close the process
+> (`SIGTERM`→`SIGKILL`, per [`client-notifications.md`](client-notifications.md)).
+> Treat "Save & quit" as an *unfeasible example*: the honest local action is
+> "Close now," with the user saving manually during the grace countdown. What
+> endures — and what R4a builds — is the general capability of
+> *context-sensitive actions invokable from a notification*, not the
+> "save the app for you" framing. (Recorded as a note on #103.)
 
 That capability is **infrastructure, not redemption-specific**, and three
 things argue for building it in Phase 8b alongside the agent/bridge:
@@ -372,8 +385,9 @@ things argue for building it in Phase 8b alongside the agent/bridge:
    *ability to render actions at all* and a *generic action envelope* are far
    cheaper to establish while the agent is first written than to retrofit. One
    capability flag in the `hello` now buys every future button.
-3. **It has non-redemption consumers.** The local "Save & quit now" button
-   (Phase 8b) and a Phase 8c "ask a parent for more time" button both want it.
+3. **It has non-redemption consumers.** The local "Close now" force-close
+   button (Phase 8b) and a Phase 8c "ask a parent for more time" button both
+   want it.
    Redemption is just the first *remote* action type.
 
 So **R4a (generic framework) is proposed for Phase 8b**, filed as a `phase-8b`
@@ -415,8 +429,8 @@ after the Phase 10 grant core and the Phase 8b agent are in place:
   it's coordination, not code — exactly like #118 started before #113.
 - **R4a is pulled forward to Phase 8b** (see "Should the buttons move
   earlier?"); it is the only piece of this roadmap that does not depend on the
-  NDWC work, and it unblocks the local "Save & quit now" button and a Phase 8c
-  "ask a parent" button regardless of whether redemption ever ships.
+  NDWC work, and it unblocks the local "Close now" force-close button and a
+  Phase 8c "ask a parent" button regardless of whether redemption ever ships.
 
 ## License & tamper-resistance notes
 
