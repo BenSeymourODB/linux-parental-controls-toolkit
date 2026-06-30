@@ -153,8 +153,11 @@ PCT_SYSTEMCTL="${PCT_SYSTEMCTL:-systemctl}"
 # until a manual restart — the upgrade-in-place gap this closes (#347).
 #
 # `action` is a systemctl verb; use the `try-*` forms (try-restart,
-# try-reload-or-restart) so an inactive unit is a clean no-op rather than an
-# error under the caller's `set -e`. Dry-run prints the conditional intent.
+# try-reload-or-restart) so an *inactive* unit is a clean no-op rather than an
+# error under the caller's `set -e`. A genuine failure of an active unit to come
+# back up is NOT swallowed — it returns non-zero and aborts the run, which is
+# the intended behaviour (a daemon that won't restart should surface, not pass
+# silently). Dry-run prints the conditional intent.
 pct_apply_change() {
   local file="$1" before="$2" unit="$3" action="$4"
   if pct_is_dry_run; then
@@ -377,15 +380,18 @@ pct_baseline_install_activitywatch() {
 
 pct_baseline_configure_timekpr() {
   pct_step "Configure Timekpr-nExT (baseline: daemon + generous Alpha-1 warnings)"
-  # Snapshot the config before editing so we only restart the daemon if the
-  # edit actually changes it (a no-op re-run must not bounce it).
-  local conf_before
-  conf_before="$(pct_file_checksum "$PCT_TIMEKPR_CONF")"
-
   # Initial policy is intentionally empty — the dashboard pushes limits via
   # `timekpra` over SSH after enrolment. We only ensure the daemon is up and
   # the CLI the server drives is on PATH.
   pct_run "$PCT_SYSTEMCTL" enable --now timekpr.service
+
+  # Snapshot the config AFTER `enable --now`, not before: Timekpr's daemon may
+  # normalise/rewrite timekpr.conf when it starts, and we don't want that
+  # start-time rewrite to read as "our edit changed it" and trigger a spurious
+  # restart. Snapshotting here means only the pct_set_conf_key edits below are
+  # compared, so we restart iff our keys actually changed.
+  local conf_before
+  conf_before="$(pct_file_checksum "$PCT_TIMEKPR_CONF")"
 
   # Give supervised users plenty of advance warning before a session cutoff.
   # Alpha-1 has no pct-client-agent cadence/grace UX (Phase 8b), so this is the
@@ -596,11 +602,16 @@ EOF
 
   pct_run "$PCT_SYSTEMCTL" enable --now e2guardian.service
 
-  # If the filter group changed (e.g. an upgrade re-run that adjusts the
-  # baseline), reload e2guardian so it re-reads the rules. `try-reload-or-restart`
-  # reloads in place when the unit is active and supports it, restarts if it
-  # doesn't, and is a clean no-op if the unit is inactive — so it never drops the
-  # proxy needlessly nor errors under `set -e`.
+  # Apply baseline filter-rule changes on a re-run. We key the change-detection
+  # on e2guardianf1.conf as the deliberate proxy for "the baseline filter rules
+  # changed": /etc/default/e2guardian is read only at service start (a reload
+  # wouldn't pick it up, and a first install flips f1.conf absent->present so a
+  # restart happens anyway), and the pct.d/*.filtergroup skeletons are inert
+  # placeholders for Phase 6 Ansible, not read by this baseline. `try-reload-or-
+  # restart` reloads in place when the unit supports it — but the stock
+  # e2guardian unit ships no ExecReload (upstream e2guardian#182), so in practice
+  # this is a restart; either way the new rules are applied. It is a clean no-op
+  # when the unit is inactive.
   pct_apply_change "${E2G_DIR}/e2guardianf1.conf" "$f1_before" e2guardian.service \
     try-reload-or-restart
 }

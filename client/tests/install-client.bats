@@ -392,6 +392,49 @@ EOS
   [[ "$output" == *"Install + baseline-configure the upstream tools"* ]]
 }
 
+# The two dry-run tests above can't pin the validation relaxation: under dry-run
+# pct_orch_main fills placeholders for a missing token/server-url *before* the
+# --skip-enrol branch is reached, so a regression that re-imposed the token
+# requirement for a real --skip-enrol run would still pass them. These exercise
+# the REAL-run validation path (env -u PCT_DRY_RUN) and stub pct_install_client
+# so the assertion is "validation passed" without doing privileged work.
+@test "--skip-enrol relaxes the token + server-url requirement on a real run" {
+  run env -u PCT_DRY_RUN bash -c '
+    source "'"$SCRIPT"'"
+    pct_install_client() { echo "VALIDATION_PASSED"; }
+    pct_orch_main --skip-enrol --supervised-user alice
+  '
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"VALIDATION_PASSED"* ]]
+  [[ "$output" != *"missing --enrolment-token"* ]]
+  [[ "$output" != *"missing --server-url"* ]]
+}
+
+@test "PCT_SKIP_ENROL=1 relaxes the same requirements on a real run" {
+  run env -u PCT_DRY_RUN PCT_SKIP_ENROL=1 bash -c '
+    source "'"$SCRIPT"'"
+    pct_install_client() { echo "VALIDATION_PASSED"; }
+    pct_orch_main --supervised-user alice
+  '
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"VALIDATION_PASSED"* ]]
+  [[ "$output" != *"missing --enrolment-token"* ]]
+}
+
+@test "without --skip-enrol a real run STILL requires the token (guard is real)" {
+  # The negative control for the relaxation: same real-run path, no skip-enrol,
+  # must abort on the missing token (proves the tests above pass because of the
+  # relaxation, not because validation is toothless on this path).
+  run env -u PCT_DRY_RUN bash -c '
+    source "'"$SCRIPT"'"
+    pct_install_client() { echo "VALIDATION_PASSED"; }
+    pct_orch_main --server-url https://dash.lan --supervised-user alice
+  '
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"missing --enrolment-token"* ]]
+  [[ "$output" != *"VALIDATION_PASSED"* ]]
+}
+
 # --- dry-run guarantee -----------------------------------------------------
 
 @test "a dry run reports that nothing was changed" {
