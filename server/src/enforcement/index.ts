@@ -44,3 +44,18 @@ export {
   type ForceCloseEventHub,
   type ForceClosePkillTransport,
 } from "./force-close-deps.js";
+
+export {
+  startEnforcementSweep,
+  loadSupervisedUsers,
+  DEFAULT_SWEEP_PATTERN,
+  DEFAULT_COOLDOWN_SECONDS,
+  SWEEP_LOG_COMPONENT,
+  type SupervisedUser,
+  type SupervisedUserLoader,
+  type EnforcementTrigger,
+  type EvaluateEnforcement,
+  type EnforcementSweepOptions,
+  type EnforcementSweepResult,
+  type EnforcementSweepHandle,
+} from "./sweep.js";

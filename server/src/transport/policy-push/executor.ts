@@ -1,42 +1,49 @@
 /**
- * The live policy-push {@link ActionExecutor} (#201, Phase 4).
+ * The live policy-push {@link ActionExecutor} (#201, Phase 4) — now the
+ * **platform-agnostic dispatcher** in front of the per-platform runners (#232).
  *
  * This is the concrete executor the offline queue (#84) was built against: given
- * one `policy.push` action — the {@link import("../stub.js").PolicyPushCommand}
+ * one `policy.push` action — the {@link import("./platform-runner.js").PolicyEnforcementContext}
  * a CRUD mutation computed, adapted by {@link queuedActionFromPolicyPush} — it
- * recomputes the affected user's effective overall policy for the target client
- * and pushes it over the SSH + `timekpra` transport. `pushOrEnqueue` (the live
- * call site) and `drainClient` (the replay loop) both drive this same executor,
- * so an online push and an offline replay run identical code.
+ * loads the affected `(client, user)` rows, runs the platform-agnostic no-op
+ * branches, then selects the {@link import("./platform-runner.js").PlatformPolicyRunner}
+ * for the client's declared `platform` and delegates the actual enforcement to
+ * it. `pushOrEnqueue` (the live call site) and `drainClient` (the replay loop)
+ * both drive this same executor, so an online push and an offline replay run
+ * identical code.
  *
- * The `timekpra` client is supplied by an injected {@link PolicyPushClientFactory}
- * so this module is unit-testable without SSH and stays decoupled from the
- * concrete transport/credentials/audit wiring (assembled in `./bootstrap.ts`):
- * production builds a real {@link import("../timekpr/client.js").TimekprClient}
- * over the audited SSH facade; a test passes a recording fake.
+ * The platform seam (#232): rather than baking in "every client is Linux", the
+ * runner is chosen by `client.platform` (`Client.platform`, #229) from the
+ * injected {@link PlatformRunnerRegistry}. The Linux runner (`./linux-runner.ts`,
+ * `timekpra`-over-SSH) is the only registration today; a future
+ * `WindowsAgentRunner` is additive. Selection is exact-match — a client whose
+ * platform has no registered runner is a **warn-and-no-op** (a `windows` client
+ * today is known-not-yet-supported, not a command failure to dead-letter), not
+ * silently coerced onto the Linux path. The runner owns *both* the normal push
+ * (`enforce`) and the unlink unmanage push (`unmanage`, #253).
  *
  * **No-op branches** (resolve to nothing to push, never an error):
- * - a **client-scoped** change (`userId === null`): `timekpra` is per-user;
+ * - a **client-scoped** change (`userId === null`): per-user enforcement only;
  * - a **missing client** (deleted before replay);
+ * - a **client on an unsupported platform** (no registered runner);
  * - a **missing `(user, client)` link** that is *not* an explicit unlink — e.g.
  *   a user-scoped edit for a user since unlinked from this client: there is
  *   nothing left to enforce here.
  *
  * **Unmanage branch** (#253): a `link.deleted` action whose `detail` carries the
  * `os_username` the route captured before the link cascaded away. The link row
- * is gone, but the dashboard still owes the client one push — it pushes the
- * fully-{@link unrestrictedPolicyPush unrestricted} config so a now-unlinked
- * account isn't left enforced by whatever limits/allowed-hours were last pushed.
+ * is gone, but the dashboard still owes the client one push — the runner pushes
+ * the fully-unrestricted config (`unmanage`) so a now-unlinked account isn't left
+ * enforced by whatever limits/allowed-hours were last pushed.
  *
- * Errors propagate the SSH taxonomy unchanged so the queue classifies them: an
- * `SshUnreachableError`/timeout (retriable) keeps the action queued for replay;
- * an `SshCommandError`/`TimekprArgumentError` (non-retriable) is surfaced to the
- * caller (online) or dead-lettered (replay). Auditing is automatic — the
- * injected client runs over the {@link import("../audit/transport.js").AuditingTransport}.
+ * Errors from the selected runner propagate unchanged so the queue classifies
+ * them: an `SshUnreachableError`/timeout (retriable) keeps the action queued for
+ * replay; an `SshCommandError`/`TimekprArgumentError` (non-retriable) is
+ * surfaced to the caller (online) or dead-lettered (replay).
  *
  * License boundary: none touched — orchestration over Drizzle + the injected
- * `timekpra` client, which execs over the existing SSH subprocess facade. No GPL
- * code is linked in-process (`CLAUDE.md` → "License boundaries").
+ * platform runner(s); the Linux runner execs over the existing SSH subprocess
+ * facade. No GPL code is linked in-process (`CLAUDE.md` → "License boundaries").
  */
 import { z } from "zod";
 
@@ -47,12 +54,10 @@ import {
   listUserBudgets,
   listUserLinks,
   listUserSchedules,
-  type ClientRow,
 } from "../../policy/repository.js";
-import type { WeeklyAllowedWindows } from "../timekpr/allowed-hours.js";
 import type { ActionExecutor, QueuedAction } from "../queue/types.js";
 import { policyPushPayloadSchema } from "./payload.js";
-import { resolvePolicyPush, unrestrictedPolicyPush, type ResolvedPolicyPush } from "./resolve.js";
+import type { PlatformRunnerRegistry } from "./platform-runner.js";
 
 /** The push reason that marks an explicit user↔client unlink (#253). */
 const LINK_DELETED_REASON = "link.deleted";
@@ -65,40 +70,15 @@ const LINK_DELETED_REASON = "link.deleted";
  */
 const unlinkDetailSchema = z.object({ osUsername: z.string().min(1) });
 
-/**
- * The slice of {@link import("../timekpr/client.js").TimekprClient} the executor
- * drives. Declared structurally so the real client satisfies it and a test can
- * pass a recording fake without an `as` cast — the same pattern as
- * `TimekprTransport`. The setters return the transport's `ExecResult`(s); typed
- * as `unknown` here because the executor only awaits them for ordering/failure.
- */
-export interface PolicyPushClient {
-  setTimeLimits(perDaySeconds: readonly number[]): Promise<unknown>;
-  setTimeLimitWeek(seconds: number): Promise<unknown>;
-  setTimeLimitMonth(seconds: number): Promise<unknown>;
-  setWeeklyAllowedHours(weekly: WeeklyAllowedWindows): Promise<unknown>;
-}
+// The `timekpra` client surface + factory now live with the Linux runner; the
+// re-exports keep `bootstrap.ts` and existing importers' paths unchanged.
+export type {
+  PolicyPushClient,
+  PolicyPushClientFactory,
+  PolicyPushClientTarget,
+} from "./linux-runner.js";
 
-/** Attribution + addressing for the {@link PolicyPushClientFactory}. */
-export interface PolicyPushClientTarget {
-  /** The enrolled client the commands are dispatched to. */
-  readonly client: ClientRow;
-  /** The supervised Linux account `timekpra` acts on (from the user↔client link). */
-  readonly username: string;
-  /** The affected supervised user's id (audit attribution). */
-  readonly userId: number;
-  /** The mutation reason that triggered the push (audit attribution). */
-  readonly reason: string;
-}
-
-/**
- * Builds the {@link PolicyPushClient} for one (client, user) push. Production
- * returns a `TimekprClient` over the audited SSH transport bound to the client's
- * {@link import("../ssh/facade.js").SshTarget}; tests return a recording fake.
- */
-export type PolicyPushClientFactory = (target: PolicyPushClientTarget) => PolicyPushClient;
-
-/** The slice of a logger the executor uses (for the full-lockout skip notice). */
+/** The slice of a logger the executor uses (for the unsupported-platform skip). */
 export interface PolicyPushExecutorLogger {
   warn(obj: object, msg: string): void;
 }
@@ -107,11 +87,11 @@ export interface PolicyPushExecutorLogger {
 export interface PolicyPushExecutorOptions {
   /** The shared policy-store handle the affected rows are read from. */
   readonly db: PolicyDb;
-  /** Builds the `timekpra` client for one push (the SSH/credentials/audit seam). */
-  readonly buildClient: PolicyPushClientFactory;
+  /** Per-platform runners, keyed by `Client.platform`. Linux is the default. */
+  readonly registry: PlatformRunnerRegistry;
   /** Server-default timezone for users with no `tz` override. */
   readonly defaultTz: string;
-  /** Optional logger; records the full-lockout allowed-hours skip (see below). */
+  /** Optional logger; records the unsupported-platform skip (see below). */
   readonly log?: PolicyPushExecutorLogger;
   /** Clock for the reference instant; overridable in tests. Defaults to `new Date()`. */
   readonly now?: () => Date;
@@ -119,50 +99,12 @@ export interface PolicyPushExecutorOptions {
 
 /**
  * Build the live policy-push {@link ActionExecutor}. The returned executor is
- * idempotent (the `timekpra` setters assert desired state, not a delta), as the
+ * idempotent (the runners assert desired state, not a delta), as the
  * at-least-once queue contract requires.
  */
 export function createPolicyPushExecutor(options: PolicyPushExecutorOptions): ActionExecutor {
-  const { db, buildClient, defaultTz, log } = options;
+  const { db, registry, defaultTz, log } = options;
   const now = options.now ?? ((): Date => new Date());
-
-  /**
-   * Drive one {@link ResolvedPolicyPush} through the `timekpra` setters, in
-   * order. Shared by the normal policy push and the unlink unmanage push so both
-   * apply limits identically and idempotently.
-   */
-  async function applyResolvedPush(
-    timekpr: PolicyPushClient,
-    resolved: ResolvedPolicyPush,
-    clientId: number,
-    userId: number,
-  ): Promise<void> {
-    if (resolved.perWeekdaySeconds !== null) {
-      await timekpr.setTimeLimits(resolved.perWeekdaySeconds);
-    }
-    if (resolved.weeklySeconds !== null) {
-      await timekpr.setTimeLimitWeek(resolved.weeklySeconds);
-    }
-    if (resolved.monthlySeconds !== null) {
-      await timekpr.setTimeLimitMonth(resolved.monthlySeconds);
-    }
-
-    // A fully-denied week has no allowed weekday, which `timekpra` allowed-hours
-    // cannot represent (`--setalloweddays` rejects an empty set). Pushing it
-    // would throw a *non-retriable* error and dead-letter the whole action —
-    // silently dropping the limits above too. Full lockout is enforced via a
-    // zero daily limit / session-kill (Phase 8c), not allowed-hours, so skip
-    // the allowed-hours push here and surface the gap rather than failing.
-    // (The unmanage push is all-hours-every-day, so it never takes this branch.)
-    if ([...resolved.weekly.values()].some((windows) => windows.length > 0)) {
-      await timekpr.setWeeklyAllowedHours(resolved.weekly);
-    } else {
-      log?.warn(
-        { clientId, userId },
-        "policy denies all access all week; allowed-hours push skipped (full lockout is Phase 8c: zero daily limit / session-kill, not allowed-hours)",
-      );
-    }
-  }
 
   return async function execute(action: QueuedAction): Promise<void> {
     const { userId, reason, detail } = policyPushPayloadSchema.parse(action.payload);
@@ -174,18 +116,30 @@ export function createPolicyPushExecutor(options: PolicyPushExecutorOptions): Ac
     const client = getClient(db, action.clientId);
     if (client === undefined) return;
 
+    // The platform seam (#232): pick the runner for this client's platform — it
+    // owns both the enforce and unmanage pushes below. No runner registered (a
+    // `windows` client today) → warn + no-op rather than pushing the Linux
+    // `timekpra` path to a non-Linux box.
+    const runner = registry.resolve(client.platform);
+    if (runner === undefined) {
+      log?.warn(
+        { clientId: action.clientId, userId, platform: client.platform },
+        "no transport runner registered for client platform; policy push skipped (Linux is the only supported platform today, #232)",
+      );
+      return;
+    }
+
     // Resolve the supervised account on this client.
     const link = listUserLinks(db, userId).find((l) => l.clientId === action.clientId);
     if (link === undefined) {
       // The link is gone. An explicit unlink (`link.deleted`) still owes the
-      // client one *unmanage* push: lift this user's timekpra limits back to
-      // unrestricted, using the username the route captured before the row
-      // cascaded away (#253). Any other missing-link case has nothing to do.
+      // client one *unmanage* push: lift this user's limits back to unrestricted,
+      // using the username the route captured before the row cascaded away
+      // (#253). Any other missing-link case has nothing to do.
       if (reason !== LINK_DELETED_REASON) return;
       const unlink = unlinkDetailSchema.safeParse(detail);
       if (!unlink.success) return;
-      const timekpr = buildClient({ client, username: unlink.data.osUsername, userId, reason });
-      await applyResolvedPush(timekpr, unrestrictedPolicyPush(), action.clientId, userId);
+      await runner.unmanage({ client, username: unlink.data.osUsername, userId, reason });
       return;
     }
 
@@ -197,10 +151,15 @@ export function createPolicyPushExecutor(options: PolicyPushExecutorOptions): Ac
     const budgets = listUserBudgets(db, userId);
     const schedules = listUserSchedules(db, userId);
 
-    const resolved = resolvePolicyPush({ tz, schedules, budgets, now: now() });
-
-    const timekpr = buildClient({ client, username: link.osUsername, userId, reason });
-
-    await applyResolvedPush(timekpr, resolved, action.clientId, userId);
+    await runner.enforce({
+      client,
+      username: link.osUsername,
+      userId,
+      reason,
+      tz,
+      schedules,
+      budgets,
+      now: now(),
+    });
   };
 }

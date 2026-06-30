@@ -54,6 +54,8 @@ import { POLICY_PUSH_KIND } from "../queue/policy-push.js";
 import { TimekprClient } from "../timekpr/index.js";
 import { createPolicyPushDispatcher } from "./dispatcher.js";
 import { createPolicyPushExecutor } from "./executor.js";
+import { createLinuxPolicyRunner } from "./linux-runner.js";
+import { createPlatformRunnerRegistry } from "./platform-runner.js";
 
 /**
  * The SSH transport surface the bootstrap needs: the audited-command surface
@@ -161,17 +163,28 @@ export function createPolicyPushTransport(
   const sink = new DrizzleAuditSink(db, log);
   const auditing = new AuditingTransport(ssh, sink);
 
-  const executor = createPolicyPushExecutor({
-    db,
-    defaultTz: settings.defaultTz,
+  // The platform seam (#232): the live executor selects a runner per client by
+  // `Client.platform`. Linux (`timekpra`-over-SSH) is the only registration
+  // today — `Client.platform` defaults to `linux`, so every enrolled client
+  // resolves here; a future `WindowsAgentRunner` is registered beside it without
+  // touching the executor or the call sites.
+  const linuxRunner = createLinuxPolicyRunner({
     log,
-    ...(options.now !== undefined ? { now: options.now } : {}),
     buildClient: ({ client, username, userId, reason }) =>
       new TimekprClient(
         auditing.withContext({ clientId: client.id, userId, reason }),
         targetFromClient(client, credentials),
         username,
       ),
+  });
+  const registry = createPlatformRunnerRegistry([linuxRunner]);
+
+  const executor = createPolicyPushExecutor({
+    db,
+    registry,
+    defaultTz: settings.defaultTz,
+    log,
+    ...(options.now !== undefined ? { now: options.now } : {}),
   });
 
   const dispatcher = createPolicyPushDispatcher({ db, executor, log });
