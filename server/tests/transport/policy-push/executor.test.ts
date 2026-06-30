@@ -1,8 +1,13 @@
 /**
- * Unit tests for the live policy-push executor (#201): resolving a user's
- * effective overall policy from the store and driving the `timekpra` setters,
- * the no-op branches (client-scoped / missing client / missing link), and the
- * error propagation the offline queue classifies on.
+ * Unit tests for the live policy-push executor (#201, #232): the
+ * platform-agnostic dispatch in front of the per-platform runners —
+ * the no-op branches (client-scoped / missing client / missing link /
+ * unsupported platform), runner selection by `Client.platform`, payload
+ * validation, and the error propagation the offline queue classifies on.
+ *
+ * The Linux runner's enforcement detail (the `timekpra` setter sequence and the
+ * full-lockout skip) is exercised here through the real runner and also in
+ * isolation in `linux-runner.test.ts`; the registry in `platform-runner.test.ts`.
  */
 import { describe, expect, it, vi } from "vitest";
 import { ZodError } from "zod";
@@ -14,12 +19,20 @@ import {
   createUser,
   upsertLink,
 } from "../../../src/policy/repository.js";
+import { clients } from "../../../src/policy/schema.js";
 import {
   createPolicyPushExecutor,
-  type PolicyPushClient,
-  type PolicyPushClientTarget,
+  type PolicyPushExecutorLogger,
 } from "../../../src/transport/policy-push/executor.js";
-import type { QueuedAction } from "../../../src/transport/queue/types.js";
+import {
+  createLinuxPolicyRunner,
+  type PolicyPushClient,
+  type PolicyPushClientFactory,
+  type PolicyPushClientTarget,
+  type PolicyPushRunnerLogger,
+} from "../../../src/transport/policy-push/linux-runner.js";
+import { createPlatformRunnerRegistry } from "../../../src/transport/policy-push/platform-runner.js";
+import type { ActionExecutor, QueuedAction } from "../../../src/transport/queue/types.js";
 import { SshCommandError, SshUnreachableError } from "../../../src/transport/ssh/errors.js";
 import { testDb, type TestDb } from "../../helpers/db.js";
 
@@ -59,6 +72,31 @@ function recordingClient(behaviour?: { rejectWith?: Error }): RecordedClient {
     },
   };
   return rec;
+}
+
+/**
+ * Build the executor wired with a Linux-only registry — the production default.
+ * `runnerLog` is the Linux runner's logger (the full-lockout skip notice);
+ * `executorLog` is the dispatcher's logger (the unsupported-platform skip).
+ */
+function linuxExecutor(args: {
+  db: TestDb;
+  defaultTz: string;
+  buildClient: PolicyPushClientFactory;
+  runnerLog?: PolicyPushRunnerLogger;
+  executorLog?: PolicyPushExecutorLogger;
+}): ActionExecutor {
+  const runner = createLinuxPolicyRunner({
+    buildClient: args.buildClient,
+    ...(args.runnerLog !== undefined ? { log: args.runnerLog } : {}),
+  });
+  const registry = createPlatformRunnerRegistry([runner]);
+  return createPolicyPushExecutor({
+    db: args.db,
+    defaultTz: args.defaultTz,
+    registry,
+    ...(args.executorLog !== undefined ? { log: args.executorLog } : {}),
+  });
 }
 
 /** A user-scoped `policy.push` action targeting `clientId` for `userId`. */
@@ -105,7 +143,7 @@ describe("createPolicyPushExecutor", () => {
     createBudget(db, { userId, scope: "overall", window: "daily", secondsAllowed: 7200 });
 
     const rec = recordingClient();
-    const executor = createPolicyPushExecutor({
+    const executor = linuxExecutor({
       db,
       defaultTz: "UTC",
       buildClient: (t) => {
@@ -130,11 +168,7 @@ describe("createPolicyPushExecutor", () => {
     createBudget(db, { userId, scope: "overall", window: "monthly", secondsAllowed: 100000 });
 
     const rec = recordingClient();
-    const executor = createPolicyPushExecutor({
-      db,
-      defaultTz: "UTC",
-      buildClient: () => rec.client,
-    });
+    const executor = linuxExecutor({ db, defaultTz: "UTC", buildClient: () => rec.client });
 
     await executor(action(clientId, userId));
 
@@ -149,11 +183,7 @@ describe("createPolicyPushExecutor", () => {
   it("still pushes the allowed-hours grid for a user with no budgets", async () => {
     const { userId, clientId } = setup();
     const rec = recordingClient();
-    const executor = createPolicyPushExecutor({
-      db,
-      defaultTz: "UTC",
-      buildClient: () => rec.client,
-    });
+    const executor = linuxExecutor({ db, defaultTz: "UTC", buildClient: () => rec.client });
 
     await executor(action(clientId, userId));
 
@@ -168,10 +198,10 @@ describe("createPolicyPushExecutor", () => {
 
     const rec = recordingClient();
     const warn = vi.fn();
-    const executor = createPolicyPushExecutor({
+    const executor = linuxExecutor({
       db,
       defaultTz: "UTC",
-      log: { warn },
+      runnerLog: { warn },
       buildClient: () => rec.client,
     });
 
@@ -197,7 +227,7 @@ describe("createPolicyPushExecutor", () => {
     });
 
     const rec = recordingClient();
-    const executor = createPolicyPushExecutor({
+    const executor = linuxExecutor({
       db,
       defaultTz: "America/New_York",
       buildClient: () => rec.client,
@@ -211,7 +241,7 @@ describe("createPolicyPushExecutor", () => {
   it("is a no-op for a client-scoped change (null user)", async () => {
     const { clientId } = setup();
     const build = vi.fn();
-    const executor = createPolicyPushExecutor({ db, defaultTz: "UTC", buildClient: build });
+    const executor = linuxExecutor({ db, defaultTz: "UTC", buildClient: build });
 
     await executor(action(clientId, null));
     expect(build).not.toHaveBeenCalled();
@@ -220,7 +250,7 @@ describe("createPolicyPushExecutor", () => {
   it("is a no-op when the client no longer exists", async () => {
     const { userId } = setup();
     const build = vi.fn();
-    const executor = createPolicyPushExecutor({ db, defaultTz: "UTC", buildClient: build });
+    const executor = linuxExecutor({ db, defaultTz: "UTC", buildClient: build });
 
     await executor(action(9999, userId));
     expect(build).not.toHaveBeenCalled();
@@ -230,7 +260,7 @@ describe("createPolicyPushExecutor", () => {
     const { userId, clientId } = setup();
     const otherClientId = createClient(db, { hostname: "mint-09", sshUser: "pct-agent" }).id;
     const build = vi.fn();
-    const executor = createPolicyPushExecutor({ db, defaultTz: "UTC", buildClient: build });
+    const executor = linuxExecutor({ db, defaultTz: "UTC", buildClient: build });
 
     // The user is linked to `clientId`, not `otherClientId`.
     expect(otherClientId).not.toBe(clientId);
@@ -250,7 +280,7 @@ describe("createPolicyPushExecutor", () => {
     it("pushes the fully-unrestricted config when a link is deleted", async () => {
       const { userId, clientId } = unlinkedSetup();
       const rec = recordingClient();
-      const executor = createPolicyPushExecutor({
+      const executor = linuxExecutor({
         db,
         defaultTz: "UTC",
         buildClient: (t) => {
@@ -282,7 +312,7 @@ describe("createPolicyPushExecutor", () => {
       createSchedule(db, { userId, targetKind: "overall", action: "deny" });
 
       const rec = recordingClient();
-      const executor = createPolicyPushExecutor({
+      const executor = linuxExecutor({
         db,
         defaultTz: "UTC",
         buildClient: () => rec.client,
@@ -301,7 +331,7 @@ describe("createPolicyPushExecutor", () => {
     it("is a no-op when the link.deleted detail carries no usable username", async () => {
       const { userId, clientId } = unlinkedSetup();
       const build = vi.fn();
-      const executor = createPolicyPushExecutor({ db, defaultTz: "UTC", buildClient: build });
+      const executor = linuxExecutor({ db, defaultTz: "UTC", buildClient: build });
 
       await executor(unlinkAction(clientId, userId, {}));
       await executor(unlinkAction(clientId, userId, { osUsername: "" }));
@@ -311,7 +341,7 @@ describe("createPolicyPushExecutor", () => {
     it("does not unmanage a non-link.deleted reason for an unlinked user", async () => {
       const { userId, clientId } = unlinkedSetup();
       const build = vi.fn();
-      const executor = createPolicyPushExecutor({ db, defaultTz: "UTC", buildClient: build });
+      const executor = linuxExecutor({ db, defaultTz: "UTC", buildClient: build });
 
       // Same missing-link state, but a user-scoped edit reason — nothing to do.
       await executor({
@@ -326,22 +356,47 @@ describe("createPolicyPushExecutor", () => {
     it("is a no-op when the client no longer exists, even for a link.deleted", async () => {
       const { userId } = unlinkedSetup();
       const build = vi.fn();
-      const executor = createPolicyPushExecutor({ db, defaultTz: "UTC", buildClient: build });
+      const executor = linuxExecutor({ db, defaultTz: "UTC", buildClient: build });
 
       await executor(unlinkAction(9999, userId));
       expect(build).not.toHaveBeenCalled();
     });
   });
 
+  it("warns and no-ops for a client on a platform with no registered runner (#232)", async () => {
+    const { userId } = setup();
+    // A `windows` client: the Linux-only registry has no runner for it, so the
+    // dispatcher must skip rather than push the `timekpra` path to a non-Linux box.
+    const winClientId = db
+      .insert(clients)
+      .values({ hostname: "win-01", sshUser: "pct-agent", platform: "windows" })
+      .returning()
+      .get().id;
+    upsertLink(db, userId, winClientId, { osUsername: "alice", osUserRef: "1001" });
+    createBudget(db, { userId, scope: "overall", window: "daily", secondsAllowed: 7200 });
+
+    const build = vi.fn();
+    const warn = vi.fn();
+    const executor = linuxExecutor({
+      db,
+      defaultTz: "UTC",
+      buildClient: build,
+      executorLog: { warn },
+    });
+
+    // Resolves without throwing (not a command failure → not dead-lettered)…
+    await executor(action(winClientId, userId));
+    // …no Linux client is ever built, and the skip is surfaced once.
+    expect(build).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toMatchObject({ platform: "windows", userId });
+  });
+
   it("propagates a retriable (unreachable) failure for the queue to keep", async () => {
     const { userId, clientId } = setup();
     createBudget(db, { userId, scope: "overall", window: "daily", secondsAllowed: 7200 });
     const rec = recordingClient({ rejectWith: new SshUnreachableError(target) });
-    const executor = createPolicyPushExecutor({
-      db,
-      defaultTz: "UTC",
-      buildClient: () => rec.client,
-    });
+    const executor = linuxExecutor({ db, defaultTz: "UTC", buildClient: () => rec.client });
 
     await expect(executor(action(clientId, userId))).rejects.toBeInstanceOf(SshUnreachableError);
   });
@@ -357,18 +412,14 @@ describe("createPolicyPushExecutor", () => {
         signal: null,
       }),
     });
-    const executor = createPolicyPushExecutor({
-      db,
-      defaultTz: "UTC",
-      buildClient: () => rec.client,
-    });
+    const executor = linuxExecutor({ db, defaultTz: "UTC", buildClient: () => rec.client });
 
     await expect(executor(action(clientId, userId))).rejects.toBeInstanceOf(SshCommandError);
   });
 
   it("rejects a malformed queue payload rather than mis-pushing", async () => {
     const { clientId } = setup();
-    const executor = createPolicyPushExecutor({
+    const executor = linuxExecutor({
       db,
       defaultTz: "UTC",
       buildClient: () => recordingClient().client,
