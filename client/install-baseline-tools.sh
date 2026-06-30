@@ -140,6 +140,36 @@ E2G_PCT_DIR="${E2G_PCT_DIR:-${E2G_DIR}/pct.d}"
 # named to match self-test.sh's PCT_SSHD_SERVICE so the two stay in lockstep.
 PCT_SSHD_SERVICE="${PCT_SSHD_SERVICE:-ssh.service}"
 
+# The systemctl binary, overridable so the bats suite can point it at a recorder
+# stub and assert which units get (re)started without a live systemd.
+PCT_SYSTEMCTL="${PCT_SYSTEMCTL:-systemctl}"
+
+# Restart/reload a system unit to APPLY a config change, but only when the config
+# actually changed across this run. `before` is a pct_file_checksum captured
+# before the write; if the file's checksum still matches, this is a no-op — so a
+# re-run that changes nothing never bounces the daemon. Without this, the baseline
+# only `enable --now`s a unit (a no-op for an already-running one), so on a re-run
+# changed config is written to disk but the running daemon keeps the old config
+# until a manual restart — the upgrade-in-place gap this closes (#347).
+#
+# `action` is a systemctl verb; use the `try-*` forms (try-restart,
+# try-reload-or-restart) so an inactive unit is a clean no-op rather than an
+# error under the caller's `set -e`. Dry-run prints the conditional intent.
+pct_apply_change() {
+  local file="$1" before="$2" unit="$3" action="$4"
+  if pct_is_dry_run; then
+    printf '%s %s %s %s (only if %s changed)\n' \
+      "$PCT_DRYRUN_PREFIX" "$PCT_SYSTEMCTL" "$action" "$unit" "$file" >&2
+    return 0
+  fi
+  if [ "$before" = "$(pct_file_checksum "$file")" ]; then
+    pct_log "${file} unchanged; not restarting ${unit}"
+    return 0
+  fi
+  pct_log "${file} changed; ${action} ${unit} to apply"
+  "$PCT_SYSTEMCTL" "$action" "$unit"
+}
+
 # --- step: apt repositories ------------------------------------------------
 
 # Resolve the Ubuntu series (apt "Suite") the PPA is consumed for. Mint reports
@@ -295,7 +325,7 @@ pct_baseline_install_packages() {
 # dashboard connection and self-test.sh's sshd check (#80) fail.
 pct_baseline_configure_sshd() {
   pct_step "Enable the OpenSSH server (the dashboard connects over SSH)"
-  pct_run systemctl enable --now "$PCT_SSHD_SERVICE"
+  pct_run "$PCT_SYSTEMCTL" enable --now "$PCT_SSHD_SERVICE"
 }
 
 # --- step: ActivityWatch upstream bundle -----------------------------------
@@ -347,10 +377,15 @@ pct_baseline_install_activitywatch() {
 
 pct_baseline_configure_timekpr() {
   pct_step "Configure Timekpr-nExT (baseline: daemon + generous Alpha-1 warnings)"
+  # Snapshot the config before editing so we only restart the daemon if the
+  # edit actually changes it (a no-op re-run must not bounce it).
+  local conf_before
+  conf_before="$(pct_file_checksum "$PCT_TIMEKPR_CONF")"
+
   # Initial policy is intentionally empty — the dashboard pushes limits via
   # `timekpra` over SSH after enrolment. We only ensure the daemon is up and
   # the CLI the server drives is on PATH.
-  pct_run systemctl enable --now timekpr.service
+  pct_run "$PCT_SYSTEMCTL" enable --now timekpr.service
 
   # Give supervised users plenty of advance warning before a session cutoff.
   # Alpha-1 has no pct-client-agent cadence/grace UX (Phase 8b), so this is the
@@ -360,6 +395,13 @@ pct_baseline_configure_timekpr() {
     TIMEKPR_FINAL_NOTIFICATION_TIME "$PCT_TIMEKPR_FINAL_NOTIFICATION_TIME"
   pct_set_conf_key "$PCT_TIMEKPR_CONF" \
     TIMEKPR_FINAL_WARNING_TIME "$PCT_TIMEKPR_FINAL_WARNING_TIME"
+
+  # `enable --now` started the daemon with whatever timekpr.conf was on disk
+  # then; if the edits above changed it (e.g. on an upgrade re-run), restart so
+  # the new warning lead times take effect. Timekpr persists usage, so a restart
+  # does not reset today's budgets. `try-restart` is a no-op if the unit is not
+  # active, so it never errors under `set -e`.
+  pct_apply_change "$PCT_TIMEKPR_CONF" "$conf_before" timekpr.service try-restart
 
   if pct_is_dry_run; then
     printf '%s %s\n' "$PCT_DRYRUN_PREFIX" "command -v timekpra" >&2
@@ -525,6 +567,11 @@ EOF
 
 pct_baseline_configure_e2guardian() {
   pct_step "Configure e2guardian (permissive baseline + per-user skeleton)"
+  # Snapshot the filter group e2guardian actually reads, so we only signal a
+  # reload if the rules changed (a no-op re-run must not disturb the proxy).
+  local f1_before
+  f1_before="$(pct_file_checksum "${E2G_DIR}/e2guardianf1.conf")"
+
   # Let the service run (some Debian packagings ship it gated off). Real filter
   # rules + the iptables OUTPUT redirect are Phase 6 Ansible's job (#90); this
   # baseline must NOT block traffic.
@@ -547,7 +594,15 @@ pct_baseline_configure_e2guardian() {
 EOF
   done
 
-  pct_run systemctl enable --now e2guardian.service
+  pct_run "$PCT_SYSTEMCTL" enable --now e2guardian.service
+
+  # If the filter group changed (e.g. an upgrade re-run that adjusts the
+  # baseline), reload e2guardian so it re-reads the rules. `try-reload-or-restart`
+  # reloads in place when the unit is active and supports it, restarts if it
+  # doesn't, and is a clean no-op if the unit is inactive — so it never drops the
+  # proxy needlessly nor errors under `set -e`.
+  pct_apply_change "${E2G_DIR}/e2guardianf1.conf" "$f1_before" e2guardian.service \
+    try-reload-or-restart
 }
 
 # --- orchestration ---------------------------------------------------------

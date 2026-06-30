@@ -54,10 +54,13 @@ dashboard, has a short TTL, and is single-use.
 Re-running the installer is how a client-side change (for example, enabling
 the SSH server so the dashboard can reach the box) reaches a machine that was
 enrolled before the change existed. Every sub-step is idempotent and reconciles
-rather than re-bootstraps, but enrolment itself is **not** repeatable: the
-enrolment token is single-use, and the client's hostname is unique on the
-dashboard, so a second enrolment of the same host would otherwise fail. The
-orchestrator handles this two ways:
+rather than re-bootstraps — and when a re-run changes a daemon's config
+(Timekpr-nExT's warning lead times, the e2guardian filter group), the baseline
+restarts or reloads that daemon so the change actually takes effect, while a
+no-op re-run leaves the running services untouched. But enrolment itself is
+**not** repeatable: the enrolment token is single-use, and the client's
+hostname is unique on the dashboard, so a second enrolment of the same host
+would otherwise fail. The orchestrator handles this two ways:
 
 - **`--skip-enrol` (recommended for upgrades).** Re-runs provision + baseline +
   self-test only, and skips the enrolment exchange and its dependents

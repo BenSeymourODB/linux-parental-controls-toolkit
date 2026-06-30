@@ -209,3 +209,16 @@ pct_set_conf_key() {
     printf '%s = %s\n' "$key" "$value" >>"$file"
   fi
 }
+
+# Echo a content checksum for a file, or the literal `absent` if it does not
+# exist. Used to detect whether a managed config actually changed across a
+# (re-)run — see install-baseline-tools.sh's pct_apply_change — so a service is
+# only restarted/reloaded when its config did, keeping a no-op re-run a no-op.
+# Read-only, so dry-run is irrelevant.
+pct_file_checksum() {
+  if [ -f "$1" ]; then
+    sha256sum "$1" | cut -d' ' -f1
+  else
+    printf 'absent'
+  fi
+}
