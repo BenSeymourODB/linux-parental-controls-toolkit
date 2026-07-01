@@ -4,16 +4,27 @@
   prerendered to a static shell), supports create, inline edit, and delete.
   All calls go through the typed `$lib/api/users` wrappers; errors are surfaced
   inline rather than thrown away.
+
+  UI consolidation: the User Groups editor used to be its own top-level nav
+  section. It is closely related (groups bundle the users managed here), so it
+  now lives below the users CRUD as a second section of this view. It is still
+  the self-contained `UserGroupsView` component — unchanged and independently
+  testable — just composed in here rather than reached via its own nav entry.
 -->
 <script lang="ts">
   import { onMount } from "svelte";
   import { ApiError } from "$lib/api/client.js";
   import type { UserResponse } from "$lib/api/contract.js";
-  import { createUser, deleteUser, listUsers, updateUser } from "$lib/api/users.js";
+  import { createUser, deleteUser, updateUser } from "$lib/api/users.js";
+  import { usersResource } from "$lib/data/resources.svelte.js";
+  import UserGroupsView from "./UserGroupsView.svelte";
 
-  let users = $state<UserResponse[]>([]);
-  let loading = $state(true);
+  // The user list is a shared resource (so the composed UserGroupsView reads the
+  // same copy rather than re-fetching). This view owns the list, so it shows the
+  // resource's load error; `error` below is for this view's own mutations.
   let error = $state<string | null>(null);
+  // Surface a mutation error if there is one, otherwise the shared load error.
+  let displayError = $derived(error ?? usersResource.error);
 
   // Create form.
   let newName = $state("");
@@ -26,19 +37,7 @@
   let editTz = $state("");
   let saving = $state(false);
 
-  onMount(load);
-
-  async function load(): Promise<void> {
-    loading = true;
-    error = null;
-    try {
-      users = await listUsers();
-    } catch (err) {
-      error = messageOf(err);
-    } finally {
-      loading = false;
-    }
-  }
+  onMount(() => usersResource.load());
 
   async function handleCreate(event: SubmitEvent): Promise<void> {
     event.preventDefault();
@@ -50,7 +49,7 @@
         displayName: newName.trim(),
         ...(tz === "" ? {} : { tz }),
       });
-      users = [...users, created];
+      usersResource.set([...usersResource.items, created]);
       newName = "";
       newTz = "";
     } catch (err) {
@@ -77,7 +76,7 @@
     try {
       const tz = editTz.trim();
       const updated = await updateUser(id, { displayName: editName, tz: tz === "" ? null : tz });
-      users = users.map((u) => (u.id === id ? updated : u));
+      usersResource.set(usersResource.items.map((u) => (u.id === id ? updated : u)));
       editingId = null;
     } catch (err) {
       error = messageOf(err);
@@ -93,7 +92,7 @@
     error = null;
     try {
       await deleteUser(user.id);
-      users = users.filter((u) => u.id !== user.id);
+      usersResource.set(usersResource.items.filter((u) => u.id !== user.id));
     } catch (err) {
       error = messageOf(err);
     }
@@ -120,8 +119,8 @@
     <p class="hint">Supervised user accounts. Time and content limits attach to these.</p>
   </header>
 
-  {#if error}
-    <p class="error" role="alert">{error}</p>
+  {#if displayError}
+    <p class="error" role="alert">{displayError}</p>
   {/if}
 
   <form class="create" onsubmit={handleCreate}>
@@ -145,9 +144,9 @@
     </button>
   </form>
 
-  {#if loading}
+  {#if usersResource.loading}
     <p class="muted">Loading users…</p>
-  {:else if users.length === 0}
+  {:else if usersResource.items.length === 0}
     <p class="muted">No users yet. Add one above.</p>
   {:else}
     <table>
@@ -160,7 +159,7 @@
         </tr>
       </thead>
       <tbody>
-        {#each users as user (user.id)}
+        {#each usersResource.items as user (user.id)}
           <tr>
             {#if editingId === user.id}
               <td><input bind:value={editName} aria-label="Edit display name" /></td>
@@ -194,10 +193,19 @@
   {/if}
 </section>
 
+<div class="subview">
+  <UserGroupsView />
+</div>
+
 <style>
   h1 {
     margin: 0;
     font-size: 1.3rem;
+  }
+  .subview {
+    margin-top: 2.5rem;
+    padding-top: 1.75rem;
+    border-top: 1px solid #e5e7eb;
   }
   .hint {
     margin: 0.25rem 0 1rem;

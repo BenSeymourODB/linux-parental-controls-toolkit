@@ -3,8 +3,11 @@
  * stub (`../stub.ts`) to a real `timekpra`-over-SSH dispatch.
  *
  * Layering: {@link ./resolve.js} (pure policy → `timekpra` inputs) ←
- * {@link ./executor.js} (the offline-queue {@link import("../queue/types.js").ActionExecutor},
- * shared by the online push and the replay loop) ← {@link ./dispatcher.js} (the
+ * {@link ./linux-runner.js} (the Linux {@link import("./platform-runner.js").PlatformPolicyRunner},
+ * `timekpra`-over-SSH) ← {@link ./executor.js} (the offline-queue
+ * {@link import("../queue/types.js").ActionExecutor} that selects a runner per
+ * client by `Client.platform` via {@link ./platform-runner.js}, shared by the
+ * online push and the replay loop) ← {@link ./dispatcher.js} (the
  * {@link import("../stub.js").PolicyPushStub} the CRUD routes call, over
  * `pushOrEnqueue`). {@link ./bootstrap.js} assembles them with the SSH facade,
  * the audit log (#85), and the drainer (#84) — or the logging fallback when no
@@ -29,12 +32,23 @@ export {
 } from "./diff.js";
 export {
   createPolicyPushExecutor,
-  type PolicyPushClient,
-  type PolicyPushClientFactory,
-  type PolicyPushClientTarget,
   type PolicyPushExecutorLogger,
   type PolicyPushExecutorOptions,
 } from "./executor.js";
+export {
+  createPlatformRunnerRegistry,
+  type PlatformPolicyRunner,
+  type PlatformRunnerRegistry,
+  type PolicyEnforcementContext,
+} from "./platform-runner.js";
+export {
+  createLinuxPolicyRunner,
+  type LinuxPolicyRunnerOptions,
+  type PolicyPushClient,
+  type PolicyPushClientFactory,
+  type PolicyPushClientTarget,
+  type PolicyPushRunnerLogger,
+} from "./linux-runner.js";
 export {
   createPolicyPushDispatcher,
   POLICY_PUSH_COMPONENT,

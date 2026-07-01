@@ -64,6 +64,52 @@ teardown() {
   [[ "$output" == "ran" ]]
 }
 
+@test "pct_retry returns immediately and silently on a first-try success" {
+  unset PCT_DRY_RUN
+  run pct_retry true
+  [ "$status" -eq 0 ]
+  # A first-try success must read exactly like a plain run: no retry chatter.
+  [[ "$output" != *"retrying"* ]]
+  [[ "$output" != *"attempt"* ]]
+}
+
+@test "pct_retry retries a flaky command and succeeds once it passes" {
+  unset PCT_DRY_RUN
+  # A command that fails its first attempt and succeeds on the second, tracked
+  # via a counter file so state survives across the separate invocations.
+  local counter="${TMP}/attempts"
+  printf '0\n' >"$counter"
+  flaky() {
+    local n
+    n="$(($(cat "$counter") + 1))"
+    printf '%s\n' "$n" >"$counter"
+    [ "$n" -ge 2 ]
+  }
+  export -f flaky
+  export counter
+  PCT_RETRY_DELAY=0 run pct_retry flaky
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"attempt 1/3 failed"* ]]
+  [ "$(cat "$counter")" -eq 2 ]
+}
+
+@test "pct_retry gives up after PCT_RETRIES attempts and returns the exit code" {
+  unset PCT_DRY_RUN
+  PCT_RETRIES=3 PCT_RETRY_DELAY=0 run pct_retry bash -c 'exit 22'
+  [ "$status" -eq 22 ]
+  [[ "$output" == *"still failing after 3 attempt(s)"* ]]
+  [[ "$output" == *"giving up"* ]]
+}
+
+@test "pct_retry honours dry-run: prints once, never executes or sleeps" {
+  local marker="${TMP}/should-not-exist"
+  PCT_DRY_RUN=1 run pct_retry touch "$marker"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"[dry-run] touch ${marker}"* ]]
+  [[ "$output" != *"retrying"* ]]
+  [ ! -e "$marker" ]
+}
+
 @test "pct_detect_distro parses ID and ID_LIKE from a fixture os-release" {
   local f="${TMP}/os-release"
   cat >"$f" <<'EOF'

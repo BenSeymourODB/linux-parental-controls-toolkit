@@ -18,16 +18,15 @@
   import { ApiError } from "$lib/api/client.js";
   import { fetchSession, login, logout } from "$lib/api/auth.js";
   import { fetchAnsibleStatus } from "$lib/api/system.js";
+  import { resetResources } from "$lib/data/resources.svelte.js";
   import type { SessionResponse, AnsibleVenvStatusResponse } from "$lib/api/contract.js";
   import AppShell, { type NavItem } from "$lib/components/AppShell.svelte";
   import LoginForm from "$lib/components/LoginForm.svelte";
   import SetupProgressScreen from "$lib/components/SetupProgressScreen.svelte";
   import DashboardView from "$lib/views/DashboardView.svelte";
   import UsersView from "$lib/views/UsersView.svelte";
-  import UserGroupsView from "$lib/views/UserGroupsView.svelte";
   import ClientsView from "$lib/views/ClientsView.svelte";
   import ActivitiesView from "$lib/views/ActivitiesView.svelte";
-  import ActivityGroupsView from "$lib/views/ActivityGroupsView.svelte";
   import BudgetsView from "$lib/views/BudgetsView.svelte";
   import SchedulesView from "$lib/views/SchedulesView.svelte";
   import PolicyPreviewView from "$lib/views/PolicyPreviewView.svelte";
@@ -99,11 +98,9 @@
   const navItems: NavItem[] = [
     { id: "dashboard", label: "Dashboard" },
     { id: "users", label: "Users" },
-    { id: "user-groups", label: "User Groups" },
     { id: "clients", label: "Clients" },
     { id: "links", label: "User ↔ Client links" },
     { id: "activities", label: "Activities" },
-    { id: "activity-groups", label: "Activity Groups" },
     { id: "budgets", label: "Budgets" },
     { id: "schedules", label: "Schedules" },
     { id: "policy-preview", label: "Policy preview" },
@@ -175,6 +172,8 @@
       loginError = null;
       setupStatus = null;
       setupGatePassed = false;
+      // Drop cached lists so a different admin session starts clean.
+      resetResources();
     }
   }
 </script>
@@ -205,16 +204,12 @@
   >
     {#if activeView === "users"}
       <UsersView />
-    {:else if activeView === "user-groups"}
-      <UserGroupsView />
     {:else if activeView === "clients"}
       <ClientsView />
     {:else if activeView === "links"}
       <LinksView />
     {:else if activeView === "activities"}
       <ActivitiesView />
-    {:else if activeView === "activity-groups"}
-      <ActivityGroupsView />
     {:else if activeView === "budgets"}
       <BudgetsView />
     {:else if activeView === "schedules"}

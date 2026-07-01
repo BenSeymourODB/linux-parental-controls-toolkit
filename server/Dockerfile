@@ -50,6 +50,16 @@ COPY server/tsconfig.json server/tsconfig.build.json ./
 COPY server/src/ ./src/
 RUN npm run build
 
+# Bundle the client installer into a single self-contained script. The modular
+# client/ sources cannot be sourced when the script is downloaded and piped to a
+# shell on a fresh machine (no sibling files; read from stdin), so the dashboard
+# serves the bundled form. build-install-bundle.sh base64-embeds the whole
+# install tree and runs the unmodified install-client.sh from a tempdir at run
+# time. No GPL code is embedded (see docs/licensing-analysis.md). The build
+# context is the repo root, so client/ is in scope.
+COPY client/ ./client/
+RUN bash client/build-install-bundle.sh ./client-scripts/install-client.sh
+
 # Strip dev dependencies in place, leaving the already-compiled native
 # better-sqlite3 binding so the runtime stage can copy node_modules as-is
 # (no recompile, no build tools in the final image).
@@ -92,8 +102,10 @@ COPY client/ansible/playbooks /app/ansible/playbooks
 COPY --from=frontend-builder /app/frontend/build ./frontend
 
 # install-client.sh — served at GET /install-client.sh so a client device can
-# bootstrap with a single curl command (docs/client-install.md).
-COPY client/install-client.sh ./client-scripts/install-client.sh
+# bootstrap with a single curl command (docs/client-install.md). This is the
+# SELF-CONTAINED bundle produced in the builder stage, not the raw modular
+# orchestrator (which cannot source its siblings when piped to a shell).
+COPY --from=builder /app/client-scripts/install-client.sh ./client-scripts/install-client.sh
 
 # First-run setup + server launch.
 COPY server/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh

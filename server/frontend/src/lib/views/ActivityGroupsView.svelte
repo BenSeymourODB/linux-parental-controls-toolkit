@@ -14,7 +14,7 @@
   import { onMount } from "svelte";
   import { ApiError } from "$lib/api/client.js";
   import type { ActivityGroupResponse, ActivityResponse } from "$lib/api/contract.js";
-  import { listActivities } from "$lib/api/activities.js";
+  import { activitiesResource } from "$lib/data/resources.svelte.js";
   import {
     addActivityToGroup,
     createActivityGroup,
@@ -26,8 +26,9 @@
   } from "$lib/api/activity-groups.js";
 
   let groups = $state<ActivityGroupResponse[]>([]);
-  let activities = $state<ActivityResponse[]>([]);
   let loading = $state(true);
+  // This view's own errors. The shared activity-list load error is owned and
+  // surfaced by the parent ActivitiesView, not duplicated here.
   let error = $state<string | null>(null);
 
   // Create form.
@@ -51,8 +52,11 @@
   async function load(): Promise<void> {
     loading = true;
     error = null;
+    // The activity list is shared; fire its load (coalesced with the parent's)
+    // and let the parent own its error. This view only awaits its own groups.
+    void activitiesResource.load();
     try {
-      [groups, activities] = await Promise.all([listActivityGroups(), listActivities()]);
+      groups = await listActivityGroups();
     } catch (err) {
       error = messageOf(err);
     } finally {
@@ -62,12 +66,12 @@
 
   /** Activities matched by id, for rendering a member's kind/matcher. */
   function activityById(id: number): ActivityResponse | undefined {
-    return activities.find((a) => a.id === id);
+    return activitiesResource.items.find((a) => a.id === id);
   }
 
   /** Activities not yet in the open group — the add-dropdown candidates. */
   let candidates = $derived(
-    activities.filter((a) => !members.some((m) => m.id === a.id)),
+    activitiesResource.items.filter((a) => !members.some((m) => m.id === a.id)),
   );
 
   async function handleCreate(event: SubmitEvent): Promise<void> {

@@ -149,10 +149,12 @@ prerelease `vMAJOR.MINOR.PATCH-<suffix>` (e.g. `v1.2.0` or `v0.1.0-alpha.1`).
    publishes only the exact version (`0.1.0-alpha.1`) and does **not** move
    `latest` or the `{{major}}.{{minor}}` alias (`flavor: latest=auto`).
 3. **GitHub Release** — creates a GitHub Release with auto-generated notes
-   and attaches `client/install-client.sh` as a release artifact (so a server
-   running a tagged release can serve the matching install script at
-   `/install-client.sh`). A prerelease tag (any `-<suffix>`) is marked as a
-   GitHub **pre-release**.
+   and attaches the self-contained `install-client.sh` bundle (built by
+   `client/build-install-bundle.sh` from the modular sources) as a release
+   artifact, so a server running a tagged release can serve the matching install
+   script at `/install-client.sh`. The raw modular orchestrator is not attached:
+   it cannot source its siblings when downloaded and piped to a shell. A
+   prerelease tag (any `-<suffix>`) is marked as a GitHub **pre-release**.
 
 ### How to cut a release
 
