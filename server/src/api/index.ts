@@ -107,6 +107,11 @@ export {
   groupExceptionResponseSchema,
   type CreateGroupExceptionRequest,
   type GroupExceptionResponse,
+  // Group-targeted budgets (#134)
+  createGroupBudgetSchema,
+  groupBudgetResponseSchema,
+  type CreateGroupBudgetRequest,
+  type GroupBudgetResponse,
   // "Add time today" same-day adjustment (#257)
   adjustTimeTodaySchema,
   timeTodayResponseSchema,
@@ -155,6 +160,19 @@ export {
   type AuditListResponse,
   type ListAuditQuery,
 } from "./audit/index.js";
+
+// Retention-config DTOs (#136): the admin read/write contract for data-
+// retention windows. Schemas live in `./retention/dtos.ts` next to the routes.
+export {
+  retentionCategoryParamsSchema,
+  setRetentionOverrideSchema,
+  retentionEntryResponseSchema,
+  retentionConfigResponseSchema,
+  type RetentionCategoryParams,
+  type SetRetentionOverrideRequest,
+  type RetentionEntryResponse,
+  type RetentionConfigResponse,
+} from "./retention/index.js";
 
 // Usage-views DTOs (#62): the read-only contract for the admin burndown chart
 // and per-activity timeline. Schemas live in `./usage/dtos.ts` next to the route.
@@ -205,6 +223,23 @@ export {
   type LoginRequest,
   type SessionResponse,
 } from "../auth/dtos.js";
+
+// Per-user PIN auth DTOs (#112): admin PIN management + the `/app` child-scoped
+// session. Re-exported so the SvelteKit `/app` surface imports the contract
+// from the same `/api` barrel as every other DTO.
+export {
+  setUserPinSchema,
+  userPinStatusResponseSchema,
+  pinLoginRequestSchema,
+  pinSessionUserSchema,
+  pinSessionResponseSchema,
+  appMeResponseSchema,
+  type SetUserPinRequest,
+  type UserPinStatusResponse,
+  type PinLoginRequest,
+  type PinSessionResponse,
+  type AppMeResponse,
+} from "./app/index.js";
 
 // Event-stream taxonomy (#100): the `/api/events/stream` wire contract — the
 // five server-pushed events and the frame envelope. Re-exported here so the

@@ -46,7 +46,16 @@ function user(overrides: Partial<UserResponse> = {}): UserResponse {
 }
 
 function client(overrides: Partial<ClientResponse> = {}): ClientResponse {
-  return { id: 7, hostname: "mint-01", ...overrides } as ClientResponse;
+  return {
+    id: 7,
+    hostname: "mint-01",
+    sshUser: "pct-agent",
+    enrolledAt: "2026-01-01T00:00:00.000Z",
+    lastSeen: null,
+    enrolled: true,
+    platform: "linux",
+    ...overrides,
+  } as ClientResponse;
 }
 
 function link(overrides: Partial<LinkResponse> = {}): LinkResponse {

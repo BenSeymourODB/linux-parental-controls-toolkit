@@ -35,7 +35,11 @@ const repoRoot = (rel: string): string => fileURLToPath(new URL(`../../${rel}`, 
 const dockerfile = readFileSync(repoRoot("server/Dockerfile"), "utf8");
 
 /** Playbooks the source dir is expected to ship (their absence breaks the COPY). */
-const EXPECTED_PLAYBOOKS = ["activitywatch.yml", "apparmor-profiles.yml"] as const;
+const EXPECTED_PLAYBOOKS = [
+  "activitywatch.yml",
+  "apparmor-profiles.yml",
+  "e2guardian-filtering.yml",
+] as const;
 
 /**
  * Parse `COPY <src...> <dest>` instructions, skipping `COPY --from=<stage>`

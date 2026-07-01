@@ -201,10 +201,10 @@ jobs:
             # makes the image available to the daemon for the presence check.
             docker buildx build \
               --load \
+              --file server/Dockerfile \
               --cache-from type=gha \
               --cache-to type=gha,mode=max \
               --tag pct-dashboard:ci \
-              -f server/Dockerfile \
               .
           else
             echo "server/Dockerfile not yet present — skipping Docker build"
@@ -219,6 +219,7 @@ jobs:
               ls -1R /app/ansible/playbooks
               test -f /app/ansible/playbooks/activitywatch.yml
               test -f /app/ansible/playbooks/apparmor-profiles.yml
+              test -f /app/ansible/playbooks/e2guardian-filtering.yml
             '
             echo "OK: Phase-6 playbooks present at PCT_ANSIBLE_PLAYBOOK_SRC."
           else

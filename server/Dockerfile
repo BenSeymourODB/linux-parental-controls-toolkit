@@ -10,12 +10,10 @@
 # docs/server-deployment.md and docs/licensing-analysis.md, enforced by
 # .github/workflows/license-guard.yml.
 #
-# Build context is the REPO ROOT, built with `-f server/Dockerfile` (see
-# .github/workflows/ci.yml → docker-build and docker-compose.yml). The root
-# context is required so the runtime stage can COPY the server-orchestrated
-# Ansible playbooks from client/ansible/playbooks/ — which sit outside
-# server/ — into the image (#260). server/frontend/ is therefore referenced
-# as server/frontend/ below; a conservative root .dockerignore keeps the
+# Build context is the repo root (see .github/workflows/ci.yml → docker-build),
+# so both server/ and client/ are in scope — the runtime stage COPYs the
+# server-orchestrated Ansible playbooks from client/ansible/playbooks/ (#260)
+# and client/install-client.sh. A conservative root .dockerignore keeps the
 # context lean.
 
 # ---------------------------------------------------------------------------
@@ -92,6 +90,10 @@ COPY client/ansible/playbooks /app/ansible/playbooks
 # Prerendered frontend (served at /admin and /app once the static mount
 # lands in Phase 2; carried in the image now so the asset path is settled).
 COPY --from=frontend-builder /app/frontend/build ./frontend
+
+# install-client.sh — served at GET /install-client.sh so a client device can
+# bootstrap with a single curl command (docs/client-install.md).
+COPY client/install-client.sh ./client-scripts/install-client.sh
 
 # First-run setup + server launch.
 COPY server/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh

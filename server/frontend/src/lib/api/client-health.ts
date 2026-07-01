@@ -1,7 +1,8 @@
 /**
  * Read-only calls for the client health/status surface (#194, frontend half of
- * #81). The admin "Client Health" view renders, per enrolled client, its
- * reachability, per-component health, and offline + queued-change state.
+ * #81). The admin "Clients" view (#305) joins this onto the client inventory to
+ * render, per client, its reachability, per-component health, and offline +
+ * queued-change state.
  *
  * Same proven shape as the CRUD wrappers (`$lib/api/clients`, #53): thin typed
  * wrappers over {@link apiFetch}, with the response types imported from the

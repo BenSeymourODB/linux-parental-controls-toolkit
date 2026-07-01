@@ -1286,3 +1286,163 @@ describe("policy CRUD routes — group schedules & exceptions (#182)", () => {
     expect(created.statusCode).toBe(201);
   });
 });
+
+describe("policy CRUD routes — group budgets (#134)", () => {
+  let harness: TestApp;
+  let cookie: string;
+
+  beforeEach(async () => {
+    harness = buildTestApp({ appOptions: { settings: configuredSettings() } });
+    await harness.app.ready();
+    const login = await harness.app.inject({
+      method: "POST",
+      url: "/api/auth/login",
+      payload: { username: "ben", password: "hunter2" },
+    });
+    cookie = sessionCookie(login);
+  });
+
+  afterEach(async () => {
+    await harness.close();
+  });
+
+  function auth(opts: InjectOptions) {
+    return harness.app.inject({ ...opts, headers: { ...opts.headers, cookie } });
+  }
+
+  async function makeGroup(name = "Kids"): Promise<number> {
+    return (await auth({ method: "POST", url: "/api/user-groups", payload: { name } })).json().id;
+  }
+
+  it("rejects anonymous access to the group budgets collection with a 401", async () => {
+    const res = await harness.app.inject({ method: "GET", url: "/api/user-groups/1/budgets" });
+    expect(res.statusCode).toBe(401);
+    expect(res.json().error.code).toBe("unauthorized");
+  });
+
+  it("creates, lists, reads, patches, and deletes a group budget", async () => {
+    const groupId = await makeGroup();
+    const created = await auth({
+      method: "POST",
+      url: `/api/user-groups/${groupId}/budgets`,
+      payload: { scope: "overall", window: "daily", secondsAllowed: 7200 },
+    });
+    expect(created.statusCode).toBe(201);
+    const body = created.json();
+    expect(body).toMatchObject({
+      userGroupId: groupId,
+      scope: "overall",
+      targetId: null,
+      window: "daily",
+      secondsAllowed: 7200,
+    });
+
+    const list = await auth({ method: "GET", url: `/api/user-groups/${groupId}/budgets` });
+    expect(list.json().map((r: { id: number }) => r.id)).toEqual([body.id]);
+
+    expect((await auth({ method: "GET", url: `/api/group-budgets/${body.id}` })).json().id).toBe(
+      body.id,
+    );
+
+    const patched = await auth({
+      method: "PATCH",
+      url: `/api/group-budgets/${body.id}`,
+      payload: { secondsAllowed: 5400 },
+    });
+    expect(patched.json().secondsAllowed).toBe(5400);
+
+    expect(
+      (await auth({ method: "DELETE", url: `/api/group-budgets/${body.id}` })).statusCode,
+    ).toBe(204);
+    expect((await auth({ method: "GET", url: `/api/group-budgets/${body.id}` })).statusCode).toBe(
+      404,
+    );
+  });
+
+  it("resolves an activity target and 400s a dangling one on a group budget", async () => {
+    const groupId = await makeGroup();
+    const activityId = (
+      await auth({
+        method: "POST",
+        url: "/api/activities",
+        payload: { kind: "app", matcher: "fx" },
+      })
+    ).json().id;
+    const ok = await auth({
+      method: "POST",
+      url: `/api/user-groups/${groupId}/budgets`,
+      payload: { scope: "activity", targetId: activityId, window: "daily", secondsAllowed: 3600 },
+    });
+    expect(ok.statusCode).toBe(201);
+
+    const dangling = await auth({
+      method: "POST",
+      url: `/api/user-groups/${groupId}/budgets`,
+      payload: { scope: "activity", targetId: 9999, window: "daily", secondsAllowed: 3600 },
+    });
+    expect(dangling.statusCode).toBe(400);
+    expect(dangling.json().error.code).toBe("validation_error");
+  });
+
+  it("400s an overall budget carrying a target on create", async () => {
+    const groupId = await makeGroup();
+    const res = await auth({
+      method: "POST",
+      url: `/api/user-groups/${groupId}/budgets`,
+      payload: { scope: "overall", targetId: 1, window: "daily", secondsAllowed: 60 },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.code).toBe("validation_error");
+  });
+
+  it("404s creating against, or listing, a missing group; 404s a missing budget", async () => {
+    const create = await auth({
+      method: "POST",
+      url: "/api/user-groups/9999/budgets",
+      payload: { scope: "overall", window: "daily", secondsAllowed: 60 },
+    });
+    expect(create.statusCode).toBe(404);
+    expect((await auth({ method: "GET", url: "/api/user-groups/9999/budgets" })).statusCode).toBe(
+      404,
+    );
+    expect((await auth({ method: "GET", url: "/api/group-budgets/999" })).statusCode).toBe(404);
+    expect(
+      (
+        await auth({
+          method: "PATCH",
+          url: "/api/group-budgets/999",
+          payload: { secondsAllowed: 1 },
+        })
+      ).statusCode,
+    ).toBe(404);
+    expect((await auth({ method: "DELETE", url: "/api/group-budgets/999" })).statusCode).toBe(404);
+  });
+
+  it("pushes a group-budget change to every member's clients (stub)", async () => {
+    const groupId = await makeGroup();
+    const alice = (
+      await auth({ method: "POST", url: "/api/users", payload: { displayName: "Alice" } })
+    ).json().id;
+    await auth({ method: "PUT", url: `/api/user-groups/${groupId}/members/${alice}` });
+    const client = (
+      await auth({
+        method: "POST",
+        url: "/api/clients",
+        payload: { hostname: "mint-1", sshUser: "pct-agent" },
+      })
+    ).json().id;
+    await auth({
+      method: "PUT",
+      url: `/api/users/${alice}/clients/${client}`,
+      payload: { osUsername: "alice", osUserRef: "1000" },
+    });
+
+    // The mutation must succeed (the stub logs the fan-out to Alice's client).
+    const created = await auth({
+      method: "POST",
+      url: `/api/user-groups/${groupId}/budgets`,
+      payload: { scope: "overall", window: "daily", secondsAllowed: 3600 },
+    });
+    expect(created.statusCode).toBe(201);
+  });
+});

@@ -18,6 +18,27 @@ Root cause: a build-context mismatch.
   that context.
 - The playbooks live in `client/ansible/playbooks/` — **outside** `server/`.
 
+## Update (after merging main)
+
+While this PR was in flight, **#324 (serve `install-client.sh`) independently
+moved the image build context to the repo root** — it needed to `COPY
+client/install-client.sh` into the image, the same context problem #260 has.
+That migration on `main` is **incomplete**: it updated `ci.yml`,
+`release.yml`, and `server/Dockerfile`, but left `docker-compose.yml` and
+`scripts/screenshots/run.sh` on the old `./server` context and added no root
+`.dockerignore`. After merging `main`, this PR therefore:
+
+- adds the actual #260 payload — `COPY client/ansible/playbooks
+  /app/ansible/playbooks` — on top of #324's root context,
+- adds the per-PR image playbook-presence assertion to `docker-build`,
+- **finishes** the incomplete migration (`docker-compose.yml`,
+  `scripts/screenshots/run.sh` → root context; new root `.dockerignore`;
+  remove the now-dead `server/.dockerignore`),
+- adds the packaging guard tests.
+
+The original Option-1 rationale below still holds; #324 simply landed the
+context move first.
+
 ## Decision — Option 1 (repo-root build context)
 
 The issue lists three options. **Option 1** (root context + `-f

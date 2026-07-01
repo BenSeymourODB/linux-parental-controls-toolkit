@@ -42,6 +42,7 @@ import {
 /** Narrow a stored row to the {@link QueuedAction} content the executor receives. */
 function toAction(row: QueuedActionRow): QueuedAction {
   return {
+    id: row.id,
     clientId: row.clientId,
     coalesceKey: row.coalesceKey,
     kind: row.kind,
