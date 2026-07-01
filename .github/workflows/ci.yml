@@ -246,7 +246,11 @@ jobs:
         run: |
           if docker image inspect pct-dashboard:ci > /dev/null 2>&1; then
             echo "Listing /app/ansible/playbooks inside the image:"
-            docker run --rm pct-dashboard:ci sh -c '
+            # Override the ENTRYPOINT: docker-entrypoint.sh boots the dashboard
+            # server (which never exits), so passing the check as CMD args would
+            # hang forever. --entrypoint sh runs the check directly; `timeout`
+            # is a belt-and-braces guard so this step can never stall the job.
+            timeout 60 docker run --rm --entrypoint sh pct-dashboard:ci -c '
               set -e
               ls -1R /app/ansible/playbooks
               test -f /app/ansible/playbooks/activitywatch.yml
