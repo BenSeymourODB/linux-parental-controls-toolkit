@@ -147,6 +147,52 @@ plan() { # run the script in dry-run with the given args, capture the plan
   [[ "$output" == *"systemctl enable --now e2guardian.service"* ]]
 }
 
+@test "plans a conditional restart/reload so a re-run applies config changes (#347)" {
+  plan --supervised-user alice
+  [ "$status" -eq 0 ]
+  # The daemons are only bounced if their config actually changed, so the plan
+  # shows the conditional apply rather than an unconditional restart.
+  [[ "$output" == *"try-restart timekpr.service (only if"* ]]
+  [[ "$output" == *"try-reload-or-restart e2guardian.service (only if"* ]]
+}
+
+@test "pct_file_checksum reports absent vs a stable content checksum (real)" {
+  run env -u PCT_DRY_RUN bash -c '
+    source "'"$SCRIPT"'"
+    pct_file_checksum "'"$TMP"'/nope"; echo
+    printf x >"'"$TMP"'/f"; a="$(pct_file_checksum "'"$TMP"'/f")"
+    printf x >"'"$TMP"'/f"; b="$(pct_file_checksum "'"$TMP"'/f")"
+    [ "$a" = "$b" ] && echo SAME
+  '
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"absent"* ]]
+  [[ "$output" == *"SAME"* ]]
+}
+
+@test "pct_apply_change restarts only when the file changed (real)" {
+  local rec="${TMP}/systemctl-calls" stub="${TMP}/systemctl"
+  cat >"$stub" <<EOS
+#!/usr/bin/env bash
+echo "\$*" >>"${rec}"
+EOS
+  chmod +x "$stub"
+  local f="${TMP}/conf"
+  printf 'a\n' >"$f"
+  run env -u PCT_DRY_RUN bash -c '
+    PCT_SYSTEMCTL="'"$stub"'"
+    source "'"$SCRIPT"'"
+    before="$(pct_file_checksum "'"$f"'")"
+    printf "b\n" >"'"$f"'"                                    # changed -> restart
+    pct_apply_change "'"$f"'" "$before" timekpr.service try-restart
+    after="$(pct_file_checksum "'"$f"'")"
+    pct_apply_change "'"$f"'" "$after" timekpr.service try-restart   # unchanged -> no-op
+  '
+  [ "$status" -eq 0 ]
+  # Exactly one restart was issued — for the real change, not for the no-op re-run.
+  [ -f "$rec" ]
+  [ "$(grep -c 'try-restart timekpr.service' "$rec")" -eq 1 ]
+}
+
 @test "installs the openssh-server package (the dashboard connects over SSH)" {
   plan --supervised-user alice
   [ "$status" -eq 0 ]

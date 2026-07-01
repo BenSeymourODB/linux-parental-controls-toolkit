@@ -49,6 +49,53 @@ dashboard, has a short TTL, and is single-use.
 > what `GET /install-client.sh` serves and what the release attaches. Edit the
 > modular sources — the bundle is a generated artifact, never committed.
 
+## Upgrading an already-enrolled client
+
+Re-running the installer is how a client-side change (for example, enabling
+the SSH server so the dashboard can reach the box) reaches a machine that was
+enrolled before the change existed. Every sub-step is idempotent and reconciles
+rather than re-bootstraps — and when a re-run changes a daemon's config
+(Timekpr-nExT's warning lead times, the e2guardian filter group), the baseline
+restarts or reloads that daemon so the change actually takes effect, while a
+no-op re-run leaves the running services untouched. But enrolment itself is
+**not** repeatable: the enrolment token is single-use, and the client's
+hostname is unique on the dashboard, so a second enrolment of the same host
+would otherwise fail. The orchestrator handles this two ways:
+
+- **`--skip-enrol` (recommended for upgrades).** Re-runs provision + baseline +
+  self-test only, and skips the enrolment exchange and its dependents
+  (authorizing the dashboard SSH key, persisting the per-client token). It needs
+  no token and contacts no dashboard, so the existing enrolment, token, and
+  authorized key are left untouched:
+
+  ```bash
+  sudo bash install-client.sh --skip-enrol --supervised-user alice
+  ```
+
+- **A plain re-run.** If you re-run the full flow (with a freshly minted token),
+  the orchestrator now **tolerates** the dashboard's "already enrolled" `409`:
+  it keeps the existing enrolment and continues to the self-test instead of
+  aborting. A genuinely bad or expired token still fails with a clear message
+  (mint a fresh one). Note the baseline step runs *before* enrolment, so the
+  client-side patch is applied either way.
+
+Two things re-running on the client does **not** do, and that you must handle
+separately:
+
+1. **Redeploy the dashboard for any server-side half of a change, and to update
+   the served bundle.** `GET /install-client.sh` serves the bundle baked into
+   the image at build time, so a client-side fix only reaches `curl`-based
+   installs after the dashboard image is rebuilt and redeployed. Server-side
+   behaviour (e.g. the live health prober) likewise only takes effect once the
+   dashboard runs the new code.
+2. **Confirm the dashboard's current public key is authorized.** Re-running with
+   `--skip-enrol` does not touch `~pct-agent/.ssh/authorized_keys` — only a real
+   enrolment does. If a client was enrolled before the dashboard had generated
+   its key (so it authorized none), the daemon being up is not enough; run the
+   self-test (it checks the key is present and locked down) and, if it is
+   missing, delete the client and re-enrol with a fresh token, or authorize the
+   dashboard's public key for `pct-agent` by hand.
+
 ## What the script does
 
 1. **Sanity checks** — confirm distro (parse `/etc/os-release`), confirm
