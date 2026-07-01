@@ -43,8 +43,10 @@ const EXPECTED_PLAYBOOKS = [
 
 /**
  * Parse `COPY <src...> <dest>` instructions, skipping `COPY --from=<stage>`
- * (those copy from a build stage, not the build context) and line
- * continuations. Returns `{ srcs, dest }` per instruction.
+ * (those copy from a build stage, not the build context). Returns
+ * `{ srcs, dest }` per instruction. Assumes single-line COPY instructions
+ * (no backslash continuations) — true of server/Dockerfile today; revisit
+ * this parser if a multi-line COPY is ever added.
  */
 function copyInstructions(): { srcs: string[]; dest: string }[] {
   return dockerfile
