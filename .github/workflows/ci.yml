@@ -228,7 +228,11 @@ jobs:
       - name: Build image (no push)
         run: |
           if [ -f server/Dockerfile ]; then
+            # Build context is the repo root (-f server/Dockerfile) so the
+            # runtime stage can COPY client/ansible/playbooks (#260). --load
+            # makes the image available to the daemon for the presence check.
             docker buildx build \
+              --load \
               --file server/Dockerfile \
               --cache-from type=gha \
               --cache-to type=gha,mode=max \
@@ -236,6 +240,26 @@ jobs:
               .
           else
             echo "server/Dockerfile not yet present — skipping Docker build"
+          fi
+
+      - name: Verify Phase-6 playbooks shipped in the image (#260)
+        run: |
+          if docker image inspect pct-dashboard:ci > /dev/null 2>&1; then
+            echo "Listing /app/ansible/playbooks inside the image:"
+            # Override the ENTRYPOINT: docker-entrypoint.sh boots the dashboard
+            # server (which never exits), so passing the check as CMD args would
+            # hang forever. --entrypoint sh runs the check directly; `timeout`
+            # is a belt-and-braces guard so this step can never stall the job.
+            timeout 60 docker run --rm --entrypoint sh pct-dashboard:ci -c '
+              set -e
+              ls -1R /app/ansible/playbooks
+              test -f /app/ansible/playbooks/activitywatch.yml
+              test -f /app/ansible/playbooks/apparmor-profiles.yml
+              test -f /app/ansible/playbooks/e2guardian-filtering.yml
+            '
+            echo "OK: Phase-6 playbooks present at PCT_ANSIBLE_PLAYBOOK_SRC."
+          else
+            echo "Image not built (Dockerfile absent) — skipping playbook presence check."
           fi
 
   pre-commit:

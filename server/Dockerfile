@@ -11,7 +11,10 @@
 # .github/workflows/license-guard.yml.
 #
 # Build context is the repo root (see .github/workflows/ci.yml → docker-build),
-# so both server/ and client/ are in scope.
+# so both server/ and client/ are in scope — the runtime stage COPYs the
+# server-orchestrated Ansible playbooks from client/ansible/playbooks/ (#260)
+# and client/install-client.sh. A conservative root .dockerignore keeps the
+# context lean.
 
 # ---------------------------------------------------------------------------
 # Stage 1: build the SvelteKit frontend (/admin + /app) to static assets.
@@ -86,6 +89,13 @@ COPY --from=builder /app/package.json ./package.json
 # Copied straight from the build context (not the builder stage, which only
 # carries the TypeScript sources it compiles).
 COPY server/drizzle ./drizzle
+
+# Server-orchestrated Ansible playbooks (#260). The first-run bootstrap
+# (#259) syncs these from PCT_ANSIBLE_PLAYBOOK_SRC (default
+# /app/ansible/playbooks) into the /data venv directory. These are our own
+# YAML — Ansible itself is never bundled (it installs into the /data venv),
+# so license-guard stays green.
+COPY client/ansible/playbooks /app/ansible/playbooks
 
 # Prerendered frontend (served at /admin and /app once the static mount
 # lands in Phase 2; carried in the image now so the asset path is settled).

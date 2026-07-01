@@ -34,10 +34,14 @@ jobs:
       - name: Build image (load into daemon for scanning)
         run: |
           if [ -f server/Dockerfile ]; then
+            # Build context is the repo root (-f server/Dockerfile); the
+            # runtime stage COPYs client/ansible/playbooks (#260). Those are
+            # our own YAML, so the GPL-binary scan below still finds nothing.
             docker buildx build \
               --load \
               --tag pct-dashboard:license-check \
-              server/
+              -f server/Dockerfile \
+              .
           else
             echo "server/Dockerfile not yet present — skipping license guard"
             exit 0

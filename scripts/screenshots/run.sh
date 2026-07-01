@@ -43,8 +43,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "[run] building dashboard image from ./server"
-docker build -t "${APP_IMAGE}" "${REPO_ROOT}/server"
+# Build context is the repo root (with -f server/Dockerfile) so the runtime
+# stage can COPY the server-orchestrated Ansible playbooks (#260).
+echo "[run] building dashboard image (root context, -f server/Dockerfile)"
+docker build -t "${APP_IMAGE}" -f "${REPO_ROOT}/server/Dockerfile" "${REPO_ROOT}"
 
 echo "[run] ensuring Playwright image is present (${PW_IMAGE})"
 docker image inspect "${PW_IMAGE}" >/dev/null 2>&1 || docker pull "${PW_IMAGE}"

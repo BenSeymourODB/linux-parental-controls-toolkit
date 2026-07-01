@@ -58,7 +58,13 @@ should never fail in CI for code developed locally.
 - Skips gracefully until the Ansible phase (Phase 6) lands.
 
 **`docker-build`** — Image build verification
-- Builds the `server/Dockerfile` image without pushing.
+- Builds the `server/Dockerfile` image without pushing. The build context is
+  the **repo root** (`-f server/Dockerfile .`) so the runtime stage can `COPY`
+  the server-orchestrated Ansible playbooks from `client/ansible/playbooks/`,
+  which sit outside `server/` (#260).
+- After the build, asserts the playbooks shipped in the image
+  (`docker run … test -f /app/ansible/playbooks/activitywatch.yml`) so the
+  first-run sync has a real source.
 - Uses GitHub Actions cache (`type=gha`) to keep the build fast.
 - Failure here means the image is broken even if all tests pass — keep it
   in CI alongside the test job, not only in the release workflow.
