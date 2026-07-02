@@ -320,6 +320,38 @@ describe("BudgetsView", () => {
     expect(within(inheritedRow as HTMLElement).getByText("30m")).toBeInTheDocument();
   });
 
+  it("renders both rows when two group budgets share one slot (no key collision)", async () => {
+    listUserGroups.mockResolvedValue([
+      { id: 3, name: "Kids", createdAt: "2026-01-01T00:00:00.000Z" },
+    ] as UserGroupResponse[]);
+    listBudgets.mockResolvedValue([]);
+    // gatherUserBudgets preserves within-group duplicates for the same
+    // (scope, window, target) slot; the view must key them uniquely.
+    listResolvedBudgets.mockResolvedValue([
+      {
+        scope: "activity",
+        targetId: 10,
+        window: "daily",
+        secondsAllowed: 1800,
+        source: { kind: "group", groupId: 3 },
+      },
+      {
+        scope: "activity",
+        targetId: 10,
+        window: "daily",
+        secondsAllowed: 3600,
+        source: { kind: "group", groupId: 3 },
+      },
+    ]);
+
+    render(BudgetsView);
+
+    // Both inherited rows render (30m and 1h), keyed distinctly.
+    expect(await screen.findAllByText("Inherited · Kids")).toHaveLength(2);
+    expect(screen.getByText("30m")).toBeInTheDocument();
+    expect(screen.getByText("1h")).toBeInTheDocument();
+  });
+
   it("re-checks inheritance for the user after deleting an own budget", async () => {
     listUserGroups.mockResolvedValue([
       { id: 3, name: "Kids", createdAt: "2026-01-01T00:00:00.000Z" },

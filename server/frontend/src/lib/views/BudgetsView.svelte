@@ -178,9 +178,13 @@
       userId: b.userId,
       budget: b,
     }));
-    const inh = inherited.map((row) => ({
+    const inh = inherited.map((row, index) => ({
       kind: "inherited" as const,
-      key: `inherited-${row.userId}-${row.slot.scope}-${row.slot.window}-${row.slot.targetId ?? "null"}`,
+      // Index-qualified so the key is unique even if `gatherUserBudgets` emits
+      // two group budgets sharing one (scope, window, target) slot — within a
+      // single group those duplicates are preserved (summed downstream), and a
+      // slot-only key would collide in the `{#each}`.
+      key: `inherited-${index}-${row.userId}-${row.slot.scope}-${row.slot.window}-${row.slot.targetId ?? "null"}`,
       userId: row.userId,
       groupId: row.groupId,
       slot: row.slot,
