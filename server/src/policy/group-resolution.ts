@@ -60,40 +60,47 @@ export interface GatheredScheduleRule extends ScheduleRule {
   readonly source: RuleSource;
 }
 
+/** Copy the {@link ScheduleRule} subset off any own-rule row (Drizzle row or proposed DTO). */
+function toScheduleRule(rule: ScheduleRule): ScheduleRule {
+  return {
+    id: rule.id,
+    ordinal: rule.ordinal,
+    targetKind: rule.targetKind,
+    targetId: rule.targetId,
+    recurrenceDays: rule.recurrenceDays,
+    recurrenceStartMinute: rule.recurrenceStartMinute,
+    recurrenceEndMinute: rule.recurrenceEndMinute,
+    effectiveFrom: rule.effectiveFrom,
+    effectiveTo: rule.effectiveTo,
+    action: rule.action,
+  };
+}
+
 /**
- * The user's effective schedule rule list — own rules first (they win), then
- * each group's rules (groups ascending by id), re-sequenced to dense ordinals
- * so the merge order is authoritative. See the file header for the full
- * precedence contract.
+ * Merge an **explicit** own-rule list with the user's inherited group schedules
+ * — own rules first (they win), then each group's rules (groups ascending by
+ * id), re-sequenced to dense ordinals so the merge order is authoritative. See
+ * the file header for the full precedence contract.
+ *
+ * The own rules are passed in rather than read here so the same composition
+ * serves both the persisted case ({@link gatherUserScheduleRules}) and the
+ * save-and-push preview, which merges a *proposed* own-rule set against the
+ * persisted group layer the push will re-merge (#362).
  */
-export function gatherUserScheduleRules(db: PolicyDb, userId: number): GatheredScheduleRule[] {
-  const own: GatheredScheduleRule[] = listUserSchedules(db, userId).map((row) => ({
-    id: row.id,
-    ordinal: row.ordinal,
-    targetKind: row.targetKind,
-    targetId: row.targetId,
-    recurrenceDays: row.recurrenceDays,
-    recurrenceStartMinute: row.recurrenceStartMinute,
-    recurrenceEndMinute: row.recurrenceEndMinute,
-    effectiveFrom: row.effectiveFrom,
-    effectiveTo: row.effectiveTo,
-    action: row.action,
+export function mergeScheduleRulesWithGroups(
+  db: PolicyDb,
+  userId: number,
+  ownRules: readonly ScheduleRule[],
+): GatheredScheduleRule[] {
+  const own: GatheredScheduleRule[] = ownRules.map((rule) => ({
+    ...toScheduleRule(rule),
     source: { kind: "user" },
   }));
 
   // `listUserGroupsForUser` already returns groups ascending by id.
   const inherited: GatheredScheduleRule[] = listUserGroupsForUser(db, userId).flatMap((group) =>
     listGroupSchedules(db, group.id).map((row) => ({
-      id: row.id,
-      ordinal: row.ordinal,
-      targetKind: row.targetKind,
-      targetId: row.targetId,
-      recurrenceDays: row.recurrenceDays,
-      recurrenceStartMinute: row.recurrenceStartMinute,
-      recurrenceEndMinute: row.recurrenceEndMinute,
-      effectiveFrom: row.effectiveFrom,
-      effectiveTo: row.effectiveTo,
-      action: row.action,
+      ...toScheduleRule(row),
       source: { kind: "group", groupId: group.id },
     })),
   );
@@ -101,6 +108,17 @@ export function gatherUserScheduleRules(db: PolicyDb, userId: number): GatheredS
   // Re-sequence dense ordinals over the user-first merge so `byOrdinal`'s id
   // tiebreak (ids collide across the two tables) can never reorder the result.
   return [...own, ...inherited].map((rule, index) => ({ ...rule, ordinal: index }));
+}
+
+/**
+ * The user's effective schedule rule list — their persisted own rules merged
+ * with inherited group rules via {@link mergeScheduleRulesWithGroups}. The
+ * single entry point every enforcement and display surface reads so the push,
+ * the force-close sweep, the preview, and `/api/.../effective` can't drift
+ * (#362).
+ */
+export function gatherUserScheduleRules(db: PolicyDb, userId: number): GatheredScheduleRule[] {
+  return mergeScheduleRulesWithGroups(db, userId, listUserSchedules(db, userId));
 }
 
 /**
@@ -124,11 +142,12 @@ function budgetSlotKey(budget: BudgetInput): string {
 }
 
 /**
- * The user's effective **budget baseline** — own budgets first (they win), then
- * each group's budgets (groups ascending by id), with **full-replace** override
- * per slot (#134, `docs/adr/0008-group-targeted-budgets.md`):
+ * Merge an **explicit** own-budget list with the user's inherited group budgets
+ * — own budgets first (they win), then each group's budgets (groups ascending
+ * by id), with **full-replace** override per slot (#134,
+ * `docs/adr/0008-group-targeted-budgets.md`):
  *
- * 1. all of the user's own budgets are included, and their slots are marked
+ * 1. all of the passed-in own budgets are included, and their slots are marked
  *    covered;
  * 2. then, for each group the user belongs to (ascending group `id`), only that
  *    group's budgets whose slot is **not yet covered** are inherited — a slot is
@@ -142,12 +161,21 @@ function budgetSlotKey(budget: BudgetInput): string {
  * user's own duplicate rows. The result is a plain `BudgetInput[]` (each tagged
  * with its {@link RuleSource}) that drops straight into
  * {@link import("./resolve.js").effectivePolicy}.
+ *
+ * The own budgets are passed in rather than read here so the same composition
+ * serves both the persisted case ({@link gatherUserBudgets}) and the
+ * save-and-push preview, which merges a *proposed* own-budget set against the
+ * persisted group layer the push will re-merge (#362).
  */
-export function gatherUserBudgets(db: PolicyDb, userId: number): GatheredBudget[] {
+export function mergeBudgetsWithGroups(
+  db: PolicyDb,
+  userId: number,
+  ownBudgets: readonly BudgetInput[],
+): GatheredBudget[] {
   const result: GatheredBudget[] = [];
   const covered = new Set<string>();
 
-  for (const row of listUserBudgets(db, userId)) {
+  for (const row of ownBudgets) {
     result.push({
       scope: row.scope,
       targetId: row.targetId,
@@ -180,4 +208,14 @@ export function gatherUserBudgets(db: PolicyDb, userId: number): GatheredBudget[
   }
 
   return result;
+}
+
+/**
+ * The user's effective budget baseline — their persisted own budgets merged
+ * with inherited group budgets via {@link mergeBudgetsWithGroups}. The single
+ * entry point every enforcement and display surface reads so the push, the
+ * force-close sweep, the preview, and `/api/.../effective` can't drift (#362).
+ */
+export function gatherUserBudgets(db: PolicyDb, userId: number): GatheredBudget[] {
+  return mergeBudgetsWithGroups(db, userId, listUserBudgets(db, userId));
 }
