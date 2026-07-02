@@ -291,7 +291,7 @@ export function startPeriodicReapply(options: PeriodicReapplyOptions): PeriodicR
         if (!reapplyPlatforms.has(client.platform)) {
           child.debug(
             { clientId: client.id, platform: client.platform },
-            "re-apply skipped: no re-apply runner for client platform",
+            "re-apply skipped: client platform not served by the Ansible re-apply runner",
           );
           continue;
         }

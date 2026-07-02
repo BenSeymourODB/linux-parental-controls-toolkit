@@ -391,7 +391,10 @@ describe("startPeriodicReapply", () => {
     expect(runner.runPlaybook).not.toHaveBeenCalled();
     expect(entries).toHaveLength(0);
     expect(
-      lines.find((l) => l.msg === "re-apply skipped: no re-apply runner for client platform"),
+      lines.find(
+        (l) =>
+          l.msg === "re-apply skipped: client platform not served by the Ansible re-apply runner",
+      ),
     ).toMatchObject({ component: REAPPLY_LOG_COMPONENT, clientId: 7, platform: "windows" });
   });
 
