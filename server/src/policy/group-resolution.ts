@@ -43,7 +43,7 @@ import {
   listUserSchedules,
 } from "./repository.js";
 import type { BudgetInput } from "./resolve.js";
-import type { ScheduleRule } from "./schedule-precedence.js";
+import { byOrdinal, type ScheduleRule } from "./schedule-precedence.js";
 
 /** Where a gathered rule came from: the user's own list, or an inherited group. */
 export type RuleSource =
@@ -61,7 +61,7 @@ export interface GatheredScheduleRule extends ScheduleRule {
 }
 
 /** Copy the {@link ScheduleRule} subset off any own-rule row (Drizzle row or proposed DTO). */
-function toScheduleRule(rule: ScheduleRule): ScheduleRule {
+function pickScheduleRuleFields(rule: ScheduleRule): ScheduleRule {
   return {
     id: rule.id,
     ordinal: rule.ordinal,
@@ -92,15 +92,19 @@ export function mergeScheduleRulesWithGroups(
   userId: number,
   ownRules: readonly ScheduleRule[],
 ): GatheredScheduleRule[] {
-  const own: GatheredScheduleRule[] = ownRules.map((rule) => ({
-    ...toScheduleRule(rule),
-    source: { kind: "user" },
-  }));
+  // Sort the own rules into evaluation order (ascending ordinal, then id) before
+  // the merge re-sequences them. The persisted path (`listUserSchedules`) is
+  // already sorted, but a caller passing proposed rows in an arbitrary order
+  // (the save-and-push preview) must resolve by `ordinal`, not array position —
+  // matching what the eventual save + reload will yield (#362).
+  const own: GatheredScheduleRule[] = byOrdinal(
+    ownRules.map((rule) => ({ ...pickScheduleRuleFields(rule), source: { kind: "user" } })),
+  );
 
   // `listUserGroupsForUser` already returns groups ascending by id.
   const inherited: GatheredScheduleRule[] = listUserGroupsForUser(db, userId).flatMap((group) =>
     listGroupSchedules(db, group.id).map((row) => ({
-      ...toScheduleRule(row),
+      ...pickScheduleRuleFields(row),
       source: { kind: "group", groupId: group.id },
     })),
   );
