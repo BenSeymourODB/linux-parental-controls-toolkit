@@ -73,10 +73,15 @@ function parseVersion(raw: string): ParsedVersion | null {
   const releasePart = sepIndex === -1 ? trimmed : trimmed.slice(0, sepIndex);
   const prereleasePart = sepIndex === -1 ? null : trimmed.slice(sepIndex + 1);
 
-  const release = releasePart.split(".").map((id) => Number(id));
-  if (release.length === 0 || release.some((n) => !Number.isInteger(n) || n < 0)) {
+  // Require each release identifier to be a plain non-negative decimal integer.
+  // `Number` alone would accept `3e2`/`0x0` and coerce `""`→0, admitting version
+  // strings this project never emits; a strict per-identifier check matches the
+  // "numeric-dotted" contract and returns `null` (→ `unknown`) for anything else.
+  const releaseIds = releasePart.split(".");
+  if (releaseIds.length === 0 || releaseIds.some((id) => !/^\d+$/.test(id))) {
     return null;
   }
+  const release = releaseIds.map((id) => Number(id));
 
   const prerelease =
     prereleasePart === null || prereleasePart === "" ? null : prereleasePart.split(".");

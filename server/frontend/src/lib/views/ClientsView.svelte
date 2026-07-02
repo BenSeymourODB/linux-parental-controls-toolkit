@@ -423,11 +423,11 @@
               <dd>
                 {#if h?.agentVersion}
                   {h.agentVersion}
-                  {#if h.serverVersion}
-                    <span class="muted small">· server {h.serverVersion}</span>
-                  {/if}
                 {:else}
                   <span class="muted">not reported</span>
+                {/if}
+                {#if h?.serverVersion}
+                  <span class="muted small">· server {h.serverVersion}</span>
                 {/if}
               </dd>
             </div>

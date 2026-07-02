@@ -46,6 +46,14 @@ describe("compareVersions", () => {
     expect(compareVersions("0.1.0", "")).toBeNull();
     expect(compareVersions("1.x.0", "1.0.0")).toBeNull();
   });
+
+  it("rejects non-decimal release identifiers rather than coercing them", () => {
+    // `Number("1.2.3e2")` would silently become 1.2.300; the strict parse refuses it.
+    expect(compareVersions("1.2.3e2", "1.2.3")).toBeNull();
+    expect(compareVersions("1.0.0x0", "1.0.0")).toBeNull();
+    // A trailing-dot empty identifier is not treated as 0.
+    expect(compareVersions("1.2.", "1.2.0")).toBeNull();
+  });
 });
 
 describe("classifyVersionStatus", () => {

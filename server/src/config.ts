@@ -171,8 +171,17 @@ const settingsSchema = z
      * each client's reported agent version without a drift verdict (there is
      * nothing authoritative to compare against). Used only for display/drift
      * classification — never for behaviour — so an absent value degrades safely.
+     *
+     * The `preprocess` maps an empty/whitespace-only value to `undefined` before
+     * validation: the `server/Dockerfile` sets `ENV PCT_SERVER_VERSION=` from an
+     * empty build arg on a plain `docker build` (no `--build-arg`), so the var is
+     * *present but empty* rather than unset. Without this, `.min(1)` would reject
+     * `""` and crash startup — the opposite of the "degrade safely" contract.
      */
-    serverVersion: z.string().min(1).optional(),
+    serverVersion: z.preprocess(
+      (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+      z.string().min(1).optional(),
+    ),
     /**
      * How many event-protocol versions below the server's own the handshake
      * still accepts (`PCT_PROTOCOL_COMPAT_WINDOW`, ADR 0007 §3). `1` is the

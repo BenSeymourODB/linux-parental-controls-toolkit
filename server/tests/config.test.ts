@@ -38,6 +38,13 @@ describe("loadSettings", () => {
       );
     });
 
+    it("treats an empty/whitespace PCT_SERVER_VERSION as unset (the no-build-arg image)", () => {
+      // `docker build` with no --build-arg sets ENV PCT_SERVER_VERSION="" — present
+      // but empty. It must degrade to "no verdict", not crash startup on .min(1).
+      expect(loadSettings({ PCT_SERVER_VERSION: "" }).serverVersion).toBeUndefined();
+      expect(loadSettings({ PCT_SERVER_VERSION: "   " }).serverVersion).toBeUndefined();
+    });
+
     it("coerces PCT_PROTOCOL_COMPAT_WINDOW and rejects non-positive / non-integer values", () => {
       expect(loadSettings({ PCT_PROTOCOL_COMPAT_WINDOW: "2" }).protocolCompatWindow).toBe(2);
       expect(() => loadSettings({ PCT_PROTOCOL_COMPAT_WINDOW: "0" })).toThrow(SettingsError);
