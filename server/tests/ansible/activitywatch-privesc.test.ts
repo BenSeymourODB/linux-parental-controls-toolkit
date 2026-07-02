@@ -87,15 +87,28 @@ function fileOrTemplateParams(task: PlaybookTask): z.infer<typeof moduleParamsSc
   return task["ansible.builtin.file"] ?? task["ansible.builtin.template"];
 }
 
+/** The `file`/`template` target path/dest, whichever is present. */
+function homeTarget(task: PlaybookTask): string {
+  const params = fileOrTemplateParams(task);
+  return params?.path ?? params?.dest ?? "";
+}
+
 /**
  * A task writes into a supervised user's home iff its `file`/`template` target
  * is derived from `getent_passwd[...]` — the child's real, writable home dir.
  */
 function writesIntoUserHome(task: PlaybookTask): boolean {
-  const params = fileOrTemplateParams(task);
-  if (params === undefined) return false;
-  const target = params.path ?? params.dest ?? "";
-  return target.includes("getent_passwd");
+  return fileOrTemplateParams(task) !== undefined && homeTarget(task).includes("getent_passwd");
+}
+
+/**
+ * The loop variable a home-write must drop to. The username is `item.0` when the
+ * task loops over `product(users, units)` (its target reads `getent_passwd[item.0]`)
+ * and plain `item` otherwise — so `become_user` must reference the *same* index,
+ * or it would drop to the wrong (or a malformed) principal.
+ */
+function expectedLoopVar(task: PlaybookTask): "item.0" | "item" {
+  return /getent_passwd\[\s*item\.0\s*\]/.test(homeTarget(task)) ? "item.0" : "item";
 }
 
 describe("activitywatch.yml — child→root symlink privesc guard (#351)", () => {
@@ -114,10 +127,15 @@ describe("activitywatch.yml — child→root symlink privesc guard (#351)", () =
         task.become_user,
         `task "${task.name ?? "<unnamed>"}" writes into a user home but is missing become_user`,
       ).toBeDefined();
-      // The loop var is the username: `{{ item }}` for the plain loops, or
-      // `{{ item.0 }}` for the product() loop. Either localises the write to
-      // the child, so a hostile symlink can only reach files they own.
-      expect(task.become_user).toMatch(/^\{\{\s*item(\.0)?\s*\}\}$/);
+      // Drop to the child — a hostile symlink can then only reach files they
+      // own. The `become_user` index must match the one the task's path uses
+      // (`item.0` for the product() loop, `item` otherwise): dropping to the
+      // wrong index would target the wrong principal or a malformed one.
+      const loopVar = expectedLoopVar(task);
+      expect(
+        task.become_user,
+        `task "${task.name ?? "<unnamed>"}" targets ${loopVar} but its become_user does not`,
+      ).toMatch(new RegExp(`^\\{\\{\\s*${loopVar.replace(".", "\\.")}\\s*\\}\\}$`));
     }
   });
 
