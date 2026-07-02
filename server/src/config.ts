@@ -16,6 +16,7 @@ import { z } from "zod";
 import { isValidTimeZone } from "./policy/budget-window.js";
 import { DEFAULT_RETENTION_DAYS, MAX_RETENTION_DAYS } from "./policy/retention.js";
 import { isValidCronPattern } from "./transport/activitywatch/telemetry.js";
+import { DEFAULT_COMPAT_WINDOW } from "./events/protocol.js";
 
 /** pino log levels, in increasing severity, plus `silent`. */
 const LOG_LEVELS = ["trace", "debug", "info", "warn", "error", "fatal", "silent"] as const;
@@ -162,6 +163,34 @@ const settingsSchema = z
     defaultTz: z.string().min(1).default("UTC").refine(isValidTimeZone, {
       message: "must be a valid IANA timezone (e.g. America/New_York)",
     }),
+    /**
+     * The dashboard's own release version (`PCT_SERVER_VERSION`, e.g.
+     * `0.1.0-alpha.5`), injected at image-build time from the release tag
+     * (`server/Dockerfile` build arg, set by `release.yml`). Optional: a local
+     * dev/test build leaves it unset, in which case the admin Clients page shows
+     * each client's reported agent version without a drift verdict (there is
+     * nothing authoritative to compare against). Used only for display/drift
+     * classification — never for behaviour — so an absent value degrades safely.
+     *
+     * The `preprocess` maps an empty/whitespace-only value to `undefined` before
+     * validation: the `server/Dockerfile` sets `ENV PCT_SERVER_VERSION=` from an
+     * empty build arg on a plain `docker build` (no `--build-arg`), so the var is
+     * *present but empty* rather than unset. Without this, `.min(1)` would reject
+     * `""` and crash startup — the opposite of the "degrade safely" contract.
+     */
+    serverVersion: z.preprocess(
+      (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+      z.string().min(1).optional(),
+    ),
+    /**
+     * How many event-protocol versions below the server's own the handshake
+     * still accepts (`PCT_PROTOCOL_COMPAT_WINDOW`, ADR 0007 §3). `1` is the
+     * historical N-1 window. This is the single source of truth for the window:
+     * it threads into {@link negotiate} via the event-stream route, so widening
+     * it both stops refusing older clients *and* moves the threshold that flags
+     * `update_required` on the Clients page. A positive integer.
+     */
+    protocolCompatWindow: z.coerce.number().int().positive().default(DEFAULT_COMPAT_WINDOW),
     /** Drives pino's level (see #11). */
     logLevel: z.enum(LOG_LEVELS).default("info"),
     /**
@@ -437,6 +466,8 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
     databaseUrl: env.DATABASE_URL,
     frontendRoot: env.PCT_FRONTEND_ROOT,
     defaultTz: env.PCT_DEFAULT_TZ,
+    serverVersion: env.PCT_SERVER_VERSION,
+    protocolCompatWindow: env.PCT_PROTOCOL_COMPAT_WINDOW,
     logLevel: env.PCT_LOG_LEVEL,
     logPretty: env.PCT_LOG_PRETTY,
     trustProxy: env.PCT_TRUST_PROXY,

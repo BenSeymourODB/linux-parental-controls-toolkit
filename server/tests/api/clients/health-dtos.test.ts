@@ -70,13 +70,17 @@ describe("health DTO contract", () => {
       enrolledAt: "2026-06-01T00:00:00.000Z",
       probedAt: "2026-06-19T12:00:00.000Z",
       updateRequired: false,
+      agentVersion: "0.1.0-alpha.5",
+      versionsReportedAt: "2026-06-19T12:00:00.000Z",
+      serverVersion: "0.1.0-alpha.5",
+      versionStatus: "up_to_date",
       components: [{ component: "timekpr-next", status: "ok", detail: "active" }],
       queue: { pending: 1, failed: 0, actions: [toQueuedActionSummary(row)] },
     });
     expect(parsed.success).toBe(true);
   });
 
-  it("allows null lastSeen / probedAt (never-seen, un-probed client)", () => {
+  it("allows null lastSeen / probedAt / versions (never-seen, un-probed client)", () => {
     const parsed = clientHealthSchema.safeParse({
       clientId: 3,
       hostname: "alice-pc.local",
@@ -85,9 +89,32 @@ describe("health DTO contract", () => {
       enrolledAt: "2026-06-01T00:00:00.000Z",
       probedAt: null,
       updateRequired: true,
+      agentVersion: null,
+      versionsReportedAt: null,
+      serverVersion: null,
+      versionStatus: "unknown",
       components: [],
       queue: { pending: 0, failed: 0, actions: [] },
     });
     expect(parsed.success).toBe(true);
+  });
+
+  it("rejects a versionStatus outside the enum", () => {
+    const parsed = clientHealthSchema.safeParse({
+      clientId: 3,
+      hostname: "alice-pc.local",
+      reachability: "unknown",
+      lastSeen: null,
+      enrolledAt: "2026-06-01T00:00:00.000Z",
+      probedAt: null,
+      updateRequired: false,
+      agentVersion: null,
+      versionsReportedAt: null,
+      serverVersion: null,
+      versionStatus: "ancient",
+      components: [],
+      queue: { pending: 0, failed: 0, actions: [] },
+    });
+    expect(parsed.success).toBe(false);
   });
 });

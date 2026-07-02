@@ -71,6 +71,10 @@ function health(overrides: Partial<ClientHealthResponse> = {}): ClientHealthResp
     enrolledAt: "2026-06-01T00:00:00.000Z",
     probedAt: "2026-06-20T10:00:00.000Z",
     updateRequired: false,
+    agentVersion: "0.1.0-alpha.5",
+    versionsReportedAt: "2026-06-20T10:00:00.000Z",
+    serverVersion: "0.1.0-alpha.5",
+    versionStatus: "up_to_date",
     components: [{ component: "timekpr-next", status: "ok", detail: "active" }],
     queue: { pending: 0, failed: 0, actions: [] },
     ...overrides,
@@ -161,6 +165,44 @@ describe("ClientsView health list + queue", () => {
     render(ClientsView);
 
     expect(await screen.findByText("No clients yet. Enrol one below.")).toBeInTheDocument();
+  });
+
+  it("badges version drift and shows the reported vs server version (#352)", async () => {
+    listClients.mockResolvedValue([client()]);
+    listClientHealth.mockResolvedValue([
+      health({ agentVersion: "0.1.0-alpha.4", serverVersion: "0.1.0-alpha.5", versionStatus: "outdated" }),
+    ]);
+
+    render(ClientsView);
+    await screen.findByText("mint-box");
+
+    expect(screen.getByText("update available")).toBeInTheDocument();
+    // The reported version and the server version both surface on the card.
+    expect(screen.getByText("0.1.0-alpha.4")).toBeInTheDocument();
+    expect(screen.getByText(/server 0\.1\.0-alpha\.5/)).toBeInTheDocument();
+  });
+
+  it("shows 'update required' when the handshake flagged the client (#352)", async () => {
+    listClients.mockResolvedValue([client()]);
+    listClientHealth.mockResolvedValue([health({ updateRequired: true, versionStatus: "update_required" })]);
+
+    render(ClientsView);
+    await screen.findByText("mint-box");
+
+    expect(screen.getByText("update required")).toBeInTheDocument();
+  });
+
+  it("shows 'version unknown' for a client that never reported one (#352)", async () => {
+    listClients.mockResolvedValue([client()]);
+    listClientHealth.mockResolvedValue([
+      health({ agentVersion: null, versionsReportedAt: null, versionStatus: "unknown" }),
+    ]);
+
+    render(ClientsView);
+    await screen.findByText("mint-box");
+
+    expect(screen.getByText("version unknown")).toBeInTheDocument();
+    expect(screen.getByText("not reported")).toBeInTheDocument();
   });
 });
 

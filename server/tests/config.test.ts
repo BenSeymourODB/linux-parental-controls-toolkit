@@ -27,6 +27,30 @@ describe("loadSettings", () => {
     expect(settings.reapply).toEqual({ cron: "0 * * * *", playbooks: [] });
     expect(settings.clientHealth).toEqual({ probeConcurrency: 4, probeDeadlineMs: 15000 });
     expect(settings.preMigrationBackup).toEqual({ enabled: true, retain: 5 });
+    expect(settings.serverVersion).toBeUndefined();
+    expect(settings.protocolCompatWindow).toBe(1);
+  });
+
+  describe("version drift settings (#352)", () => {
+    it("reads PCT_SERVER_VERSION verbatim", () => {
+      expect(loadSettings({ PCT_SERVER_VERSION: "0.1.0-alpha.5" }).serverVersion).toBe(
+        "0.1.0-alpha.5",
+      );
+    });
+
+    it("treats an empty/whitespace PCT_SERVER_VERSION as unset (the no-build-arg image)", () => {
+      // `docker build` with no --build-arg sets ENV PCT_SERVER_VERSION="" — present
+      // but empty. It must degrade to "no verdict", not crash startup on .min(1).
+      expect(loadSettings({ PCT_SERVER_VERSION: "" }).serverVersion).toBeUndefined();
+      expect(loadSettings({ PCT_SERVER_VERSION: "   " }).serverVersion).toBeUndefined();
+    });
+
+    it("coerces PCT_PROTOCOL_COMPAT_WINDOW and rejects non-positive / non-integer values", () => {
+      expect(loadSettings({ PCT_PROTOCOL_COMPAT_WINDOW: "2" }).protocolCompatWindow).toBe(2);
+      expect(() => loadSettings({ PCT_PROTOCOL_COMPAT_WINDOW: "0" })).toThrow(SettingsError);
+      expect(() => loadSettings({ PCT_PROTOCOL_COMPAT_WINDOW: "-1" })).toThrow(SettingsError);
+      expect(() => loadSettings({ PCT_PROTOCOL_COMPAT_WINDOW: "1.5" })).toThrow(SettingsError);
+    });
   });
 
   describe("pre-migration backup (#166)", () => {

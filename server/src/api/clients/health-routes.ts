@@ -44,6 +44,13 @@ export interface ClientHealthRoutesDeps {
    * {@link listClientHealth}. Inert until `prober` is wired (#39).
    */
   probeDeadlineMs?: number;
+  /**
+   * The dashboard's own release version (#352), threaded from
+   * `settings.serverVersion`. Echoed into each health row and used to classify
+   * version drift; absent (dev/test build) → clients show a reported version
+   * without a drift verdict.
+   */
+  serverVersion?: string;
 }
 
 /**
@@ -64,6 +71,7 @@ export function registerClientHealthRoutes(
       listClientHealth(scope.db, deps.prober, {
         concurrency: deps.probeConcurrency,
         deadlineMs: deps.probeDeadlineMs,
+        serverVersion: deps.serverVersion ?? null,
       }),
   );
 
@@ -71,7 +79,12 @@ export function registerClientHealthRoutes(
     "/clients/:id/health",
     { ...guard, schema: { params: idParamsSchema } },
     async (request): Promise<ClientHealthResponse> => {
-      const health = await getClientHealth(scope.db, request.params.id, deps.prober);
+      const health = await getClientHealth(
+        scope.db,
+        request.params.id,
+        deps.prober,
+        deps.serverVersion ?? null,
+      );
       if (health === undefined) {
         throw new ApiError(404, "not_found", `Client ${request.params.id} not found`);
       }

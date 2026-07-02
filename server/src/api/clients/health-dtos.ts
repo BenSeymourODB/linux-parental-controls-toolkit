@@ -21,6 +21,7 @@ import {
   componentHealthStatusValues,
   clientReachabilityValues,
 } from "../../transport/health/index.js";
+import { clientVersionStatusValues } from "./version-status.js";
 
 /** Health of one supervised component on a client. */
 export const componentHealthSchema = z.object({
@@ -72,6 +73,24 @@ export const clientHealthSchema = z.object({
    * client needs a `pct-client` agent update before it can reconnect.
    */
   updateRequired: z.boolean(),
+  /** The agent version the client last reported (enrol or handshake), or null (#164). */
+  agentVersion: z.string().nullable(),
+  /** When that version was last reported (ISO), or null if never (#164). */
+  versionsReportedAt: z.string().nullable(),
+  /**
+   * The dashboard's own release version, or null when the build didn't stamp
+   * one (dev/test). Echoed per row so the card can show "client X vs server Y"
+   * and the admin has one place to read the server version (#352).
+   */
+  serverVersion: z.string().nullable(),
+  /**
+   * The version-drift verdict the card badges on (#352): `update_required` (the
+   * protocol handshake refused it), `outdated` (behind the server), `up_to_date`
+   * (equal or newer), or `unknown` (nothing to compare). Computed server-side
+   * from {@link updateRequired} + agent/server versions so the frontend never
+   * reimplements the comparison.
+   */
+  versionStatus: z.enum(clientVersionStatusValues),
   components: z.array(componentHealthSchema),
   queue: clientQueueSchema,
 });

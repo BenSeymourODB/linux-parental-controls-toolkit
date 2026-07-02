@@ -128,6 +128,59 @@ describe("getClientHealth", () => {
   });
 });
 
+describe("version drift (#352)", () => {
+  it("reports the reported agent version + reported-at, echoing the server version", async () => {
+    repo.recordClientAgentVersion(db, client.id, "0.1.0-alpha.4", PROBE_AT);
+
+    const health = await getClientHealth(db, client.id, undefined, "0.1.0-alpha.5");
+    expect(health?.agentVersion).toBe("0.1.0-alpha.4");
+    expect(health?.versionsReportedAt).toBe(PROBE_AT.toISOString());
+    expect(health?.serverVersion).toBe("0.1.0-alpha.5");
+    // Behind the server but still protocol-compatible → amber "outdated".
+    expect(health?.versionStatus).toBe("outdated");
+  });
+
+  it("is up_to_date when the reported version matches the server", async () => {
+    repo.recordClientAgentVersion(db, client.id, "0.1.0-alpha.5", PROBE_AT);
+    const health = await getClientHealth(db, client.id, undefined, "0.1.0-alpha.5");
+    expect(health?.versionStatus).toBe("up_to_date");
+  });
+
+  it("is update_required when the handshake flagged the client, over any version", async () => {
+    repo.recordClientAgentVersion(db, client.id, "0.1.0-alpha.5", PROBE_AT);
+    repo.setClientUpdateRequired(db, client.id, true);
+    const health = await getClientHealth(db, client.id, undefined, "0.1.0-alpha.5");
+    expect(health?.updateRequired).toBe(true);
+    expect(health?.versionStatus).toBe("update_required");
+  });
+
+  it("is unknown when the client never reported a version (never-connected case)", async () => {
+    const health = await getClientHealth(db, client.id, undefined, "0.1.0-alpha.5");
+    expect(health?.agentVersion).toBeNull();
+    expect(health?.versionsReportedAt).toBeNull();
+    expect(health?.versionStatus).toBe("unknown");
+  });
+
+  it("is unknown (no verdict) when the build stamped no server version", async () => {
+    repo.recordClientAgentVersion(db, client.id, "0.1.0-alpha.4", PROBE_AT);
+    // No serverVersion argument → the dev/test default (null).
+    const health = await getClientHealth(db, client.id);
+    expect(health?.serverVersion).toBeNull();
+    expect(health?.versionStatus).toBe("unknown");
+  });
+
+  it("classifies each client in the list against the server version", async () => {
+    repo.recordClientAgentVersion(db, client.id, "0.1.0-alpha.4", PROBE_AT);
+    const ahead = repo.createClient(db, { hostname: "bob-pc.local", sshUser: "pct-agent" });
+    repo.recordClientAgentVersion(db, ahead.id, "0.2.0", PROBE_AT);
+
+    const list = await listClientHealth(db, undefined, { serverVersion: "0.1.0-alpha.5" });
+    const byId = new Map(list.map((h) => [h.clientId, h]));
+    expect(byId.get(client.id)?.versionStatus).toBe("outdated");
+    expect(byId.get(ahead.id)?.versionStatus).toBe("up_to_date");
+  });
+});
+
 describe("listClientHealth", () => {
   it("returns one record per client, ascending by id, probing each", async () => {
     const second = repo.createClient(db, { hostname: "bob-pc.local", sshUser: "pct-agent" });
