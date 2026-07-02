@@ -74,6 +74,12 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Stamp the release version into the image so the dashboard knows its
+          # own version at runtime (config.ts → the Clients-page drift badge,
+          # #352). metadata-action's `version` output is the tag without the
+          # leading `v` (e.g. 0.1.0-alpha.5).
+          build-args: |
+            PCT_SERVER_VERSION=${{ steps.meta.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

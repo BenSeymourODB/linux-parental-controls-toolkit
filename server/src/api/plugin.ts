@@ -113,7 +113,12 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (scope, opt
   // Event stream (#100): GET /api/events/stream WebSocket, per-client bearer
   // auth. Registered against the shared event hub so producers publish onto
   // the same registry. Async because it registers @fastify/websocket.
-  await registerEventStream(scope, opts.eventHub, opts.eventStream ?? {});
+  // The compatibility window is threaded from settings (the single source of
+  // truth, #352) unless a test injects a full `eventStream` override.
+  await registerEventStream(scope, opts.eventHub, {
+    compatWindow: opts.settings.protocolCompatWindow,
+    ...(opts.eventStream ?? {}),
+  });
   // Client health/status (#81): the read-only Clients-page reads. The live SSH
   // prober is injected from buildApp when the SSH-key bootstrap (#39) has run
   // and the policy-push transport is live; without it (dev/CI/tests, or a
@@ -124,6 +129,9 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (scope, opt
     ...(opts.prober !== undefined ? { prober: opts.prober } : {}),
     probeConcurrency: opts.settings.clientHealth.probeConcurrency,
     probeDeadlineMs: opts.settings.clientHealth.probeDeadlineMs,
+    ...(opts.settings.serverVersion !== undefined
+      ? { serverVersion: opts.settings.serverVersion }
+      : {}),
   });
   // Transport audit log (#85): admin-only read of every command issued to a client.
   registerAuditRoutes(scope);

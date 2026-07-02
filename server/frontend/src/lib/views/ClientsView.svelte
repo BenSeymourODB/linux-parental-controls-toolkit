@@ -293,6 +293,36 @@
     return Number.isNaN(date.getTime()) ? iso : date.toLocaleString();
   }
 
+  /** Badge label + pill class + hover detail for a client's version-drift verdict (#352). */
+  function versionStatusMeta(status: ClientHealthResponse["versionStatus"] | undefined): {
+    label: string;
+    cls: string;
+    title: string;
+  } {
+    switch (status) {
+      case "up_to_date":
+        return { label: "up to date", cls: "ok", title: "Reported agent version matches or is newer than the server." };
+      case "outdated":
+        return {
+          label: "update available",
+          cls: "warn",
+          title: "This client's reported agent version is behind the server. It still works; re-run the installer to update it.",
+        };
+      case "update_required":
+        return {
+          label: "update required",
+          cls: "bad",
+          title: "The event-stream handshake refused this client for running an out-of-window protocol (ADR 0007). It must be updated before it can reconnect.",
+        };
+      default:
+        return {
+          label: "version unknown",
+          cls: "unknown",
+          title: "No version to compare — the client hasn't reported one, the server build stamped none, or the version string couldn't be parsed.",
+        };
+    }
+  }
+
   function reachabilityClass(reachability: ClientHealthResponse["reachability"]): string {
     if (reachability === "online") {
       return "ok";
@@ -343,6 +373,7 @@
       {#each merged as entry (entry.client.id)}
         {@const client = entry.client}
         {@const h = entry.health}
+        {@const vsm = versionStatusMeta(h?.versionStatus)}
         <article class="card">
           <div class="card-top">
             <div>
@@ -367,9 +398,12 @@
                 {formatDateTime(client.enrolledAt)}
               </div>
             </div>
-            <span class="pill {reachabilityClass(h?.reachability ?? 'unknown')}">
-              {h?.reachability ?? "unknown"}
-            </span>
+            <div class="status-pills">
+              <span class="pill {reachabilityClass(h?.reachability ?? 'unknown')}">
+                {h?.reachability ?? "unknown"}
+              </span>
+              <span class="pill {vsm.cls}" title={vsm.title}>{vsm.label}</span>
+            </div>
           </div>
 
           <dl class="kv">
@@ -384,6 +418,29 @@
               </dd>
             </div>
             <div><dt>Last seen</dt><dd>{formatDateTime(client.lastSeen)}</dd></div>
+            <div>
+              <dt>Agent version</dt>
+              <dd>
+                {#if h?.agentVersion}
+                  {h.agentVersion}
+                  {#if h.serverVersion}
+                    <span class="muted small">· server {h.serverVersion}</span>
+                  {/if}
+                {:else}
+                  <span class="muted">not reported</span>
+                {/if}
+              </dd>
+            </div>
+            <div>
+              <dt>Version reported</dt>
+              <dd>
+                {#if h?.versionsReportedAt}
+                  {formatDateTime(h.versionsReportedAt)}
+                {:else}
+                  <span class="muted">—</span>
+                {/if}
+              </dd>
+            </div>
             <div>
               <dt>Last probe</dt>
               <dd>
@@ -692,6 +749,12 @@
     gap: 0.4rem;
     border-top: 1px solid #f3f4f6;
     padding-top: 0.5rem;
+  }
+  .status-pills {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0.3rem;
   }
   .pill {
     display: inline-flex;

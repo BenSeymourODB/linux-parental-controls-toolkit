@@ -80,6 +80,14 @@ RUN apt-get update \
 ENV NODE_ENV=production
 WORKDIR /app
 
+# The dashboard's own release version, stamped in at build time from the release
+# tag (release.yml passes --build-arg PCT_SERVER_VERSION=<semver>). Read at
+# runtime (config.ts) so the admin Clients page can flag clients whose reported
+# agent version has drifted from the server (#352). Empty on a plain `docker
+# build` (dev/local): the page then shows reported versions without a verdict.
+ARG PCT_SERVER_VERSION=""
+ENV PCT_SERVER_VERSION=${PCT_SERVER_VERSION}
+
 # Production dependencies and compiled backend.
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist

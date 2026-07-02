@@ -45,7 +45,7 @@ import {
 import { authenticateEventClient } from "./auth.js";
 import type { EventHub } from "./hub.js";
 import { DEFAULT_HEARTBEAT_INTERVAL_MS, startHeartbeat } from "./heartbeat.js";
-import { EVENT_PROTOCOL, negotiate, parseHello } from "./protocol.js";
+import { DEFAULT_COMPAT_WINDOW, EVENT_PROTOCOL, negotiate, parseHello } from "./protocol.js";
 
 /** WebSocket close code for a refused/abandoned handshake (RFC 6455 "policy violation"). */
 const HANDSHAKE_CLOSE_CODE = 1008;
@@ -83,11 +83,19 @@ export interface EventStreamOptions {
   helloTimeoutMs?: number;
   /**
    * The server's event-protocol version to negotiate against. Defaults to
-   * {@link EVENT_PROTOCOL}; overridable so a test can exercise the N-1 window's
+   * {@link EVENT_PROTOCOL}; overridable so a test can exercise the window's
    * refusal branches (which, at the shipped `EVENT_PROTOCOL`, no valid client
    * `hello` can reach).
    */
   serverProtocol?: number;
+  /**
+   * How many protocol versions below {@link serverProtocol} the handshake still
+   * accepts (ADR 0007 §3). Defaults to {@link DEFAULT_COMPAT_WINDOW}; production
+   * threads it from `PCT_PROTOCOL_COMPAT_WINDOW` (see `config.ts` /
+   * `api/plugin.ts`) so the refusal that flags `update_required` and the admin
+   * Clients page share one configured window.
+   */
+  compatWindow?: number;
 }
 
 /**
@@ -104,6 +112,7 @@ export async function registerEventStream(
   const heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
   const helloTimeoutMs = options.helloTimeoutMs ?? DEFAULT_HELLO_TIMEOUT_MS;
   const serverProtocol = options.serverProtocol ?? EVENT_PROTOCOL;
+  const compatWindow = options.compatWindow ?? DEFAULT_COMPAT_WINDOW;
 
   await scope.register(async (events) => {
     await events.register(fastifyWebsocket);
@@ -144,7 +153,7 @@ export async function registerEventStream(
         const helloTimer = setTimeout(() => {
           if (settled) return;
           settled = true;
-          const refusal = negotiate(null, serverProtocol);
+          const refusal = negotiate(null, serverProtocol, undefined, compatWindow);
           socket.send(JSON.stringify(refusal.frame));
           log.warn(
             { event: "event_stream_refused", clientId, reason: "hello_timeout" },
@@ -162,7 +171,7 @@ export async function registerEventStream(
           settled = true;
           clearTimeout(helloTimer);
           const hello = parseHello(String(data));
-          const result = negotiate(hello, serverProtocol);
+          const result = negotiate(hello, serverProtocol, undefined, compatWindow);
 
           if (result.kind === "refuse") {
             socket.send(JSON.stringify(result.frame));

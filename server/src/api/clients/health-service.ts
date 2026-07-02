@@ -32,6 +32,7 @@ import {
   type ClientHealthResponse,
   type ComponentHealthDto,
 } from "./health-dtos.js";
+import { classifyVersionStatus } from "./version-status.js";
 
 /** Detail shown for every component when no live prober is configured (pre-#39). */
 const PROBE_UNCONFIGURED_DETAIL = "SSH probing not yet configured (#39)";
@@ -77,6 +78,7 @@ function assemble(
   db: PolicyDb,
   client: ClientRow,
   probe: ClientProbeResult | undefined,
+  serverVersion: string | null,
   unknownDetail = PROBE_UNCONFIGURED_DETAIL,
 ): ClientHealthResponse {
   const queueRows = listForClient(db, client.id);
@@ -97,6 +99,15 @@ function assemble(
     enrolledAt: client.enrolledAt.toISOString(),
     probedAt: probe === undefined ? null : probe.at.toISOString(),
     updateRequired: client.updateRequired,
+    agentVersion: client.agentVersion,
+    versionsReportedAt:
+      client.versionsReportedAt === null ? null : client.versionsReportedAt.toISOString(),
+    serverVersion,
+    versionStatus: classifyVersionStatus({
+      clientVersion: client.agentVersion,
+      serverVersion,
+      updateRequired: client.updateRequired,
+    }),
     components,
     queue: {
       pending: queueRows.filter((row) => row.status === "pending").length,
@@ -114,11 +125,12 @@ export async function getClientHealth(
   db: PolicyDb,
   clientId: number,
   prober?: ClientProber,
+  serverVersion: string | null = null,
 ): Promise<ClientHealthResponse | undefined> {
   const client = repo.getClient(db, clientId);
   if (client === undefined) return undefined;
   const probe = prober === undefined ? undefined : await prober.probe(client);
-  return assemble(db, refreshLastSeen(db, client, probe), probe);
+  return assemble(db, refreshLastSeen(db, client, probe), probe, serverVersion);
 }
 
 /** Options bounding the live-probe fan-out of {@link listClientHealth} (#198). */
@@ -136,6 +148,12 @@ export interface ListClientHealthOptions {
   deadlineMs?: number | undefined;
   /** Test seam for the deadline timer; defaults to a real `setTimeout` timer. */
   deadlineFactory?: DeadlineFactory;
+  /**
+   * The dashboard's own version, echoed into each row and used to classify
+   * version drift (#352). `null` (the default) when the build stamped none — the
+   * card then reports each client's reported version without a drift verdict.
+   */
+  serverVersion?: string | null;
 }
 
 /** The settled outcome of racing one client's probe against the list deadline. */
@@ -161,6 +179,7 @@ async function probeClient(
   prober: ClientProber,
   client: ClientRow,
   deadlineReached: Promise<void> | undefined,
+  serverVersion: string | null,
 ): Promise<ClientHealthResponse> {
   const probed: Promise<ProbeOutcome> = prober.probe(client).then(
     (probe) => ({ kind: "ok", probe }),
@@ -171,11 +190,13 @@ async function probeClient(
       ? await probed
       : await Promise.race([probed, deadlineReached.then(() => ({ kind: "timeout" }) as const)]);
 
-  if (outcome.kind === "timeout") return assemble(db, client, undefined, PROBE_DEADLINE_DETAIL);
-  if (outcome.kind === "ok") {
-    return assemble(db, refreshLastSeen(db, client, outcome.probe), outcome.probe);
+  if (outcome.kind === "timeout") {
+    return assemble(db, client, undefined, serverVersion, PROBE_DEADLINE_DETAIL);
   }
-  return assemble(db, client, undefined, probeErrorDetail(outcome.error));
+  if (outcome.kind === "ok") {
+    return assemble(db, refreshLastSeen(db, client, outcome.probe), outcome.probe, serverVersion);
+  }
+  return assemble(db, client, undefined, serverVersion, probeErrorDetail(outcome.error));
 }
 
 /**
@@ -197,8 +218,11 @@ export async function listClientHealth(
   options: ListClientHealthOptions = {},
 ): Promise<ClientHealthResponse[]> {
   const clients = repo.listClients(db);
+  const serverVersion = options.serverVersion ?? null;
   if (prober === undefined) {
-    return clients.map((client) => assemble(db, client, undefined, PROBE_UNCONFIGURED_DETAIL));
+    return clients.map((client) =>
+      assemble(db, client, undefined, serverVersion, PROBE_UNCONFIGURED_DETAIL),
+    );
   }
 
   const concurrency = options.concurrency ?? DEFAULT_PROBE_CONCURRENCY;
@@ -207,7 +231,7 @@ export async function listClientHealth(
     deadlineMs > 0 ? (options.deadlineFactory ?? timerDeadline)(deadlineMs) : undefined;
   try {
     return await mapWithConcurrency(clients, concurrency, (client) =>
-      probeClient(db, prober, client, deadline?.reached),
+      probeClient(db, prober, client, deadline?.reached, serverVersion),
     );
   } finally {
     deadline?.cancel();

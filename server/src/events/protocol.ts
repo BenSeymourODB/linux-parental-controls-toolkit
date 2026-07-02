@@ -30,6 +30,16 @@ import { API_VERSION } from "../api/version.js";
 export const EVENT_PROTOCOL = 1;
 
 /**
+ * Default backward-compatibility window: how many protocol versions *below* the
+ * server's own the handshake still accepts (ADR 0007 §3). `1` is the historical
+ * N-1 window. Operators can widen it via `PCT_PROTOCOL_COMPAT_WINDOW`
+ * (`config.ts`), which threads through {@link negotiate} — the single source of
+ * truth for when a client is refused as `client_too_old` (and thereby flagged
+ * `update_required`, the admin-facing "must update" signal).
+ */
+export const DEFAULT_COMPAT_WINDOW = 1;
+
+/**
  * Client → server opening frame, sent first on every (re)connect (ADR 0007 §2).
  * `capabilities` is an order-independent, additively-extensible flag set naming
  * the optional frame types / enforcement primitives the client supports.
@@ -105,17 +115,22 @@ function refuse(reason: RefusalReason, message: string): NegotiationResult {
 }
 
 /**
- * Decide whether to accept a client `hello` and in which dialect, per the N-1
- * window (ADR 0007 §3), against the given server protocol (defaults to
- * {@link EVENT_PROTOCOL}; injectable for tests).
+ * Decide whether to accept a client `hello` and in which dialect, per the
+ * backward-compatibility window (ADR 0007 §3), against the given server protocol
+ * (defaults to {@link EVENT_PROTOCOL}; injectable for tests). `compatWindow` is
+ * how many versions below the server the window reaches (defaults to
+ * {@link DEFAULT_COMPAT_WINDOW}; the deployment sets it from
+ * `PCT_PROTOCOL_COMPAT_WINDOW`).
  *
  * - `hello` is `null`/unparseable → refuse `malformed_hello` (never assume a
  *   dialect).
  * - `eventProtocol === P` → accept, current dialect.
- * - `eventProtocol === P − 1` → accept, N-1 dialect (the server withholds frame
- *   types introduced by the bump to `P`; that withholding is the stream's job,
- *   this returns the agreed dialect integer).
- * - `eventProtocol < P − 1` → refuse `client_too_old` (→ `update_required`).
+ * - `P − compatWindow ≤ eventProtocol < P` → accept in the client's (older)
+ *   dialect (the server withholds frame types introduced by the newer bumps;
+ *   that withholding is the stream's job, this returns the agreed dialect
+ *   integer).
+ * - `eventProtocol < P − compatWindow` → refuse `client_too_old` (→
+ *   `update_required`).
  * - `eventProtocol > P` → refuse `server_too_old`.
  *
  * Total and pure: it never throws and performs no I/O.
@@ -124,27 +139,34 @@ export function negotiate(
   hello: HelloFrame | null,
   serverProtocol: number = EVENT_PROTOCOL,
   apiVersion: number = API_VERSION,
+  compatWindow: number = DEFAULT_COMPAT_WINDOW,
 ): NegotiationResult {
   if (hello === null) {
     return refuse("malformed_hello", "Missing or unparseable hello frame");
   }
 
+  // A window narrower than 1 would be meaningless (it could refuse a client
+  // speaking the server's own protocol); clamp defensively even though the
+  // config schema already enforces a positive integer.
+  const window = Math.max(1, Math.trunc(compatWindow));
+  const oldestAccepted = serverProtocol - window;
   const client = hello.eventProtocol;
-  if (client === serverProtocol || client === serverProtocol - 1) {
-    return {
-      kind: "accept",
-      frame: { type: "accept", eventProtocol: client, apiVersion },
-    };
-  }
+
   if (client > serverProtocol) {
     return refuse(
       "server_too_old",
       `Server speaks eventProtocol ${serverProtocol}; client requires ${client}. Upgrade the server.`,
     );
   }
+  if (client >= oldestAccepted) {
+    return {
+      kind: "accept",
+      frame: { type: "accept", eventProtocol: client, apiVersion },
+    };
+  }
   return refuse(
     "client_too_old",
-    `Client eventProtocol ${client} is older than the supported window (${serverProtocol - 1}–${serverProtocol}); update the client.`,
+    `Client eventProtocol ${client} is older than the supported window (${oldestAccepted}–${serverProtocol}); update the client.`,
   );
 }
 

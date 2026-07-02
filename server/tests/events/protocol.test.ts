@@ -85,6 +85,41 @@ describe("negotiate — N-1 window (ADR 0007 §3)", () => {
   });
 });
 
+describe("negotiate — configurable compatibility window (#352)", () => {
+  const P = 5;
+
+  it("widening the window accepts a client the default window would refuse", () => {
+    // P-2 is outside the default N-1 window...
+    expect(negotiate(hello(P - 2), P).kind).toBe("refuse");
+    // ...but accepted (in its own dialect) with a window of 2.
+    const result = negotiate(hello(P - 2), P, undefined, 2);
+    expect(result.kind).toBe("accept");
+    if (result.kind !== "accept") throw new Error("expected accept");
+    expect(result.frame.eventProtocol).toBe(P - 2);
+  });
+
+  it("still refuses a client just beyond the widened window as client_too_old", () => {
+    const result = negotiate(hello(P - 3), P, undefined, 2);
+    expect(result.kind).toBe("refuse");
+    if (result.kind !== "refuse") throw new Error("expected refuse");
+    expect(result.reason).toBe("client_too_old");
+    // The refusal message reports the widened floor (P - window).
+    expect(result.frame.error.message).toContain(`${P - 2}`);
+  });
+
+  it("a window below 1 is clamped so a client speaking P is never refused", () => {
+    const result = negotiate(hello(P), P, undefined, 0);
+    expect(result.kind).toBe("accept");
+  });
+
+  it("never accepts a client newer than the server, whatever the window", () => {
+    const result = negotiate(hello(P + 1), P, undefined, 5);
+    expect(result.kind).toBe("refuse");
+    if (result.kind !== "refuse") throw new Error("expected refuse");
+    expect(result.reason).toBe("server_too_old");
+  });
+});
+
 describe("parseHello", () => {
   it("parses a well-formed hello, defaulting capabilities to []", () => {
     const raw = JSON.stringify({ type: "hello", agentVersion: "2.0.0", eventProtocol: 3 });
