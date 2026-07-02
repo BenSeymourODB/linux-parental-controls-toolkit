@@ -16,6 +16,21 @@
  * bounded", `docs/client-install.md`). A determined root user defeating it is a
  * parent-child conversation, not a defect.
  *
+ * **Platform gate (#325).** The fleet is Linux today but need not be forever
+ * (`docs/windows-client-support.md` item 6; `Client.platform`, #229). Like the
+ * live policy-push path's platform seam (#232), the pass reconciles a client
+ * only if its {@link ReapplyTarget.platform} is one this Ansible re-apply runner
+ * **serves** ({@link DEFAULT_REAPPLY_PLATFORMS}, `linux` today). Selection is
+ * exact-match: a client on an unserved platform is **skipped, not coerced** onto
+ * the Linux playbooks. This is modelled as a served-*platforms* set rather than
+ * #232's per-platform runner registry because the re-apply path is a *single*
+ * Ansible reconciler (the playbooks are Linux Ansible YAML); a non-Linux client
+ * is reconciled by an entirely different mechanism, not a second Ansible runner,
+ * so the honest question here is "does this reconciler serve that platform" —
+ * and the answer for anything but Linux is "no, somebody else does". Since
+ * `Client.platform` is `NOT NULL DEFAULT 'linux'`, every real client today is
+ * served and behaviour is unchanged.
+ *
  * The {@link ClientLoader}, {@link ReachabilityProbe}, {@link AnsibleRunner},
  * and {@link AuditSink} are all **injected** — the runner execs
  * `ansible-playbook` out of the first-run venv (#39) and the playbooks
@@ -33,7 +48,7 @@ import { performance } from "node:perf_hooks";
 import { Cron } from "croner";
 import type { FastifyBaseLogger } from "fastify";
 
-import type { AuditOutcome } from "../../policy/enums.js";
+import type { AuditOutcome, Platform } from "../../policy/enums.js";
 import {
   AnsiblePlaybookFailedError,
   AnsibleUnreachableError,
@@ -54,6 +69,16 @@ export const REAPPLY_LOG_COMPONENT = "transport/reapply";
 
 /** The `reason` recorded on every re-apply audit entry (a stable query key). */
 export const REAPPLY_AUDIT_REASON = "periodic-reapply";
+
+/**
+ * The client platforms this Ansible re-apply reconciler serves (#325). A client
+ * whose {@link ReapplyTarget.platform} is not in this set is skipped — the
+ * Phase-6 playbooks are Linux Ansible YAML, so `linux` is the only served
+ * platform today. Injectable via {@link PeriodicReapplyOptions.reapplyPlatforms}
+ * for tests / a future non-Linux reconciler; the default keeps behaviour
+ * unchanged (every real client is `linux`).
+ */
+export const DEFAULT_REAPPLY_PLATFORMS: ReadonlySet<Platform> = new Set<Platform>(["linux"]);
 
 /** Default SSH port recorded in the audit target (clients carry no port column). */
 const DEFAULT_SSH_PORT = 22;
@@ -98,6 +123,12 @@ export interface PeriodicReapplyOptions {
   readonly backoff?: ReapplyBackoff;
   /** Clock seam for backoff scheduling; defaults to `Date.now`. */
   readonly now?: () => number;
+  /**
+   * The client platforms this reconciler serves (#325). A client whose
+   * `platform` is not in the set is skipped (not coerced onto the Linux
+   * playbooks). Defaults to {@link DEFAULT_REAPPLY_PLATFORMS} (`{ linux }`).
+   */
+  readonly reapplyPlatforms?: ReadonlySet<Platform>;
 }
 
 /** A running scheduler the caller can kick manually or stop on shutdown. */
@@ -172,6 +203,7 @@ export function startPeriodicReapply(options: PeriodicReapplyOptions): PeriodicR
   const pattern = options.pattern ?? DEFAULT_REAPPLY_PATTERN;
   const backoff = options.backoff ?? DEFAULT_REAPPLY_BACKOFF;
   const now = options.now ?? Date.now;
+  const reapplyPlatforms = options.reapplyPlatforms ?? DEFAULT_REAPPLY_PLATFORMS;
   const child = log.child({ component: REAPPLY_LOG_COMPONENT });
 
   /** Per-client failure/backoff state, keyed by client id. */
@@ -251,6 +283,18 @@ export function startPeriodicReapply(options: PeriodicReapplyOptions): PeriodicR
 
     for (const client of loadClients()) {
       try {
+        // Platform gate (#325): reconcile only clients this Ansible runner
+        // serves. An unserved platform (a `windows` client today) is skipped
+        // outright — never probed, reconciled, or backed off — rather than fed
+        // to the Linux playbooks. `debug`, not `warn` like #232's one-shot push:
+        // this is a periodic fleet sweep, so a per-tick warn would be log spam.
+        if (!reapplyPlatforms.has(client.platform)) {
+          child.debug(
+            { clientId: client.id, platform: client.platform },
+            "re-apply skipped: client platform not served by the Ansible re-apply runner",
+          );
+          continue;
+        }
         const state = backoffByClient.get(client.id);
         if (state !== undefined && now() < state.nextEligibleAt) {
           child.debug({ clientId: client.id }, "re-apply skipped: client in backoff");
