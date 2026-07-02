@@ -22,7 +22,12 @@ import { z } from "zod";
 import type { Settings } from "../../config.js";
 import { resolveEffectiveTz, localCalendarDate } from "../../policy/budget-window.js";
 import { scheduleActionSchema, scopeSchema } from "../../policy/enums.js";
-import { gatherUserBudgets, gatherUserScheduleRules } from "../../policy/group-resolution.js";
+import {
+  gatherUserBudgets,
+  gatherUserScheduleRules,
+  type GatheredBudget,
+} from "../../policy/group-resolution.js";
+import type { ResolvedBudgetResponse } from "./dtos.js";
 import * as repo from "../../policy/repository.js";
 import { effectivePolicy, type EffectivePolicy, type GrantInput } from "../../policy/resolve.js";
 import { grants } from "../../policy/schema.js";
@@ -132,10 +137,26 @@ function toEffectivePolicyResponse(result: EffectivePolicy): EffectivePolicyResp
   };
 }
 
+/** Copy a gathered budget (readonly, with `source`) into the mutable wire DTO. */
+function toResolvedBudgetResponse(budget: GatheredBudget): ResolvedBudgetResponse {
+  return {
+    scope: budget.scope,
+    targetId: budget.targetId,
+    window: budget.window,
+    secondsAllowed: budget.secondsAllowed,
+    source:
+      budget.source.kind === "group"
+        ? { kind: "group", groupId: budget.source.groupId }
+        : { kind: "user" },
+  };
+}
+
 /**
- * Register `GET /api/users/:userId/effective` on an already-`/api`-prefixed
- * scope. Call after {@link registerAuth} so `scope.requireAdmin` exists;
- * `settings` supplies the server-default timezone for users with no `tz`.
+ * Register `GET /api/users/:userId/effective` (and the sibling
+ * `.../budgets/resolved` inherited-vs-local projection) on an already-`/api`-
+ * prefixed scope. Call after {@link registerAuth} so `scope.requireAdmin`
+ * exists; `settings` supplies the server-default timezone for users with no
+ * `tz`.
  */
 export function registerEffectiveRoutes(scope: FastifyInstance, settings: Settings): void {
   const typed = scope.withTypeProvider<ZodTypeProvider>();
@@ -176,6 +197,23 @@ export function registerEffectiveRoutes(scope: FastifyInstance, settings: Settin
           grants: grantRows,
         }),
       );
+    },
+  );
+
+  // Inherited-vs-local budget projection (#363): the user's effective budget
+  // baseline per slot with its provenance intact — own budgets plus inherited
+  // group budgets for any slot the user has not overridden. Display-only: the
+  // resolution (own-wins, lowest-group-id tie-break) lives entirely in
+  // `gatherUserBudgets`; this route only serialises it.
+  typed.get(
+    "/users/:userId/budgets/resolved",
+    { ...guard, schema: { params: effectiveParamsSchema } },
+    async (request): Promise<ResolvedBudgetResponse[]> => {
+      const { userId } = request.params;
+      if (repo.getUser(scope.db, userId) === undefined) {
+        throw new ApiError(404, "not_found", `User ${userId} not found`);
+      }
+      return gatherUserBudgets(scope.db, userId).map(toResolvedBudgetResponse);
     },
   );
 }
