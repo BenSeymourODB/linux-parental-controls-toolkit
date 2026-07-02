@@ -14,18 +14,28 @@
  * still execs `ansible-playbook` as a subprocess via the merged
  * `transport/ansible` runner; this module only schedules and audits it.
  */
+import type { Platform } from "../../policy/enums.js";
 import type { AnsibleHost } from "../ansible/index.js";
 
 /**
  * The slice of a `clients` row a re-apply pass needs: the id (for audit
- * attribution and per-client backoff) plus the {@link AnsibleHost} fields the
- * runner renders into a single-host inventory. A full Drizzle `clients` select
- * row is assignable to this shape, so the production loader can return DB rows
- * directly.
+ * attribution and per-client backoff), the {@link AnsibleHost} fields the
+ * runner renders into a single-host inventory, plus the `platform`
+ * discriminator that gates whether the Ansible re-apply reconciler applies to
+ * this client (#325). A full Drizzle `clients` select row is assignable to this
+ * shape (`clients.platform` is `NOT NULL DEFAULT 'linux'`, #229), so the
+ * production loader can return DB rows directly.
  */
 export interface ReapplyTarget extends AnsibleHost {
   /** Enrolled client the playbooks are reconciled against. */
   readonly id: number;
+  /**
+   * The OS-family discriminator (`Client.platform`, #229). The scheduler
+   * reconciles only clients whose platform is served by its Ansible re-apply
+   * runner (`linux` today); any other platform is skipped, not coerced onto the
+   * Linux playbooks (#325 — the re-apply half of #232's platform seam).
+   */
+  readonly platform: Platform;
 }
 
 /**

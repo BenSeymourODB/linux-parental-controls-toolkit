@@ -13,6 +13,7 @@ export const moduleName = "transport/reapply";
 export {
   DEFAULT_REAPPLY_PATTERN,
   DEFAULT_REAPPLY_BACKOFF,
+  DEFAULT_REAPPLY_PLATFORMS,
   REAPPLY_LOG_COMPONENT,
   REAPPLY_AUDIT_REASON,
   startPeriodicReapply,

@@ -26,6 +26,7 @@ import {
 import {
   DEFAULT_REAPPLY_BACKOFF,
   DEFAULT_REAPPLY_PATTERN,
+  DEFAULT_REAPPLY_PLATFORMS,
   REAPPLY_AUDIT_REASON,
   REAPPLY_LOG_COMPONENT,
   startPeriodicReapply,
@@ -55,7 +56,9 @@ function capturingSink(): { sink: AuditSink; entries: AuditEntry[] } {
   return { sink: { record: (entry) => entries.push(entry) }, entries };
 }
 
-const HOSTS: readonly ReapplyTarget[] = [{ id: 1, hostname: "mint-01", sshUser: "pct-agent" }];
+const HOSTS: readonly ReapplyTarget[] = [
+  { id: 1, hostname: "mint-01", sshUser: "pct-agent", platform: "linux" },
+];
 
 describe("startPeriodicReapply", () => {
   let log: FastifyBaseLogger;
@@ -291,8 +294,8 @@ describe("startPeriodicReapply", () => {
 
   it("isolates one client's probe failure and still re-applies the others", async () => {
     const clients: ReapplyTarget[] = [
-      { id: 1, hostname: "mint-01", sshUser: "pct-agent" },
-      { id: 2, hostname: "mint-02", sshUser: "pct-agent" },
+      { id: 1, hostname: "mint-01", sshUser: "pct-agent", platform: "linux" },
+      { id: 2, hostname: "mint-02", sshUser: "pct-agent", platform: "linux" },
     ];
     const runner = fakeRunner(ok);
     const probe = vi.fn(async (id: number) => {
@@ -314,7 +317,9 @@ describe("startPeriodicReapply", () => {
 
   it("persists a readable audit row via the real DrizzleAuditSink", async () => {
     const clientId = createClient(db, { hostname: "mint-01", sshUser: "pct-agent" }).id;
-    const clients: ReapplyTarget[] = [{ id: clientId, hostname: "mint-01", sshUser: "pct-agent" }];
+    const clients: ReapplyTarget[] = [
+      { id: clientId, hostname: "mint-01", sshUser: "pct-agent", platform: "linux" },
+    ];
 
     await start({
       loadClients: () => clients,
@@ -364,6 +369,65 @@ describe("startPeriodicReapply", () => {
     const message = entries[0]?.errorMessage ?? "";
     expect(message.length).toBeLessThan(3000);
     expect(message.endsWith("…")).toBe(true);
+  });
+
+  it("serves only linux by default", () => {
+    expect([...DEFAULT_REAPPLY_PLATFORMS]).toEqual(["linux"]);
+  });
+
+  it("skips a client on an unserved platform without probing, running, or auditing", async () => {
+    const clients: ReapplyTarget[] = [
+      { id: 7, hostname: "win-01", sshUser: "pct-agent", platform: "windows" },
+    ];
+    const runner = fakeRunner(ok);
+    const probe = vi.fn(async () => true);
+    const { sink, entries } = capturingSink();
+
+    await start({ loadClients: () => clients, probe, runner, audit: sink }).tick();
+
+    // Unserved platform → never probed, never reconciled, nothing audited, and
+    // (crucially) not coerced onto the Linux playbooks.
+    expect(probe).not.toHaveBeenCalled();
+    expect(runner.runPlaybook).not.toHaveBeenCalled();
+    expect(entries).toHaveLength(0);
+    expect(
+      lines.find((l) => l.msg === "re-apply skipped: no re-apply runner for client platform"),
+    ).toMatchObject({ component: REAPPLY_LOG_COMPONENT, clientId: 7, platform: "windows" });
+  });
+
+  it("reconciles only the served-platform clients in a mixed fleet", async () => {
+    const clients: ReapplyTarget[] = [
+      { id: 1, hostname: "mint-01", sshUser: "pct-agent", platform: "linux" },
+      { id: 2, hostname: "win-02", sshUser: "pct-agent", platform: "windows" },
+    ];
+    const runner = fakeRunner(ok);
+
+    await start({ loadClients: () => clients, runner }).tick();
+
+    expect(runner.runPlaybook).toHaveBeenCalledTimes(1);
+    expect(runner.runPlaybook).toHaveBeenCalledWith(
+      expect.objectContaining({ hosts: [clients[0]] }),
+    );
+  });
+
+  it("honours a custom served-platforms set (the gate is the only selector)", async () => {
+    const clients: ReapplyTarget[] = [
+      { id: 2, hostname: "win-02", sshUser: "pct-agent", platform: "windows" },
+    ];
+    const runner = fakeRunner(ok);
+
+    // Registering `windows` as served makes the same client reconcilable —
+    // proving the platform is gated solely by the injected set, not hard-coded.
+    await start({
+      loadClients: () => clients,
+      runner,
+      reapplyPlatforms: new Set(["windows"] as const),
+    }).tick();
+
+    expect(runner.runPlaybook).toHaveBeenCalledTimes(1);
+    expect(runner.runPlaybook).toHaveBeenCalledWith(
+      expect.objectContaining({ hosts: [clients[0]] }),
+    );
   });
 
   it("stops cleanly and exposes the default cadence", () => {
