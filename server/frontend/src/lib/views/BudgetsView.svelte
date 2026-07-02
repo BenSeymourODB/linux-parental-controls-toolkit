@@ -20,11 +20,20 @@
     ActivityResponse,
     BudgetResponse,
     BudgetWindow,
+    ResolvedBudgetResponse,
     Scope,
+    UserGroupResponse,
     UserResponse,
   } from "$lib/api/contract.js";
-  import { listBudgets, createBudget, updateBudget, deleteBudget } from "$lib/api/budgets.js";
+  import {
+    listBudgets,
+    createBudget,
+    updateBudget,
+    deleteBudget,
+    listResolvedBudgets,
+  } from "$lib/api/budgets.js";
   import { listUsers } from "$lib/api/users.js";
+  import { listUserGroups } from "$lib/api/user-groups.js";
   import { listActivities } from "$lib/api/activities.js";
   import { listActivityGroups } from "$lib/api/activity-groups.js";
 
@@ -42,10 +51,18 @@
 
   let budgets = $state<BudgetResponse[]>([]);
   let users = $state<UserResponse[]>([]);
+  let userGroups = $state<UserGroupResponse[]>([]);
   let activities = $state<ActivityResponse[]>([]);
   let groups = $state<ActivityGroupResponse[]>([]);
   let loading = $state(true);
   let error = $state<string | null>(null);
+
+  // Group-inherited budget slots per user (#363): the slots a member gets from a
+  // group and has *not* overridden with an own budget, so the table can mark
+  // each slot local vs inherited. Resolution stays server-side
+  // (`gatherUserBudgets`); this is a display-only projection via
+  // `GET /users/:id/budgets/resolved`. Empty unless at least one group exists.
+  let inherited = $state<{ userId: number; groupId: number; slot: ResolvedBudgetResponse }[]>([]);
 
   // Create form.
   let newUserId = $state<number | null>(null);
@@ -67,17 +84,58 @@
     loading = true;
     error = null;
     try {
-      [budgets, users, activities, groups] = await Promise.all([
+      [budgets, users, userGroups, activities, groups] = await Promise.all([
         listBudgets(),
         listUsers(),
+        listUserGroups(),
         listActivities(),
         listActivityGroups(),
       ]);
+      await loadInherited();
     } catch (err) {
       error = messageOf(err);
     } finally {
       loading = false;
     }
+  }
+
+  /** The group-sourced slots for one user (empty when there are no groups). */
+  async function fetchGroupSlots(
+    userId: number,
+  ): Promise<{ userId: number; groupId: number; slot: ResolvedBudgetResponse }[]> {
+    if (userGroups.length === 0) {
+      return [];
+    }
+    let resolved: ResolvedBudgetResponse[] = [];
+    try {
+      resolved = await listResolvedBudgets(userId);
+    } catch {
+      // Inherited display is a display-only enrichment; if the projection fails
+      // for a user, leave their inherited rows empty rather than failing the view.
+      return [];
+    }
+    return resolved.flatMap((slot) =>
+      slot.source.kind === "group" ? [{ userId, groupId: slot.source.groupId, slot }] : [],
+    );
+  }
+
+  /** Recompute the full inherited-slot set across every user. */
+  async function loadInherited(): Promise<void> {
+    if (userGroups.length === 0) {
+      inherited = [];
+      return;
+    }
+    const perUser = await Promise.all(users.map((u) => fetchGroupSlots(u.id)));
+    inherited = perUser.flat();
+  }
+
+  /** Recompute one user's inherited slots after their own budgets change. */
+  async function refreshInherited(userId: number): Promise<void> {
+    if (userGroups.length === 0) {
+      return;
+    }
+    const slots = await fetchGroupSlots(userId);
+    inherited = [...inherited.filter((row) => row.userId !== userId), ...slots];
   }
 
   function userName(id: number): string {
@@ -92,16 +150,45 @@
     return WINDOW_OPTIONS.find((o) => o.value === window)?.label ?? window;
   }
 
-  /** Human label for a budget's target, given its scope + targetId. */
-  function targetLabel(budget: BudgetResponse): string {
-    if (budget.scope === "overall" || budget.targetId === null) {
+  /** Human label for a budget slot's target, given its scope + targetId. */
+  function targetLabel(slot: { scope: Scope; targetId: number | null }): string {
+    if (slot.scope === "overall" || slot.targetId === null) {
       return "—";
     }
-    if (budget.scope === "activity") {
-      return activities.find((a) => a.id === budget.targetId)?.matcher ?? `Activity ${budget.targetId}`;
+    if (slot.scope === "activity") {
+      return activities.find((a) => a.id === slot.targetId)?.matcher ?? `Activity ${slot.targetId}`;
     }
-    return groups.find((g) => g.id === budget.targetId)?.name ?? `Group ${budget.targetId}`;
+    return groups.find((g) => g.id === slot.targetId)?.name ?? `Group ${slot.targetId}`;
   }
+
+  /** Human name for a user group, for the "inherited from …" source label. */
+  function groupName(id: number): string {
+    return userGroups.find((g) => g.id === id)?.name ?? `Group ${id}`;
+  }
+
+  /**
+   * The table rows: each user's own budgets (editable, source "local") followed
+   * by the slots they inherit from a group (read-only, source "inherited").
+   * Sorted by user so a user's own and inherited rows sit together.
+   */
+  let displayRows = $derived.by(() => {
+    const locals = budgets.map((b) => ({
+      kind: "local" as const,
+      key: `local-${b.id}`,
+      userId: b.userId,
+      budget: b,
+    }));
+    const inh = inherited.map((row) => ({
+      kind: "inherited" as const,
+      key: `inherited-${row.userId}-${row.slot.scope}-${row.slot.window}-${row.slot.targetId ?? "null"}`,
+      userId: row.userId,
+      groupId: row.groupId,
+      slot: row.slot,
+    }));
+    return [...locals, ...inh].sort(
+      (a, b) => a.userId - b.userId || (a.kind === b.kind ? 0 : a.kind === "local" ? -1 : 1),
+    );
+  });
 
   /** Render `secondsAllowed` as a compact `Xh Ym`. */
   function formatAllowance(seconds: number): string {
@@ -157,6 +244,8 @@
       newTargetId = null;
       newWindow = "daily";
       newMinutes = "";
+      // A new own budget may now override a slot the user was inheriting.
+      await refreshInherited(created.userId);
     } catch (err) {
       error = messageOf(err);
     } finally {
@@ -201,6 +290,8 @@
     try {
       await deleteBudget(budget.id);
       budgets = budgets.filter((b) => b.id !== budget.id);
+      // Removing an own budget may re-expose a group slot the user now inherits.
+      await refreshInherited(budget.userId);
     } catch (err) {
       error = messageOf(err);
     }
@@ -290,7 +381,7 @@
 
     {#if loading}
       <p class="muted">Loading budgets…</p>
-    {:else if budgets.length === 0}
+    {:else if displayRows.length === 0}
       <p class="muted">No budgets yet. Add one above.</p>
     {:else}
       <table>
@@ -301,50 +392,70 @@
             <th>Target</th>
             <th>Window</th>
             <th>Allowance</th>
+            <th>Source</th>
             <th class="actions-col">Actions</th>
           </tr>
         </thead>
         <tbody>
-          {#each budgets as budget (budget.id)}
-            <tr>
-              <td>{userName(budget.userId)}</td>
-              <td>{scopeLabel(budget.scope)}</td>
-              <td class="muted">{targetLabel(budget)}</td>
-              {#if editingId === budget.id}
+          {#each displayRows as row (row.key)}
+            {#if row.kind === "local"}
+              {@const budget = row.budget}
+              <tr>
+                <td>{userName(budget.userId)}</td>
+                <td>{scopeLabel(budget.scope)}</td>
+                <td class="muted">{targetLabel(budget)}</td>
+                {#if editingId === budget.id}
+                  <td>
+                    <select bind:value={editWindow} aria-label="Edit window">
+                      {#each WINDOW_OPTIONS as option (option.value)}
+                        <option value={option.value}>{option.label}</option>
+                      {/each}
+                    </select>
+                  </td>
+                  <td>
+                    <!-- Text for the same reason as the create field above. -->
+                    <input
+                      type="text"
+                      inputmode="numeric"
+                      bind:value={editMinutes}
+                      aria-label="Edit allowance in minutes"
+                    />
+                  </td>
+                  <td class="muted">Local</td>
+                  <td class="actions">
+                    <button
+                      onclick={() => saveEdit(budget.id)}
+                      disabled={saving || minutesToSeconds(editMinutes) === null}
+                    >
+                      {saving ? "Saving…" : "Save"}
+                    </button>
+                    <button class="ghost" onclick={cancelEdit} disabled={saving}>Cancel</button>
+                  </td>
+                {:else}
+                  <td>{windowLabel(budget.window)}</td>
+                  <td>{formatAllowance(budget.secondsAllowed)}</td>
+                  <td><span class="source source-local">Local</span></td>
+                  <td class="actions">
+                    <button class="ghost" onclick={() => startEdit(budget)}>Edit</button>
+                    <button class="danger" onclick={() => handleDelete(budget)}>Delete</button>
+                  </td>
+                {/if}
+              </tr>
+            {:else}
+              <!-- Inherited from a group: read-only here — edit it on the group,
+                   or add an own budget for this slot to override it. -->
+              <tr class="inherited-row">
+                <td>{userName(row.userId)}</td>
+                <td>{scopeLabel(row.slot.scope)}</td>
+                <td class="muted">{targetLabel(row.slot)}</td>
+                <td>{windowLabel(row.slot.window)}</td>
+                <td>{formatAllowance(row.slot.secondsAllowed)}</td>
                 <td>
-                  <select bind:value={editWindow} aria-label="Edit window">
-                    {#each WINDOW_OPTIONS as option (option.value)}
-                      <option value={option.value}>{option.label}</option>
-                    {/each}
-                  </select>
+                  <span class="source source-inherited">Inherited · {groupName(row.groupId)}</span>
                 </td>
-                <td>
-                  <!-- Text for the same reason as the create field above. -->
-                  <input
-                    type="text"
-                    inputmode="numeric"
-                    bind:value={editMinutes}
-                    aria-label="Edit allowance in minutes"
-                  />
-                </td>
-                <td class="actions">
-                  <button
-                    onclick={() => saveEdit(budget.id)}
-                    disabled={saving || minutesToSeconds(editMinutes) === null}
-                  >
-                    {saving ? "Saving…" : "Save"}
-                  </button>
-                  <button class="ghost" onclick={cancelEdit} disabled={saving}>Cancel</button>
-                </td>
-              {:else}
-                <td>{windowLabel(budget.window)}</td>
-                <td>{formatAllowance(budget.secondsAllowed)}</td>
-                <td class="actions">
-                  <button class="ghost" onclick={() => startEdit(budget)}>Edit</button>
-                  <button class="danger" onclick={() => handleDelete(budget)}>Delete</button>
-                </td>
-              {/if}
-            </tr>
+                <td class="muted">—</td>
+              </tr>
+            {/if}
           {/each}
         </tbody>
       </table>
@@ -416,6 +527,25 @@
   .actions-col {
     width: 1%;
     white-space: nowrap;
+  }
+  .inherited-row {
+    background: #f9fafb;
+  }
+  .source {
+    display: inline-block;
+    padding: 0.05rem 0.4rem;
+    border-radius: 0.3rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .source-local {
+    background: #eef2ff;
+    color: #3730a3;
+  }
+  .source-inherited {
+    background: #fef3c7;
+    color: #92400e;
   }
   button {
     padding: 0.4rem 0.7rem;
