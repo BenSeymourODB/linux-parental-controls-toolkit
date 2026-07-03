@@ -289,7 +289,9 @@ jobs:
             echo "run=true" >> "$GITHUB_OUTPUT"
             echo "Event '${{ github.event_name }}' — running Molecule."
           else
-            git fetch --depth=1 origin "${{ github.base_ref }}"
+            # checkout used fetch-depth: 0, so origin/<base> carries full
+            # history — exactly what the three-dot (merge-base) diff needs.
+            # A shallow re-fetch here would truncate it and break the diff.
             if git diff --name-only "origin/${{ github.base_ref }}"...HEAD \
                  | grep -qE '^(client/ansible/|\.github/workflows/integration\.yml$)'; then
               echo "run=true" >> "$GITHUB_OUTPUT"
