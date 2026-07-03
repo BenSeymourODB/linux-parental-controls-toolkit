@@ -456,7 +456,12 @@ describe("POST /api/users/:userId/policy-preview — live reachability probe", (
         probe: (client: Pick<ClientRow, "hostname" | "sshUser">): Promise<ClientProbeResult> => {
           probedHosts.push(client.hostname);
           const reachability = verdicts.get(client.hostname) ?? "offline";
-          return Promise.resolve({ reachability, at: probeAt, components: [] });
+          return Promise.resolve({
+            reachability,
+            at: probeAt,
+            components: [],
+            reachabilityReason: null,
+          });
         },
       },
       dispose: () => undefined,

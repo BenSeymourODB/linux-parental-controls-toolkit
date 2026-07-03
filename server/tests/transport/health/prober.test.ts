@@ -237,9 +237,12 @@ describe("SshClientProber.probe", () => {
     const result = await proberWith().probe(CLIENT);
 
     expect(result.reachability).toBe("offline");
+    expect(result.reachabilityReason).toBe("unknown");
     expect(result.components).toHaveLength(5);
     expect(result.components.every((c) => c.status === "unknown")).toBe(true);
-    expect(result.components.every((c) => c.detail === "host unreachable")).toBe(true);
+    // The classified cause is folded into the detail (#353); no ssh2 cause on
+    // this fixture, so the reason is `unknown`.
+    expect(result.components.every((c) => c.detail === "host unreachable (unknown)")).toBe(true);
   });
 
   it("rethrows an unexpected (non-SSH, non-AW) error from the aw probe", async () => {

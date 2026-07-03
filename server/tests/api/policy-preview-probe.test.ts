@@ -46,7 +46,7 @@ function proberFrom(verdicts: Map<string, ClientReachability>): ClientProber {
       if (reachability === undefined) {
         return Promise.reject(new Error(`no verdict for ${client.hostname}`));
       }
-      return Promise.resolve({ reachability, at: AT, components: [] });
+      return Promise.resolve({ reachability, at: AT, components: [], reachabilityReason: null });
     },
   };
 }
