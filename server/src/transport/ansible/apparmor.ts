@@ -57,9 +57,9 @@ import {
   getClient,
   listClientLinks,
   listGroupActivities,
-  listUserSchedules,
 } from "../../policy/repository.js";
-import type { ScheduleRow } from "../../policy/repository.js";
+import { gatherUserScheduleRules } from "../../policy/group-resolution.js";
+import type { ScheduleRule } from "../../policy/schedule-precedence.js";
 import { redactArgv, type AuditContext, type AuditEntry, type AuditSink } from "../audit/index.js";
 import type { AuditOutcome } from "../../policy/enums.js";
 import type { SshTargetRef } from "../ssh/errors.js";
@@ -148,7 +148,7 @@ export function profileNameFor(executable: string): string {
 }
 
 /** A schedule is "always-on" when no recurrence or date-scoping gate is set. */
-function isAlwaysOn(rule: ScheduleRow): boolean {
+function isAlwaysOn(rule: ScheduleRule): boolean {
   return (
     rule.recurrenceDays === null &&
     rule.recurrenceStartMinute === null &&
@@ -173,7 +173,7 @@ function isMappableApp(kind: string, matchType: string, matcher: string): boolea
  * Returns absolute executable paths (possibly several, for a group), skipping
  * any non-mappable activity (non-`app`, non-`exact`, non-absolute, `app_group`).
  */
-function executablesForDeny(db: PolicyDb, rule: ScheduleRow): string[] {
+function executablesForDeny(db: PolicyDb, rule: ScheduleRule): string[] {
   if (rule.targetKind === "activity" && rule.targetId !== null) {
     const activity = getActivity(db, rule.targetId);
     if (
@@ -237,9 +237,13 @@ export function buildAppArmorPlan(db: PolicyDb, clientId: number): AppArmorPlan 
   return { clientId, hostname: client.hostname, denials };
 }
 
-/** A user's always-on `deny` schedules — the rules this mapper consumes. */
-function listUserAlwaysOnDenies(db: PolicyDb, userId: number): ScheduleRow[] {
-  return listUserSchedules(db, userId).filter((r) => r.action === "deny" && isAlwaysOn(r));
+/**
+ * A user's always-on `deny` schedules — own rules plus inherited always-on group
+ * denies (#362), so a group-targeted app block reaches the AppArmor render.
+ * Recurring/date-scoped group denies remain a #243 follow-up.
+ */
+function listUserAlwaysOnDenies(db: PolicyDb, userId: number): ScheduleRule[] {
+  return gatherUserScheduleRules(db, userId).filter((r) => r.action === "deny" && isAlwaysOn(r));
 }
 
 /** Options for {@link pushAppArmorProfiles}. */
