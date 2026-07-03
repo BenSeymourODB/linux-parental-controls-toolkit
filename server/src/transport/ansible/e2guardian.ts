@@ -259,7 +259,7 @@ function resolveWindowedDenies(db: PolicyDb, userId: number): E2guardianWindow[]
   }
   return [...sitesByTag.entries()]
     .map(([timeTag, sites]) => ({ timeTag, sites: [...sites].sort() }))
-    .sort((a, b) => a.timeTag.localeCompare(b.timeTag));
+    .sort((a, b) => (a.timeTag < b.timeTag ? -1 : a.timeTag > b.timeTag ? 1 : 0));
 }
 
 /**

@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 
 import { parse } from "yaml";
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 
 const PLAYBOOKS = fileURLToPath(new URL("../../../../client/ansible/playbooks/", import.meta.url));
 
@@ -20,24 +21,37 @@ function readAsset(relativePath: string): string {
   return readFileSync(join(PLAYBOOKS, relativePath), "utf8");
 }
 
-interface PlaybookTask {
-  name?: string;
-  loop?: string;
-  notify?: string | string[];
-  "ansible.builtin.template"?: { dest?: string; src?: string };
-}
+/**
+ * Just enough of the playbook shape to guard the windowed-list wiring — parsed
+ * with zod rather than an `as` cast, matching the repo's "validate external
+ * input" idiom (the on-disk YAML is external to the type program).
+ */
+const taskSchema = z
+  .object({
+    name: z.string().optional(),
+    loop: z.string().optional(),
+    notify: z.union([z.string(), z.array(z.string())]).optional(),
+    vars: z.record(z.string(), z.unknown()).optional(),
+    "ansible.builtin.template": z
+      .object({ src: z.string().optional(), dest: z.string().optional() })
+      .optional(),
+  })
+  .passthrough();
+type PlaybookTask = z.infer<typeof taskSchema>;
 
-function loadTasks(): PlaybookTask[] {
-  const doc: unknown = parse(readAsset("e2guardian-filtering.yml"));
-  expect(Array.isArray(doc)).toBe(true);
-  const plays = doc as { tasks?: PlaybookTask[] }[];
-  const tasks = plays[0]?.tasks;
-  expect(Array.isArray(tasks)).toBe(true);
-  return tasks ?? [];
+const playbookSchema = z.array(
+  z.object({ vars: z.record(z.string(), z.unknown()).optional(), tasks: z.array(taskSchema) }),
+);
+
+function loadPlaybook(): { vars: Record<string, unknown>; tasks: PlaybookTask[] } {
+  const plays = playbookSchema.parse(parse(readAsset("e2guardian-filtering.yml")));
+  const play = plays[0];
+  expect(play).toBeDefined();
+  return { vars: play?.vars ?? {}, tasks: play?.tasks ?? [] };
 }
 
 describe("e2guardian-filtering.yml — windowed banned-site rendering (#216)", () => {
-  const tasks = loadTasks();
+  const { vars, tasks } = loadPlaybook();
   const windowedTask = tasks.find((task) => task.name?.includes("windowed banned-site"));
 
   it("has a task that renders per-(user, window) banned-site lists", () => {
@@ -61,6 +75,18 @@ describe("e2guardian-filtering.yml — windowed banned-site rendering (#216)", (
 
   it("reloads e2guardian after writing a windowed list", () => {
     expect(windowedTask?.notify).toBe("Reload e2guardian");
+  });
+
+  it("writes the list into the same managed dir the filter group includes from", () => {
+    // The playbook dest uses `pct_e2g_managed_dir`; the filter-group template
+    // hardcodes the same path in its `.Include`. Lock the coupling so moving one
+    // without the other (which would make every windowed `.Include` dangle) is
+    // caught here rather than only at live convergence (#215).
+    const managedDir = vars.pct_e2g_managed_dir;
+    expect(managedDir).toBe("/etc/e2guardian/pct.d");
+    const dest = windowedTask?.["ansible.builtin.template"]?.dest ?? "";
+    expect(dest).toContain("{{ pct_e2g_managed_dir }}/");
+    expect(readAsset("templates/pct-filtergroup.conf.j2")).toContain(`${String(managedDir)}/`);
   });
 });
 
