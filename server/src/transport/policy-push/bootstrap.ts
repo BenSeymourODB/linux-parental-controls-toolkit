@@ -205,8 +205,9 @@ export function createPolicyPushTransport(
   // ActivityWatch `GET /api/0/info` probe over a loopback port-forward (#323)
   // are data, not admin commands, so they must not flood the audit log the way
   // the `timekpra` pushes (through `auditing`) deliberately do. buildApp injects
-  // it into the /api/clients/health routes.
-  const prober = new SshClientProber(ssh, credentials);
+  // it into the /api/clients/health routes. The logger surfaces one structured
+  // `warn` per failed probe with the classified failure cause (#353).
+  const prober = new SshClientProber(ssh, credentials, { log });
 
   // The queued same-day-adjustment executor (#274): resolves an absolute
   // `--settimeleft` target on first reconnect and replays it idempotently. Runs

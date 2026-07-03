@@ -9,7 +9,7 @@
  * these tests assert reachability + per-component classification (including the
  * `activitywatch` verdict) without opening a socket.
  */
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   ActivityWatchParseError,
@@ -128,6 +128,7 @@ describe("SshClientProber.probe", () => {
     const result = await proberWith().probe(CLIENT);
 
     expect(result.reachability).toBe("online");
+    expect(result.reachabilityReason).toBeNull();
     expect(result.at).toBe(FIXED);
     expect(result.components).toEqual([
       { component: "timekpr-next", status: "ok", detail: "active" },
@@ -262,10 +263,73 @@ describe("SshClientProber.probe", () => {
     expect(result.at).toBe(FIXED);
     expect(result.components).toHaveLength(5);
     expect(result.components.every((c) => c.status === "unknown")).toBe(true);
-    expect(result.components.every((c) => c.detail === "host unreachable")).toBe(true);
+    // With no ssh2 cause the reason is `unknown`, surfaced in the detail (#353).
+    expect(result.reachabilityReason).toBe("unknown");
+    expect(result.components.every((c) => c.detail === "host unreachable (unknown)")).toBe(true);
   });
 
-  it("treats a per-exec timeout as offline", async () => {
+  it("classifies the failure cause and folds it into the reason + detail (#353)", async () => {
+    transport.throwOnEveryExec = new SshUnreachableError(
+      { host: CLIENT.hostname, port: 2222, username: CLIENT.sshUser },
+      {
+        cause: Object.assign(new Error("getaddrinfo ENOTFOUND alice-pc.local"), {
+          code: "ENOTFOUND",
+        }),
+      },
+    );
+
+    const result = await proberWith().probe(CLIENT);
+
+    expect(result.reachability).toBe("offline");
+    expect(result.reachabilityReason).toBe("dns");
+    expect(result.components[0]?.detail).toBe(
+      "host unreachable (dns: getaddrinfo ENOTFOUND alice-pc.local)",
+    );
+  });
+
+  it("logs one structured warn per failed probe, including clientId when present", async () => {
+    transport.throwOnEveryExec = new SshUnreachableError(
+      { host: CLIENT.hostname, port: 2222, username: CLIENT.sshUser },
+      { cause: Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }) },
+    );
+    const warn = vi.fn();
+    const prober = new SshClientProber(transport, CREDENTIALS, {
+      execOptions: { timeoutMs: 5000 },
+      now: () => FIXED,
+      log: { warn },
+    });
+
+    await prober.probe({ ...CLIENT, id: 7 });
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        clientId: 7,
+        host: CLIENT.hostname,
+        port: 2222,
+        reason: "connection_refused",
+        cause: "connect ECONNREFUSED",
+      }),
+      expect.any(String),
+    );
+  });
+
+  it("omits clientId from the log when the probed client has none", async () => {
+    transport.throwOnEveryExec = new SshUnreachableError({
+      host: CLIENT.hostname,
+      port: 2222,
+      username: CLIENT.sshUser,
+    });
+    const warn = vi.fn();
+    const prober = new SshClientProber(transport, CREDENTIALS, { now: () => FIXED, log: { warn } });
+
+    await prober.probe(CLIENT);
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).not.toHaveProperty("clientId");
+  });
+
+  it("treats a per-exec timeout as offline with a timeout reason", async () => {
     transport.throwOnEveryExec = new SshExecTimeoutError(
       { host: CLIENT.hostname, port: 2222, username: CLIENT.sshUser },
       ["systemctl", "is-active", "timekpr.service"],
@@ -274,6 +338,7 @@ describe("SshClientProber.probe", () => {
 
     const result = await proberWith().probe(CLIENT);
     expect(result.reachability).toBe("offline");
+    expect(result.reachabilityReason).toBe("timeout");
   });
 
   it("goes offline if the host drops mid-probe (after some components succeeded)", async () => {
@@ -288,6 +353,7 @@ describe("SshClientProber.probe", () => {
 
     const result = await proberWith().probe(CLIENT);
     expect(result.reachability).toBe("offline");
+    expect(result.reachabilityReason).toBe("unknown");
     expect(result.components.every((c) => c.status === "unknown")).toBe(true);
   });
 
