@@ -56,8 +56,13 @@ describe("pushUserPolicyNow (#304)", () => {
     const { results } = await pushUserPolicyNow(db, executor, { userId });
 
     expect(calls).toHaveLength(2);
-    // Each command is user-scoped so the executor recomputes the whole policy.
+    // Each command is user-scoped so the executor recomputes the whole policy,
+    // carrying the `user.updated` reason + the manual-push trigger in the payload.
     expect(calls.every((a) => a.coalesceKey === `user:${userId}`)).toBe(true);
+    expect(calls[0]).toMatchObject({
+      kind: "policy.push",
+      payload: { userId, reason: "user.updated", detail: { trigger: "manual.push-now" } },
+    });
     expect(results).toEqual([
       { clientId: c1, hostname: "mint-01", osUsername: "alice", status: "pushed" },
       { clientId: c2, hostname: "mint-02", osUsername: "alice", status: "pushed" },

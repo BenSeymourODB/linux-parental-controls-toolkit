@@ -13,9 +13,10 @@
     moves the recurring allowed-hours grid.
 
   Authoring budgets/schedules themselves stays in the Budgets/Schedules editors
-  (#189) and #63/#140; this surface is preview-only. There is intentionally no
-  "Save & push now" button: preview is side-effect-free and there is no UI-facing
-  push endpoint yet (a tracked follow-up). The diff covers the SSH + `timekpra`
+  (#189) and #63/#140; the what-if sandbox is preview-only. A "Push saved policy
+  now" action (#304) re-pushes the user's *saved* policy — NOT the sandbox edits —
+  and reports a per-client result; persisting the sandbox edits and hosting the
+  bar inline in a combined editor are #343. The diff covers the SSH + `timekpra`
   session limits the resolver models on `main`; the Ansible-side filter diff
   (e2guardian / iptables) is Phase 6.
 

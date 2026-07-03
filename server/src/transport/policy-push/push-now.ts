@@ -18,7 +18,11 @@
  *   safe to durably **queue** for idempotent replay on reconnect — reported as
  *   `queued` rather than a bare failure.
  * - Every issued command is recorded in the audit log (#85) for free, because
- *   the injected executor runs `timekpra` over the `AuditingTransport`.
+ *   the injected executor runs `timekpra` over the `AuditingTransport`. The
+ *   bootstrap injects an **admin-attributed** executor here (mirroring the
+ *   time-today lever), so a deliberate re-push is distinguishable from the
+ *   `actor:"system"` CRUD-side-effect pushes; a queued replay of an offline
+ *   client is later driven by the system drainer and attributed accordingly.
  *
  * The what-if edits in the preview UI are **not** persisted by this lever; it
  * pushes the saved policy. Persist-then-push from a real combined editor is

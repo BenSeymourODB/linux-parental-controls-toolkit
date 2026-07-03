@@ -235,6 +235,11 @@ describe("createPolicyPushTransport", () => {
       { clientId, hostname: "mint-01", osUsername: "alice", status: "pushed" },
     ]);
     expect(ssh.checked.length).toBeGreaterThan(0);
+    // ...and it is audited with admin attribution, so a deliberate re-push is
+    // distinguishable from the `actor:"system"` CRUD-side-effect pushes (#85).
+    const entries = listAuditEntries(db, { limit: 50 });
+    expect(entries.length).toBeGreaterThan(0);
+    expect(entries.every((e) => e.actor === "admin" && e.clientId === clientId)).toBe(true);
 
     transport.dispose();
   });

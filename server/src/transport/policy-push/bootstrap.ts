@@ -262,11 +262,33 @@ export function createPolicyPushTransport(
     );
 
   // The manual "push saved policy now" lever (#304): re-push the user's saved
-  // effective policy over the same audited executor the dispatcher + drainer
-  // use, but awaited and reported per-client. An unreachable client's push is
-  // durably queued (the push is idempotent/absolute), so it degrades to `queued`
-  // rather than a bare failure.
-  const pushPolicyNow: PolicyPushNow = (request) => pushUserPolicyNow(db, executor, request);
+  // effective policy, awaited and reported per-client. An unreachable client's
+  // push is durably queued (the push is idempotent/absolute), so it degrades to
+  // `queued` rather than a bare failure.
+  //
+  // It runs over an ADMIN-attributed executor (mirroring the time-today lever
+  // above) so a deliberate admin re-push is distinguishable in the audit log
+  // (#85) from the routine `actor:"system"` CRUD-side-effect pushes the
+  // dispatcher issues. A push that must be queued for an offline client is later
+  // replayed by the `system` drainer, so that deferred replay is attributed to
+  // `system` — the drainer's action, not the admin's original click.
+  const adminRunner = createLinuxPolicyRunner({
+    log,
+    buildClient: ({ client, username, userId, reason }) =>
+      new TimekprClient(
+        auditing.withContext({ clientId: client.id, userId, reason, actor: "admin" }),
+        targetFromClient(client, credentials),
+        username,
+      ),
+  });
+  const adminExecutor = createPolicyPushExecutor({
+    db,
+    registry: createPlatformRunnerRegistry([adminRunner]),
+    defaultTz: settings.defaultTz,
+    log,
+    ...(options.now !== undefined ? { now: options.now } : {}),
+  });
+  const pushPolicyNow: PolicyPushNow = (request) => pushUserPolicyNow(db, adminExecutor, request);
 
   return {
     dispatcher,
