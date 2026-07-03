@@ -68,8 +68,7 @@
     - name: Render each supervised user's windowed banned-site lists
       ansible.builtin.template:
         src: "{{ playbook_dir }}/templates/pct-windowed-bannedsites.j2"
-        dest: >-
-          {{ pct_e2g_managed_dir }}/{{ item.0.osUsername }}-win-{{ item.1.timeTag | replace(' ', '-') }}.bannedsites
+        dest: "{{ pct_e2g_managed_dir }}/{{ item.0.osUsername }}-win-{{ item.1.timeTag | replace(' ', '-') }}.bannedsites"
         owner: root
         group: root
         mode: "0644"
