@@ -179,4 +179,15 @@ describe("createEnforcementPipeline", () => {
     pipeline.start(); // idempotent — no throw, no second cron
     expect(() => pipeline.stop()).not.toThrow();
   });
+
+  it("does not dispose an injected (caller-owned) transport on stop", () => {
+    const transport = fakeTransport();
+    const pipeline = createEnforcementPipeline(baseOptions({ loadClients: () => [], transport }));
+    if (pipeline === null) throw new Error("expected a pipeline with credentials present");
+    pipeline.start();
+    pipeline.stop();
+    // The caller owns an injected transport's lifecycle; stop() must not tear it
+    // down (mirrors buildApp's db/policyPush ownership discipline).
+    expect(transport.disposeAll).not.toHaveBeenCalled();
+  });
 });

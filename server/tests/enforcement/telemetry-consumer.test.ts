@@ -147,6 +147,58 @@ describe("createUsageTelemetryConsumer", () => {
     expect(cursor.get(clientId)).toEqual(passEnd);
   });
 
+  it("clips to the pull window so an event intersecting several passes is not over-counted (#327)", async () => {
+    // `aw-server` returns events that *intersect* a query window without
+    // clipping them. This fake models that: one 30-min event is returned WHOLE
+    // for every window it overlaps. Without window-clipping the same 30 min
+    // would be inserted in each of the three 5-min passes below (→ 3× the real
+    // time, punitive over-enforcement); clipping must tile it disjointly.
+    const { clientId, userIds } = seedClient(["Alice"]);
+    const firefoxId = db
+      .insert(activities)
+      .values({ kind: "app", matcher: "firefox" })
+      .returning()
+      .get().id;
+    const longEvent = windowEvent("firefox", "2024-02-15T11:50:00.000Z", 30 * 60); // 11:50–12:20
+    const intersectingSource: AwEventSource = {
+      getWindowEvents: (q) =>
+        Promise.resolve(
+          // Returned whole whenever the event's span overlaps [start, end).
+          longEvent.timestamp.getTime() < q.end.getTime() &&
+            longEvent.timestamp.getTime() + longEvent.durationSeconds * 1000 > q.start.getTime()
+            ? [longEvent]
+            : [],
+        ),
+      getAfkEvents: () => Promise.resolve([]),
+    };
+    const cursor = new Map<number, Date>();
+    let passEnd = new Date("2024-02-15T12:00:00.000Z");
+    const consume = createUsageTelemetryConsumer({
+      db,
+      cursor,
+      passEnd: () => passEnd,
+      initialLookbackMs: 5 * 60 * 1000, // first window [11:55, 12:00)
+      createSource: () => intersectingSource,
+    });
+
+    await consume(context(clientId, fakeLogger())); // [11:55,12:00) → clip → 5 min
+    passEnd = new Date("2024-02-15T12:05:00.000Z");
+    await consume(context(clientId, fakeLogger())); // [12:00,12:05) → clip → 5 min
+    passEnd = new Date("2024-02-15T12:10:00.000Z");
+    await consume(context(clientId, fakeLogger())); // [12:05,12:10) → clip → 5 min
+
+    const rows = db.select().from(usageSamples).all();
+    const total = rows.reduce(
+      (s, r) => s + (r.endedAt.getTime() - r.startedAt.getTime()) / 1000,
+      0,
+    );
+    // Three disjoint 5-min slices of the same event = 15 min, not 3×30 min.
+    expect(total).toBe(3 * 5 * 60);
+    for (const row of rows) {
+      expect(row).toMatchObject({ userId: userIds[0], clientId, activityId: firefoxId });
+    }
+  });
+
   it("skips a client with no supervised user (nothing to attribute)", async () => {
     const clientId = db
       .insert(clients)

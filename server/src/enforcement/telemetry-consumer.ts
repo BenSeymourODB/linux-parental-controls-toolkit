@@ -36,7 +36,10 @@ import { eq } from "drizzle-orm";
 import type { PolicyDb } from "../policy/db.js";
 import { activities, usersOnClients } from "../policy/schema.js";
 import { insertUsageSamples } from "../policy/usage.js";
-import type { ActivityMatcher } from "../transport/activitywatch/normalise.js";
+import type {
+  ActivityMatcher,
+  UsageSampleCandidate,
+} from "../transport/activitywatch/normalise.js";
 import { normaliseWindowEvents } from "../transport/activitywatch/normalise.js";
 import { ActivityWatchClient } from "../transport/activitywatch/client.js";
 import type { EventQuery } from "../transport/activitywatch/client.js";
@@ -102,6 +105,31 @@ function loadActivityMatchers(db: PolicyDb): ActivityMatcher[] {
       matcher: row.matcher,
       matchType: row.matchType ?? undefined,
     }));
+}
+
+/**
+ * Clip each normalised sample to the half-open pull window `[start, end)`,
+ * dropping any that collapse to empty. This bounds a sample to the window the
+ * cursor advances over, so an `aw-server` that returns an event intersecting
+ * (rather than clipped to) the window can't have that event re-credited whole
+ * in the next overlapping pull.
+ */
+function clipToWindow(
+  samples: readonly UsageSampleCandidate[],
+  start: Date,
+  end: Date,
+): UsageSampleCandidate[] {
+  const lo = start.getTime();
+  const hi = end.getTime();
+  const clipped: UsageSampleCandidate[] = [];
+  for (const sample of samples) {
+    const startedAt = Math.max(sample.startedAt.getTime(), lo);
+    const endedAt = Math.min(sample.endedAt.getTime(), hi);
+    if (endedAt > startedAt) {
+      clipped.push({ ...sample, startedAt: new Date(startedAt), endedAt: new Date(endedAt) });
+    }
+  }
+  return clipped;
 }
 
 /** The supervised users linked to a client (ids only). */
@@ -173,11 +201,22 @@ export function createUsageTelemetryConsumer(
       activities: loadActivityMatchers(db),
       now: end,
     });
-    const inserted = insertUsageSamples(db, candidates);
+    // Clip each credited interval to this pass's `[start, end)` window before
+    // persisting. `aw-server`'s events query returns events that *intersect* the
+    // window without clipping them, so a long event (e.g. a 20-min focus) is
+    // returned in every overlapping pull; crediting it whole each pass would
+    // over-count it across consecutive windows → punitive over-enforcement.
+    // Clipping makes consecutive windows tile disjointly regardless of the exact
+    // server-side filtering, so the cursor's no-double-count guarantee does not
+    // hinge on an unverified aw-server semantic. (Under a stricter start-time
+    // filter this can only under-credit an event's out-of-window tail — bounded
+    // and non-punitive per #88 — never over-credit.)
+    const inserted = insertUsageSamples(db, clipToWindow(candidates, start, end));
 
-    // Advance the cursor only after a successful insert, so a mid-pull failure
-    // (which throws and is isolated by runTelemetryPull) re-pulls the same
-    // window next pass rather than leaving a gap.
+    // Advance the cursor after a successful pull (regardless of row count, so a
+    // clean pull that matched nothing still moves forward). A mid-pull failure
+    // throws and is isolated by runTelemetryPull, leaving the cursor unmoved so
+    // the same window is re-pulled next pass rather than skipped.
     cursor.set(client.id, end);
 
     logger.info(

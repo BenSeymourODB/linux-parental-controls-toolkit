@@ -64,9 +64,22 @@ non-overlapping windows within a process lifetime.
 - On first sight of a client (or after restart) the cursor is seeded from
   `passStart − initialLookback` (default = one pull interval, bounded), so a
   restart re-pulls at most the lookback window. Overlap on restart is bounded;
-  a **durable cursor** that survives restart is a tracked follow-up.
+  a **durable cursor** that survives restart is tracked in **#382**.
 - Missing telemetry credits **no** consumption (#88), so a restart gap is
   non-punitive.
+- **Window-clip for robustness (review #1).** `aw-server`'s events query returns
+  events that *intersect* the window without clipping them, so a long event is
+  returned in every overlapping pull. The consumer **clips each normalised
+  sample to `[start, end)`** before insert, so consecutive windows tile
+  disjointly and the no-double-count guarantee does not hinge on the exact
+  server-side filtering. Under a stricter start-time filter this can only
+  under-credit an event's out-of-window tail (bounded, non-punitive), never
+  over-credit. Authoritative verification of the live `aw-server` window
+  semantics belongs to the #157-style live-infra gate.
+- **afk-clip fidelity (review #5).** window + afk events share the same narrow
+  `[start, end)` query, so a `not-afk` span starting before the window can be
+  excluded — slightly less accurate than #88's single wide pull. Only ever
+  under-credits (non-punitive), so accepted.
 
 ### Single supervised user per client (Alpha-1)
 

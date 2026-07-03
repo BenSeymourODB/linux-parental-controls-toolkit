@@ -333,8 +333,11 @@ const settingsSchema = z
        * no in-memory cursor yet — at boot or after a restart
        * (`PCT_ENFORCEMENT_INITIAL_LOOKBACK_SECONDS`). Bounds the re-pull window
        * so a restart can't sweep in an unbounded backlog; defaults to 900 (15
-       * minutes). Missing telemetry credits no consumption (#88), so a gap here
-       * is non-punitive.
+       * minutes) — intentionally a few pull cadences wide so a boot that lands
+       * between pulls still catches the recent window rather than leaving a gap.
+       * Samples are clipped to the pull window and the cursor is in-memory only
+       * until #382 makes it durable, so a restart re-pulls at most this window;
+       * missing telemetry credits no consumption (#88), so a gap is non-punitive.
        */
       initialLookbackSeconds: z.coerce.number().int().positive().default(900),
     }),

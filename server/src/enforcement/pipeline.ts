@@ -170,8 +170,15 @@ export function createEnforcementPipeline(
     createForceCloseDeps({ db, eventHub, ssh: transport, credentials, sink, logger: pipelineLog }),
   );
 
+  // The instant this pass rolls up to, pinned once at the top of `runPass` and
+  // shared by both the telemetry window and the sweep — so enforcement
+  // evaluates at exactly the boundary the samples were credited to, not a few
+  // seconds later when the (awaited) pull returns.
+  const cursor = new Map<number, Date>();
+  let currentPassEnd = now();
+
   // Caller-driven sweep (no internal cron): `tick()` runs after each rollup,
-  // reading usage at the same instant the pass rolled up to (shared `now`).
+  // evaluating at the pinned pass instant.
   const sweep = startEnforcementSweep({
     db,
     loadSupervisedUsers: () => loadSupervisedUsers(db),
@@ -180,12 +187,9 @@ export function createEnforcementPipeline(
     defaultTz,
     cooldownSeconds,
     pattern: null,
-    now,
+    now: () => currentPassEnd,
   });
 
-  // In-memory per-client pull cursor; `currentPassEnd` is pinned once per pass.
-  const cursor = new Map<number, Date>();
-  let currentPassEnd = now();
   const consume = createUsageTelemetryConsumer({
     db,
     cursor,
