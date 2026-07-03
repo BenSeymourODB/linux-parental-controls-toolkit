@@ -56,6 +56,7 @@ import { createPolicyPushDispatcher } from "./dispatcher.js";
 import { createPolicyPushExecutor } from "./executor.js";
 import { createLinuxPolicyRunner } from "./linux-runner.js";
 import { createPlatformRunnerRegistry } from "./platform-runner.js";
+import { pushUserPolicyNow, type PolicyPushNow } from "./push-now.js";
 
 /**
  * The SSH transport surface the bootstrap needs: the audited-command surface
@@ -84,6 +85,13 @@ export interface PolicyPushTransport {
    * then reports the transport as unavailable rather than silently no-op'ing.
    */
   readonly adjustTimeToday?: TimeTodayAdjuster;
+  /**
+   * The manual "push saved policy now" lever (#304), present only when the live
+   * transport is wired (SSH key exists). Absent in the logging fallback — the
+   * admin route then reports the transport as unavailable rather than silently
+   * no-op'ing.
+   */
+  readonly pushPolicyNow?: PolicyPushNow;
   /**
    * The live client health prober (#81), present only when the live transport
    * is wired (the SSH key exists). It runs `systemctl is-active` over the same
@@ -253,9 +261,17 @@ export function createPolicyPushTransport(
       },
     );
 
+  // The manual "push saved policy now" lever (#304): re-push the user's saved
+  // effective policy over the same audited executor the dispatcher + drainer
+  // use, but awaited and reported per-client. An unreachable client's push is
+  // durably queued (the push is idempotent/absolute), so it degrades to `queued`
+  // rather than a bare failure.
+  const pushPolicyNow: PolicyPushNow = (request) => pushUserPolicyNow(db, executor, request);
+
   return {
     dispatcher,
     adjustTimeToday: timeTodayAdjuster,
+    pushPolicyNow,
     prober,
     dispose: (): void => {
       drainer.stop();

@@ -12,7 +12,7 @@ import { registerAuth } from "../auth/index.js";
 import type { Settings } from "../config.js";
 import { registerEventStream, type EventHub, type EventStreamOptions } from "../events/index.js";
 import type { ClientProber } from "../transport/health/index.js";
-import type { TimeTodayAdjuster } from "../transport/policy-push/index.js";
+import type { PolicyPushNow, TimeTodayAdjuster } from "../transport/policy-push/index.js";
 import type { PolicyPushStub } from "../transport/stub.js";
 import { registerAppAuthRoutes } from "./app/index.js";
 import { registerAuditRoutes } from "./audit/index.js";
@@ -23,6 +23,7 @@ import { registerMetaRoute } from "./meta.js";
 import {
   registerEffectiveRoutes,
   registerPolicyRoutes,
+  registerPushNowRoutes,
   registerScheduleOrderRoutes,
   registerPreviewRoutes,
   registerTimeTodayRoutes,
@@ -55,6 +56,13 @@ export interface ApiPluginOptions {
    * `503 transport_unavailable`.
    */
   timeToday?: TimeTodayAdjuster;
+  /**
+   * The manual "push saved policy now" lever (#304), present only when the live
+   * transport is wired (SSH key exists). Absent in tests / before the SSH-key
+   * bootstrap (#39), where `POST /users/:userId/policy-push` returns a
+   * `503 transport_unavailable`.
+   */
+  pushPolicyNow?: PolicyPushNow;
   /**
    * The live SSH client health prober (#81), present only when the live
    * transport is wired (SSH key exists). Injected into the
@@ -93,6 +101,10 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (scope, opt
   // The live `timekpra`-over-SSH adjuster is injected from buildApp; absent it,
   // the route reports the transport as unavailable (503).
   registerTimeTodayRoutes(scope, opts.timeToday);
+  // Manual "push saved policy now" lever (#304): POST /users/:userId/policy-push.
+  // The live pusher is injected from buildApp; absent it, the route reports the
+  // transport as unavailable (503).
+  registerPushNowRoutes(scope, opts.pushPolicyNow);
   // Effective-policy preview (#143): GET /users/:userId/effective. Needs
   // `settings` for the server-default timezone of users with no `tz`.
   registerEffectiveRoutes(scope, opts.settings);
@@ -156,6 +168,7 @@ export function registerApi(
   eventHub: EventHub,
   policyPush?: PolicyPushStub,
   timeToday?: TimeTodayAdjuster,
+  pushPolicyNow?: PolicyPushNow,
   prober?: ClientProber,
   eventStream?: EventStreamOptions,
 ): void {
@@ -167,6 +180,7 @@ export function registerApi(
     // `undefined` is not assignable to the optional `policyPush?` field.
     ...(policyPush !== undefined ? { policyPush } : {}),
     ...(timeToday !== undefined ? { timeToday } : {}),
+    ...(pushPolicyNow !== undefined ? { pushPolicyNow } : {}),
     ...(prober !== undefined ? { prober } : {}),
     ...(eventStream !== undefined ? { eventStream } : {}),
   });
