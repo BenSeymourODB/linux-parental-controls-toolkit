@@ -25,11 +25,14 @@ import {
 } from "../../../src/transport/ansible/apparmor.js";
 import {
   addActivityToGroup,
+  addUserToGroup,
   createActivity,
   createActivityGroup,
   createClient,
+  createGroupSchedule,
   createSchedule,
   createUser,
+  createUserGroup,
   upsertLink,
   type ClientRow,
 } from "../../../src/policy/repository.js";
@@ -175,6 +178,31 @@ describe("buildAppArmorPlan", () => {
     const plan = buildAppArmorPlan(db, client.id);
 
     expect(plan.denials.map((d) => d.executable)).toEqual(["/usr/bin/minecraft"]);
+  });
+
+  it("maps an inherited always-on group-schedule app deny, attributed to the member (#362)", () => {
+    const db = testDb();
+    const client = seedClient(db);
+    const userId = linkUser(db, client.id, "Alice", 1001);
+    // The app deny is authored on a user-group the child belongs to.
+    const kids = createUserGroup(db, { name: "Kids" });
+    addUserToGroup(db, kids.id, userId);
+    const app = createActivity(db, { kind: "app", matcher: "/usr/bin/steam", matchType: "exact" });
+    createGroupSchedule(db, {
+      userGroupId: kids.id,
+      targetKind: "activity",
+      targetId: app.id,
+      action: "deny",
+    });
+
+    const plan = buildAppArmorPlan(db, client.id);
+
+    expect(plan.denials).toHaveLength(1);
+    expect(plan.denials[0]?.executable).toBe("/usr/bin/steam");
+    // The block is attributed to the member who inherited it, for the audit trail.
+    expect(plan.denials[0]?.blockedFor).toEqual([
+      { userId, osUsername: "alice", osUserRef: "1001" },
+    ]);
   });
 
   it("unions and sorts denials across users, deduping a shared executable", () => {

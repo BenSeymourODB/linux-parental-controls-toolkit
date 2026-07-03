@@ -25,7 +25,9 @@
  * boundaries").
  */
 import type { Platform } from "../../policy/enums.js";
-import type { BudgetRow, ClientRow, ScheduleRow } from "../../policy/repository.js";
+import type { ClientRow } from "../../policy/repository.js";
+import type { BudgetInput } from "../../policy/resolve.js";
+import type { ScheduleRule } from "../../policy/schedule-precedence.js";
 
 /**
  * The platform-agnostic inputs for one `(client, user)` policy push, resolved by
@@ -44,10 +46,17 @@ export interface PolicyEnforcementContext {
   readonly reason: string;
   /** The user's effective timezone (`User.tz ?? PCT_DEFAULT_TZ`). */
   readonly tz: string;
-  /** The user's schedule rules (precedence order applied downstream). */
-  readonly schedules: readonly ScheduleRow[];
-  /** The user's budgets (overall + per-activity). */
-  readonly budgets: readonly BudgetRow[];
+  /**
+   * The user's effective schedule rules — own rules merged with inherited group
+   * rules in precedence order by the gatherer (#362); the runner forwards them
+   * to `resolvePolicyPush`, which applies first-match-wins.
+   */
+  readonly schedules: readonly ScheduleRule[];
+  /**
+   * The user's effective budgets — own budgets plus any inherited group budget
+   * for a slot the user has not overridden (#362), overall + per-activity.
+   */
+  readonly budgets: readonly BudgetInput[];
   /** The reference instant the week and "today" are resolved against. */
   readonly now: Date;
 }
