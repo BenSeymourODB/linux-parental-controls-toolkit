@@ -20,8 +20,10 @@
 
   A group `Schedule` allow/deny/extends a `targetKind` (`overall`, an `activity`,
   or an activity `group`). Scope/target are fixed at create time; inline edit
-  exposes `action` only. Recurrence is rendered read-only ("Always" for the
-  degenerate always-on rule); authoring day/time windows is #140.
+  exposes `action` plus the rule's recurrence (day-of-week + time window) and
+  effective-date scope, authored via the reusable `RecurrenceFields` picker
+  (#361). The collapsed row keeps the read-only `recurrenceSummary` ("Always"
+  for the degenerate always-on rule).
 -->
 <script lang="ts">
   import { onMount } from "svelte";
@@ -45,6 +47,8 @@
   import { listUserGroups } from "$lib/api/user-groups.js";
   import { listActivities } from "$lib/api/activities.js";
   import { listActivityGroups } from "$lib/api/activity-groups.js";
+  import RecurrenceFields from "$lib/components/RecurrenceFields.svelte";
+  import { validateRecurrence } from "$lib/recurrence.js";
 
   const SCOPE_OPTIONS: ReadonlyArray<{ value: Scope; label: string }> = [
     { value: "overall", label: "Overall" },
@@ -73,16 +77,46 @@
   let orderLoading = $state(false);
   let reordering = $state(false);
 
-  // Create form (the group is the selected one; only scope/target/action here).
+  // Create form (the group is the selected one; scope/target/action + recurrence).
   let newScope = $state<Scope>("overall");
   let newTargetId = $state<number | null>(null);
   let newAction = $state<ScheduleAction>("deny");
+  let newRecurrenceDays = $state<number | null>(null);
+  let newRecurrenceStartMinute = $state<number | null>(null);
+  let newRecurrenceEndMinute = $state<number | null>(null);
+  let newEffectiveFrom = $state<string | null>(null);
+  let newEffectiveTo = $state<string | null>(null);
   let creating = $state(false);
 
-  // Inline edit (action only).
+  // Inline edit (action + recurrence).
   let editingId = $state<number | null>(null);
   let editAction = $state<ScheduleAction>("deny");
+  let editRecurrenceDays = $state<number | null>(null);
+  let editRecurrenceStartMinute = $state<number | null>(null);
+  let editRecurrenceEndMinute = $state<number | null>(null);
+  let editEffectiveFrom = $state<string | null>(null);
+  let editEffectiveTo = $state<string | null>(null);
   let saving = $state(false);
+
+  // Client-side recurrence validation, mirroring the DTO cross-field invariants.
+  let newRecurrenceError = $derived(
+    validateRecurrence({
+      recurrenceDays: newRecurrenceDays,
+      recurrenceStartMinute: newRecurrenceStartMinute,
+      recurrenceEndMinute: newRecurrenceEndMinute,
+      effectiveFrom: newEffectiveFrom,
+      effectiveTo: newEffectiveTo,
+    }),
+  );
+  let editRecurrenceError = $derived(
+    validateRecurrence({
+      recurrenceDays: editRecurrenceDays,
+      recurrenceStartMinute: editRecurrenceStartMinute,
+      recurrenceEndMinute: editRecurrenceEndMinute,
+      effectiveFrom: editEffectiveFrom,
+      effectiveTo: editEffectiveTo,
+    }),
+  );
 
   // The rule being dragged (index into the current order), or null.
   let dragIndex = $state<number | null>(null);
@@ -209,12 +243,15 @@
   }
 
   let createDisabled = $derived(
-    creating || selectedGroupId === null || (newScope !== "overall" && newTargetId === null),
+    creating ||
+      selectedGroupId === null ||
+      (newScope !== "overall" && newTargetId === null) ||
+      newRecurrenceError !== null,
   );
 
   async function handleCreate(event: SubmitEvent): Promise<void> {
     event.preventDefault();
-    if (selectedGroupId === null) {
+    if (selectedGroupId === null || newRecurrenceError !== null) {
       return;
     }
     creating = true;
@@ -229,15 +266,20 @@
         targetId: newScope === "overall" ? null : newTargetId,
         action: newAction,
         ordinal: appendOrdinal,
-        recurrenceDays: null,
-        recurrenceStartMinute: null,
-        recurrenceEndMinute: null,
-        effectiveFrom: null,
-        effectiveTo: null,
+        recurrenceDays: newRecurrenceDays,
+        recurrenceStartMinute: newRecurrenceStartMinute,
+        recurrenceEndMinute: newRecurrenceEndMinute,
+        effectiveFrom: newEffectiveFrom,
+        effectiveTo: newEffectiveTo,
       });
       newScope = "overall";
       newTargetId = null;
       newAction = "deny";
+      newRecurrenceDays = null;
+      newRecurrenceStartMinute = null;
+      newRecurrenceEndMinute = null;
+      newEffectiveFrom = null;
+      newEffectiveTo = null;
       await loadOrder();
     } catch (err) {
       error = messageOf(err);
@@ -249,6 +291,11 @@
   function startEdit(schedule: GroupScheduleResponse): void {
     editingId = schedule.id;
     editAction = schedule.action;
+    editRecurrenceDays = schedule.recurrenceDays;
+    editRecurrenceStartMinute = schedule.recurrenceStartMinute;
+    editRecurrenceEndMinute = schedule.recurrenceEndMinute;
+    editEffectiveFrom = schedule.effectiveFrom;
+    editEffectiveTo = schedule.effectiveTo;
     error = null;
   }
 
@@ -257,10 +304,23 @@
   }
 
   async function saveEdit(id: number): Promise<void> {
+    if (editRecurrenceError !== null) {
+      return;
+    }
     saving = true;
     error = null;
     try {
-      await updateGroupSchedule(id, { action: editAction });
+      // Send the full recurrence set alongside the action so the persisted row
+      // matches exactly what the editor shows (a PATCH merges, and the storage
+      // CHECKs re-validate the merged row).
+      await updateGroupSchedule(id, {
+        action: editAction,
+        recurrenceDays: editRecurrenceDays,
+        recurrenceStartMinute: editRecurrenceStartMinute,
+        recurrenceEndMinute: editRecurrenceEndMinute,
+        effectiveFrom: editEffectiveFrom,
+        effectiveTo: editEffectiveTo,
+      });
       editingId = null;
       await loadOrder();
     } catch (err) {
@@ -353,8 +413,8 @@
       are evaluated top to bottom and the first matching rule wins, so drag (or
       use Move up / Move down) to set precedence. Because a group's members can
       span timezones, "in effect now" is shown per user on their own status, not
-      here. New rules apply at all times; day-of-week and time-of-day windows
-      come later (#140).
+      here. Each rule can be scoped to particular days, a time window, and a date
+      range — leave those empty for an always-on rule.
     </p>
   </header>
 
@@ -386,36 +446,53 @@
       <p class="muted">Choose a group to view and order its schedule rules.</p>
     {:else}
       <form class="create" onsubmit={handleCreate}>
-        <select
-          bind:value={newScope}
-          onchange={onScopeChange}
+        <div class="create-row">
+          <select
+            bind:value={newScope}
+            onchange={onScopeChange}
+            disabled={creating}
+            aria-label="Schedule scope"
+          >
+            {#each SCOPE_OPTIONS as option (option.value)}
+              <option value={option.value}>{option.label}</option>
+            {/each}
+          </select>
+          {#if newScope === "activity"}
+            <select
+              bind:value={newTargetId}
+              disabled={creating}
+              aria-label="Target activity"
+              required
+            >
+              <option value={null} disabled selected>Choose an activity…</option>
+              {#each activities as activity (activity.id)}
+                <option value={activity.id}>{activity.matcher} ({activity.kind})</option>
+              {/each}
+            </select>
+          {:else if newScope === "group"}
+            <select bind:value={newTargetId} disabled={creating} aria-label="Target group" required>
+              <option value={null} disabled selected>Choose a group…</option>
+              {#each activityGroups as group (group.id)}
+                <option value={group.id}>{group.name}</option>
+              {/each}
+            </select>
+          {/if}
+          <select bind:value={newAction} disabled={creating} aria-label="Schedule action">
+            {#each ACTION_OPTIONS as option (option.value)}
+              <option value={option.value}>{option.label}</option>
+            {/each}
+          </select>
+        </div>
+        <RecurrenceFields
+          idPrefix="create"
           disabled={creating}
-          aria-label="Schedule scope"
-        >
-          {#each SCOPE_OPTIONS as option (option.value)}
-            <option value={option.value}>{option.label}</option>
-          {/each}
-        </select>
-        {#if newScope === "activity"}
-          <select bind:value={newTargetId} disabled={creating} aria-label="Target activity" required>
-            <option value={null} disabled selected>Choose an activity…</option>
-            {#each activities as activity (activity.id)}
-              <option value={activity.id}>{activity.matcher} ({activity.kind})</option>
-            {/each}
-          </select>
-        {:else if newScope === "group"}
-          <select bind:value={newTargetId} disabled={creating} aria-label="Target group" required>
-            <option value={null} disabled selected>Choose a group…</option>
-            {#each activityGroups as group (group.id)}
-              <option value={group.id}>{group.name}</option>
-            {/each}
-          </select>
-        {/if}
-        <select bind:value={newAction} disabled={creating} aria-label="Schedule action">
-          {#each ACTION_OPTIONS as option (option.value)}
-            <option value={option.value}>{option.label}</option>
-          {/each}
-        </select>
+          error={newRecurrenceError}
+          bind:recurrenceDays={newRecurrenceDays}
+          bind:recurrenceStartMinute={newRecurrenceStartMinute}
+          bind:recurrenceEndMinute={newRecurrenceEndMinute}
+          bind:effectiveFrom={newEffectiveFrom}
+          bind:effectiveTo={newEffectiveTo}
+        />
         <button type="submit" disabled={createDisabled}>
           {creating ? "Adding…" : "Add schedule"}
         </button>
@@ -459,7 +536,20 @@
                     >
                   {/if}
                 </div>
-                <div class="when muted">{recurrenceSummary(schedule)}</div>
+                {#if editingId === schedule.id}
+                  <RecurrenceFields
+                    idPrefix={`edit-${schedule.id}`}
+                    disabled={saving}
+                    error={editRecurrenceError}
+                    bind:recurrenceDays={editRecurrenceDays}
+                    bind:recurrenceStartMinute={editRecurrenceStartMinute}
+                    bind:recurrenceEndMinute={editRecurrenceEndMinute}
+                    bind:effectiveFrom={editEffectiveFrom}
+                    bind:effectiveTo={editEffectiveTo}
+                  />
+                {:else}
+                  <div class="when muted">{recurrenceSummary(schedule)}</div>
+                {/if}
                 {#if shadower !== null}
                   <p class="warn" role="note">
                     Never applies — rule #{shadower} above always wins for this target.
@@ -481,7 +571,10 @@
                   onclick={() => move(index, 1)}>↓</button
                 >
                 {#if editingId === schedule.id}
-                  <button onclick={() => saveEdit(schedule.id)} disabled={saving}>
+                  <button
+                    onclick={() => saveEdit(schedule.id)}
+                    disabled={saving || editRecurrenceError !== null}
+                  >
                     {saving ? "Saving…" : "Save"}
                   </button>
                   <button class="ghost" onclick={cancelEdit} disabled={saving}>Cancel</button>
@@ -518,8 +611,14 @@
   }
   .create {
     display: flex;
-    gap: 0.5rem;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.75rem;
     margin-bottom: 1.25rem;
+  }
+  .create-row {
+    display: flex;
+    gap: 0.5rem;
     flex-wrap: wrap;
   }
   select {
