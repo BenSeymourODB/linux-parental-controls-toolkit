@@ -271,17 +271,6 @@
     return iso === null ? "never seen" : `last seen ${new Date(iso).toLocaleString()}`;
   }
 
-  const REACHABILITY_LABEL: Readonly<Record<"online" | "offline" | "unknown", string>> = {
-    online: "online",
-    offline: "offline",
-    unknown: "unknown",
-  };
-
-  /** Human label for a probed reachability verdict. */
-  function reachabilityLabel(reachability: "online" | "offline" | "unknown"): string {
-    return REACHABILITY_LABEL[reachability];
-  }
-
   /** Render any thrown value as a UI-safe message. */
   function messageOf(err: unknown): string {
     if (err instanceof ApiError) return err.message;
@@ -460,7 +449,7 @@
                         <span
                           class="reach reach-{client.reachability}"
                           data-testid="reachability-{client.clientId}"
-                          >{reachabilityLabel(client.reachability)}</span
+                          >{client.reachability}</span
                         >
                       {/if}
                       <span class="meta">{lastSeenLabel(client.lastSeen)}</span>
