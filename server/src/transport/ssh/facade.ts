@@ -20,20 +20,19 @@
  * {@link SshUnreachableError} is the offline-queue's signal (#84), whereas an
  * {@link SshCommandError} means the box was reached and the *command* failed.
  */
-import { createServer, type Server, type Socket } from "node:net";
-
 import { Client } from "ssh2";
-import type { ClientChannel, ConnectConfig } from "ssh2";
+import type { ConnectConfig } from "ssh2";
 import type { ZodType } from "zod";
 
 import type { clients } from "../../policy/schema.js";
 import {
   SshCommandError,
-  SshExecTimeoutError,
   SshParseError,
   SshUnreachableError,
   type SshTargetRef,
 } from "./errors.js";
+import { ExecBuffer } from "./exec-buffer.js";
+import { SshPortForwarder } from "./port-forward.js";
 import { shellQuoteCommand } from "./shell-quote.js";
 
 /** A `clients` row (the persisted enrolment record) the facade can target. */
@@ -152,9 +151,6 @@ interface ResolvedTarget {
   connectConfig: ConnectConfig;
 }
 
-/** The only address a forwarded port ever binds — never network-exposed. */
-const LOOPBACK_HOST = "127.0.0.1";
-
 /**
  * SSH handshake/ready timeout — if the peer doesn't reach the ready state
  * within this window the host is treated as unreachable (the offline-queue's
@@ -262,47 +258,7 @@ export class SshTransport {
   ): Promise<T> {
     const resolved = this.#resolve(target);
     const client = await this.#connect(resolved);
-
-    const remoteHost = remote.host ?? LOOPBACK_HOST;
-    const openSockets = new Set<Socket>();
-    const openChannels = new Set<ClientChannel>();
-
-    const server = createServer((socket: Socket) => {
-      openSockets.add(socket);
-      socket.on("close", () => openSockets.delete(socket));
-      // One broken forwarded connection must not take down the whole window.
-      socket.on("error", () => socket.destroy());
-
-      client.forwardOut(
-        LOOPBACK_HOST,
-        addressPort(server),
-        remoteHost,
-        remote.port,
-        (err: Error | undefined, channel: ClientChannel) => {
-          if (err !== undefined) {
-            socket.destroy();
-            return;
-          }
-          // Track the channel too: `socket.pipe(channel)` does not propagate a
-          // socket `destroy()` to the SSH channel, so without this the channel
-          // would linger half-open on the pooled connection across passes.
-          openChannels.add(channel);
-          channel.on("close", () => openChannels.delete(channel));
-          channel.on("error", () => socket.destroy());
-          socket.pipe(channel);
-          channel.pipe(socket);
-        },
-      );
-    });
-
-    try {
-      const port = await listenLoopback(server, options.localPort ?? 0);
-      return await fn({ host: LOOPBACK_HOST, port });
-    } finally {
-      for (const socket of openSockets) socket.destroy();
-      for (const channel of openChannels) channel.destroy();
-      await closeServer(server);
-    }
+    return new SshPortForwarder({ client, remote }).run(fn, options.localPort ?? 0);
   }
 
   /** {@link execChecked} against an already-resolved target (resolve once). */
@@ -328,73 +284,16 @@ export class SshTransport {
     const client = await this.#connect(resolved);
     const timeoutMs = options.timeoutMs ?? this.#execTimeoutMs;
 
-    return new Promise<ExecResult>((resolve, reject) => {
-      let settled = false;
-      let timer: NodeJS.Timeout | undefined;
-      const finish = (run: () => void): void => {
-        if (settled) return;
-        settled = true;
-        if (timer !== undefined) clearTimeout(timer);
-        run();
-      };
-
-      client.exec(command, (err: Error | undefined, channel: ClientChannel) => {
-        if (err !== undefined) {
-          // The session could not carry our command — treat it as a dead
-          // connection so the next call reconnects, and surface it as
-          // unreachable (the offline-queue's retry signal).
-          this.#connections.delete(resolved.key);
-          finish(() => reject(new SshUnreachableError(resolved.ref, { cause: err })));
-          return;
-        }
-
-        const stdoutChunks: Buffer[] = [];
-        const stderrChunks: Buffer[] = [];
-        let exited = false;
-        let code: number | null = null;
-        let signal: string | null = null;
-
-        channel.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
-        channel.stderr.on("data", (chunk: Buffer) => stderrChunks.push(chunk));
-        channel.on("exit", (exitCode: number | null, exitSignal?: string) => {
-          exited = true;
-          code = exitCode;
-          signal = exitSignal ?? null;
-        });
-        channel.on("close", () => {
-          if (!exited) {
-            // The channel closed without the peer reporting an exit status —
-            // the session dropped mid-command rather than the command
-            // finishing. Surface it as unreachable (retriable) so it can't be
-            // mistaken for a clean signal-kill (`code: null`), and evict the
-            // (now-suspect) connection so the next call reconnects.
-            this.#connections.delete(resolved.key);
-            finish(() => reject(new SshUnreachableError(resolved.ref)));
-            return;
-          }
-          finish(() =>
-            resolve({
-              stdout: Buffer.concat(stdoutChunks).toString("utf8"),
-              stderr: Buffer.concat(stderrChunks).toString("utf8"),
-              code,
-              signal,
-            }),
-          );
-        });
-
-        if (timeoutMs > 0) {
-          timer = setTimeout(() => {
-            finish(() => {
-              // Tear down only the hung channel; the connection stays pooled
-              // (the host is reachable — the command, not the session, hung).
-              channel.destroy();
-              reject(new SshExecTimeoutError(resolved.ref, argv, timeoutMs));
-            });
-          }, timeoutMs);
-          timer.unref();
-        }
-      });
-    });
+    try {
+      return await new ExecBuffer({ ref: resolved.ref, argv, timeoutMs }).run(client, command);
+    } catch (error) {
+      // A dead session — the exec request failed, or the channel dropped
+      // mid-command — surfaces as SshUnreachableError; evict the (now-suspect)
+      // pooled connection so the next call reconnects. A timeout leaves it
+      // pooled: the host answered, only the command hung.
+      if (error instanceof SshUnreachableError) this.#connections.delete(resolved.key);
+      throw error;
+    }
   }
 
   /** Close and forget the pooled connection to `target`, if any. */
@@ -477,34 +376,4 @@ export class SshTransport {
       connectConfig,
     };
   }
-}
-
-/** The bound TCP port of a listening server (0 before it is listening). */
-function addressPort(server: Server): number {
-  const address = server.address();
-  return typeof address === "object" && address !== null ? address.port : 0;
-}
-
-/** Resolve once `server` is listening on loopback `port`, with its actual port. */
-function listenLoopback(server: Server, port: number): Promise<number> {
-  return new Promise<number>((resolve, reject) => {
-    const onError = (err: Error): void => reject(err);
-    server.once("error", onError);
-    server.listen(port, LOOPBACK_HOST, () => {
-      server.removeListener("error", onError);
-      // Swallow late operational errors so a transient socket fault on the
-      // loopback listener can't surface as an unhandled 'error' that crashes
-      // the process; the forward is best-effort and its consumer reports
-      // failures of its own.
-      server.on("error", () => undefined);
-      resolve(addressPort(server));
-    });
-  });
-}
-
-/** Close `server`, resolving once it has stopped accepting connections. */
-function closeServer(server: Server): Promise<void> {
-  return new Promise<void>((resolve) => {
-    server.close(() => resolve());
-  });
 }

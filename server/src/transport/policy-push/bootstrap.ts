@@ -39,7 +39,10 @@ import {
   SshTransport,
   loadSshCredentials,
   targetFromClient,
+  type PortForwardOptions,
+  type PortForwardTarget,
   type SshCredentials,
+  type SshTarget,
 } from "../ssh/index.js";
 import { createPolicyPushStub } from "../stub.js";
 import type { PolicyPushStub } from "../stub.js";
@@ -59,11 +62,18 @@ import { createPlatformRunnerRegistry } from "./platform-runner.js";
 
 /**
  * The SSH transport surface the bootstrap needs: the audited-command surface
- * (`exec`/`execChecked`/`execAndParse`, via {@link AuditableTransport}) plus the
- * pooled-connection teardown. The real {@link SshTransport} satisfies it; tests
- * inject a fake.
+ * (`exec`/`execChecked`/`execAndParse`, via {@link AuditableTransport}), the
+ * loopback port-forward the health prober's ActivityWatch REST probe rides
+ * (#323), plus the pooled-connection teardown. The real {@link SshTransport}
+ * satisfies it; tests inject a fake.
  */
 export interface BootstrapSshTransport extends AuditableTransport {
+  withPortForward<T>(
+    target: SshTarget,
+    remote: PortForwardTarget,
+    fn: (local: { host: string; port: number }) => Promise<T>,
+    options?: PortForwardOptions,
+  ): Promise<T>;
   disposeAll(): void;
 }
 
@@ -191,10 +201,11 @@ export function createPolicyPushTransport(
   const probe = sshReachabilityProbe(db, ssh, credentials);
 
   // The client health prober (#81) shares this same pooled SSH transport — but
-  // its *un-audited* `exec` surface: a `systemctl is-active` liveness query is
-  // data, not an admin command, so it must not flood the audit log the way the
-  // `timekpra` pushes (through `auditing`) deliberately do. buildApp injects it
-  // into the /api/clients/health routes.
+  // its *un-audited* surface: a `systemctl is-active` liveness query and the
+  // ActivityWatch `GET /api/0/info` probe over a loopback port-forward (#323)
+  // are data, not admin commands, so they must not flood the audit log the way
+  // the `timekpra` pushes (through `auditing`) deliberately do. buildApp injects
+  // it into the /api/clients/health routes.
   const prober = new SshClientProber(ssh, credentials);
 
   // The queued same-day-adjustment executor (#274): resolves an absolute

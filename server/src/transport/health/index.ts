@@ -11,11 +11,15 @@
 export const moduleName = "transport/health";
 
 export {
+  activityWatchFailureDetail,
+  AW_SERVER_PORT,
   CLIENT_COMPONENTS,
+  classifyActivityWatchInfo,
   classifyServiceState,
   clientComponentValues,
   componentHealthStatusValues,
   systemdIsActiveArgv,
+  type ActivityWatchRestProbe,
   type ClientComponent,
   type ComponentClassification,
   type ComponentDescriptor,
@@ -28,6 +32,7 @@ export {
 export {
   SshClientProber,
   clientReachabilityValues,
+  type ActivityWatchInfoProbe,
   type ClientProber,
   type ClientProbeResult,
   type ClientReachability,
