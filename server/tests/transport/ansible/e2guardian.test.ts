@@ -27,6 +27,7 @@ import {
   buildE2guardianPlan,
   DEFAULT_PROXY_PORT,
   E2GUARDIAN_PLAYBOOK,
+  e2guardianTimeTag,
   pushE2guardianFiltering,
   type E2guardianPlan,
 } from "../../../src/transport/ansible/e2guardian.js";
@@ -80,6 +81,7 @@ describe("buildE2guardianPlan", () => {
         filterGroup: 2,
         listenPort: DEFAULT_PROXY_PORT + 1,
         bannedSites: ["youtube.com"],
+        windows: [],
       },
     ]);
     db.$client.close();
@@ -109,12 +111,11 @@ describe("buildE2guardianPlan", () => {
     db.$client.close();
   });
 
-  it("ignores allow/extend rules, recurring/windowed denies, and date-scoped denies", () => {
+  it("ignores allow/extend rules and date-scoped denies (no static or windowed filter)", () => {
     const db = testDb();
     const clientId = createClient(db, { hostname: "mint-01", sshUser: "pct-agent" }).id;
     const alice = addLinkedUser(db, clientId, "Alice", "alice", 1001);
     const tiktok = createActivity(db, { kind: "domain", matcher: "tiktok.com" });
-    const reddit = createActivity(db, { kind: "domain", matcher: "reddit.com" });
     const news = createActivity(db, { kind: "domain", matcher: "news.example" });
 
     // allow → not a filter
@@ -124,17 +125,8 @@ describe("buildE2guardianPlan", () => {
       targetId: tiktok.id,
       action: "allow",
     });
-    // deny but only on a recurring weekday window → time-window swap (deferred)
-    createSchedule(db, {
-      userId: alice,
-      targetKind: "activity",
-      targetId: reddit.id,
-      action: "deny",
-      recurrenceDays: 0b0011111,
-      recurrenceStartMinute: 16 * 60,
-      recurrenceEndMinute: 18 * 60,
-    });
-    // deny but date-scoped → not always-on
+    // deny but date-scoped → e2guardian's #time: can't express a calendar range,
+    // so it is neither always-on nor a windowed deny here (deferred to #142).
     createSchedule(db, {
       userId: alice,
       targetKind: "activity",
@@ -249,6 +241,290 @@ describe("buildE2guardianPlan", () => {
   });
 });
 
+describe("e2guardianTimeTag", () => {
+  it("formats a weekday intra-day window (bit0=Mon..bit4=Fri) as cron digits 1..5", () => {
+    // 0b0011111 = Mon–Fri; 16:00–18:00.
+    expect(e2guardianTimeTag(0b0011111, 16 * 60, 18 * 60)).toBe("16 0 18 0 12345");
+  });
+
+  it("maps the weekend (Sat=bit5, Sun=bit6) to sorted cron digits 0,6", () => {
+    // e2guardian days are Sun=0..Sat=6, so Sat(6)+Sun(0) sort to "06".
+    expect(e2guardianTimeTag(0b1100000, 8 * 60, 20 * 60)).toBe("8 0 20 0 06");
+  });
+
+  it("treats a null weekday mask as every day (0123456)", () => {
+    expect(e2guardianTimeTag(null, 9 * 60, 17 * 60)).toBe("9 0 17 0 0123456");
+  });
+
+  it("treats a null minute pair as all day (0 0 24 0)", () => {
+    // A weekday-only deny (all day on those days).
+    expect(e2guardianTimeTag(0b0000001, null, null)).toBe("0 0 24 0 1");
+  });
+
+  it("formats the end-of-day sentinel 1440 as the idiomatic hour 24", () => {
+    expect(e2guardianTimeTag(null, 21 * 60, 1440)).toBe("21 0 24 0 0123456");
+  });
+
+  it("preserves non-zero minutes on both bounds", () => {
+    expect(e2guardianTimeTag(0b0000100, 16 * 60 + 30, 18 * 60 + 45)).toBe("16 30 18 45 3");
+  });
+});
+
+describe("buildE2guardianPlan — recurring time-window denies (#216)", () => {
+  it("collects a recurring windowed deny into a #time:-tagged window", () => {
+    const db = testDb();
+    const clientId = createClient(db, { hostname: "mint-01", sshUser: "pct-agent" }).id;
+    const alice = addLinkedUser(db, clientId, "Alice", "alice", 1001);
+    const reddit = createActivity(db, { kind: "domain", matcher: "reddit.com" });
+    createSchedule(db, {
+      userId: alice,
+      targetKind: "activity",
+      targetId: reddit.id,
+      action: "deny",
+      recurrenceDays: 0b0011111,
+      recurrenceStartMinute: 16 * 60,
+      recurrenceEndMinute: 18 * 60,
+    });
+
+    const plan = buildE2guardianPlan(db, clientId);
+
+    expect(plan.users).toEqual([
+      {
+        osUsername: "alice",
+        osUserRef: "1001",
+        filterGroup: 2,
+        listenPort: DEFAULT_PROXY_PORT + 1,
+        bannedSites: [],
+        windows: [{ timeTag: "16 0 18 0 12345", sites: ["reddit.com"] }],
+      },
+    ]);
+    db.$client.close();
+  });
+
+  it("collapses denies sharing an identical window into one list (deduped + sorted)", () => {
+    const db = testDb();
+    const clientId = createClient(db, { hostname: "mint-01", sshUser: "pct-agent" }).id;
+    const alice = addLinkedUser(db, clientId, "Alice", "alice", 1001);
+    const yt = createActivity(db, { kind: "domain", matcher: "youtube.com" });
+    const reddit = createActivity(db, { kind: "domain", matcher: "reddit.com" });
+    const reddit2 = createActivity(db, { kind: "domain", matcher: "reddit.com" });
+    const window = {
+      recurrenceDays: 0b0011111,
+      recurrenceStartMinute: 16 * 60,
+      recurrenceEndMinute: 18 * 60,
+    } as const;
+    createSchedule(db, {
+      userId: alice,
+      targetKind: "activity",
+      targetId: yt.id,
+      action: "deny",
+      ...window,
+    });
+    createSchedule(db, {
+      userId: alice,
+      targetKind: "activity",
+      targetId: reddit.id,
+      action: "deny",
+      ...window,
+    });
+    createSchedule(db, {
+      userId: alice,
+      targetKind: "activity",
+      targetId: reddit2.id,
+      action: "deny",
+      ...window,
+    });
+
+    const plan = buildE2guardianPlan(db, clientId);
+
+    expect(plan.users[0]?.windows).toEqual([
+      { timeTag: "16 0 18 0 12345", sites: ["reddit.com", "youtube.com"] },
+    ]);
+    db.$client.close();
+  });
+
+  it("keeps distinct windows separate, sorted by time tag", () => {
+    const db = testDb();
+    const clientId = createClient(db, { hostname: "mint-01", sshUser: "pct-agent" }).id;
+    const alice = addLinkedUser(db, clientId, "Alice", "alice", 1001);
+    const reddit = createActivity(db, { kind: "domain", matcher: "reddit.com" });
+    const tiktok = createActivity(db, { kind: "domain", matcher: "tiktok.com" });
+    // Afternoon weekday window.
+    createSchedule(db, {
+      userId: alice,
+      targetKind: "activity",
+      targetId: reddit.id,
+      action: "deny",
+      recurrenceDays: 0b0011111,
+      recurrenceStartMinute: 16 * 60,
+      recurrenceEndMinute: 18 * 60,
+    });
+    // Nightly (all-days) bedtime window.
+    createSchedule(db, {
+      userId: alice,
+      targetKind: "activity",
+      targetId: tiktok.id,
+      action: "deny",
+      recurrenceStartMinute: 21 * 60,
+      recurrenceEndMinute: 1440,
+    });
+
+    const plan = buildE2guardianPlan(db, clientId);
+
+    // "16 0 18 0 12345" sorts before "21 0 24 0 0123456".
+    expect(plan.users[0]?.windows).toEqual([
+      { timeTag: "16 0 18 0 12345", sites: ["reddit.com"] },
+      { timeTag: "21 0 24 0 0123456", sites: ["tiktok.com"] },
+    ]);
+    db.$client.close();
+  });
+
+  it("gives a windowed-only user a filter group + port (empty always-on list)", () => {
+    const db = testDb();
+    const clientId = createClient(db, { hostname: "mint-01", sshUser: "pct-agent" }).id;
+    const alice = addLinkedUser(db, clientId, "Alice", "alice", 1001);
+    const reddit = createActivity(db, { kind: "domain", matcher: "reddit.com" });
+    createSchedule(db, {
+      userId: alice,
+      targetKind: "activity",
+      targetId: reddit.id,
+      action: "deny",
+      recurrenceDays: 0b0011111,
+      recurrenceStartMinute: 16 * 60,
+      recurrenceEndMinute: 18 * 60,
+    });
+
+    const plan = buildE2guardianPlan(db, clientId);
+    expect(plan.users).toHaveLength(1);
+    expect(plan.users[0]?.filterGroup).toBe(2);
+    expect(plan.users[0]?.listenPort).toBe(DEFAULT_PROXY_PORT + 1);
+    expect(plan.users[0]?.bannedSites).toEqual([]);
+    db.$client.close();
+  });
+
+  it("carries always-on and windowed denies together on one user", () => {
+    const db = testDb();
+    const clientId = createClient(db, { hostname: "mint-01", sshUser: "pct-agent" }).id;
+    const alice = addLinkedUser(db, clientId, "Alice", "alice", 1001);
+    const facebook = createActivity(db, { kind: "domain", matcher: "facebook.com" });
+    const reddit = createActivity(db, { kind: "domain", matcher: "reddit.com" });
+    // Always-on deny.
+    createSchedule(db, {
+      userId: alice,
+      targetKind: "activity",
+      targetId: facebook.id,
+      action: "deny",
+    });
+    // Windowed deny.
+    createSchedule(db, {
+      userId: alice,
+      targetKind: "activity",
+      targetId: reddit.id,
+      action: "deny",
+      recurrenceDays: 0b0011111,
+      recurrenceStartMinute: 16 * 60,
+      recurrenceEndMinute: 18 * 60,
+    });
+
+    const plan = buildE2guardianPlan(db, clientId);
+    expect(plan.users[0]?.bannedSites).toEqual(["facebook.com"]);
+    expect(plan.users[0]?.windows).toEqual([{ timeTag: "16 0 18 0 12345", sites: ["reddit.com"] }]);
+    db.$client.close();
+  });
+
+  it("expands a group-targeted windowed deny to its domain members (apps ignored)", () => {
+    const db = testDb();
+    const clientId = createClient(db, { hostname: "mint-01", sshUser: "pct-agent" }).id;
+    const alice = addLinkedUser(db, clientId, "Alice", "alice", 1001);
+    const group = createActivityGroup(db, { name: "Distractions" });
+    const fb = createActivity(db, { kind: "domain", matcher: "facebook.com" });
+    const ig = createActivity(db, { kind: "domain", matcher: "instagram.com" });
+    const steam = createActivity(db, { kind: "app", matcher: "steam" });
+    addActivityToGroup(db, group.id, fb.id);
+    addActivityToGroup(db, group.id, ig.id);
+    addActivityToGroup(db, group.id, steam.id);
+    createSchedule(db, {
+      userId: alice,
+      targetKind: "group",
+      targetId: group.id,
+      action: "deny",
+      recurrenceDays: 0b0011111,
+      recurrenceStartMinute: 16 * 60,
+      recurrenceEndMinute: 18 * 60,
+    });
+
+    const plan = buildE2guardianPlan(db, clientId);
+    expect(plan.users[0]?.windows).toEqual([
+      { timeTag: "16 0 18 0 12345", sites: ["facebook.com", "instagram.com"] },
+    ]);
+    db.$client.close();
+  });
+
+  it("includes an inherited recurring group deny as a window (recurring half of #362)", () => {
+    const db = testDb();
+    const clientId = createClient(db, { hostname: "mint-01", sshUser: "pct-agent" }).id;
+    const alice = addLinkedUser(db, clientId, "Alice", "alice", 1001);
+
+    // A recurring deny authored on a user-group the child belongs to, not the child.
+    const kids = createUserGroup(db, { name: "Kids" });
+    addUserToGroup(db, kids.id, alice);
+    const reddit = createActivity(db, { kind: "domain", matcher: "reddit.com" });
+    createGroupSchedule(db, {
+      userGroupId: kids.id,
+      targetKind: "activity",
+      targetId: reddit.id,
+      action: "deny",
+      recurrenceDays: 0b0011111,
+      recurrenceStartMinute: 16 * 60,
+      recurrenceEndMinute: 18 * 60,
+    });
+
+    const plan = buildE2guardianPlan(db, clientId);
+    expect(plan.users[0]?.windows).toEqual([{ timeTag: "16 0 18 0 12345", sites: ["reddit.com"] }]);
+    db.$client.close();
+  });
+
+  it("skips a date-scoped recurring deny (deferred to #142)", () => {
+    const db = testDb();
+    const clientId = createClient(db, { hostname: "mint-01", sshUser: "pct-agent" }).id;
+    const alice = addLinkedUser(db, clientId, "Alice", "alice", 1001);
+    const reddit = createActivity(db, { kind: "domain", matcher: "reddit.com" });
+    // Recurrence set AND date-scoped → excluded (e2guardian #time: can't express a date range).
+    createSchedule(db, {
+      userId: alice,
+      targetKind: "activity",
+      targetId: reddit.id,
+      action: "deny",
+      recurrenceDays: 0b0011111,
+      recurrenceStartMinute: 16 * 60,
+      recurrenceEndMinute: 18 * 60,
+      effectiveFrom: new Date("2026-01-01T00:00:00Z"),
+    });
+
+    expect(buildE2guardianPlan(db, clientId).users).toEqual([]);
+    db.$client.close();
+  });
+
+  it("skips a domain_group windowed deny (named bundles owned by #178/#195)", () => {
+    const db = testDb();
+    const clientId = createClient(db, { hostname: "mint-01", sshUser: "pct-agent" }).id;
+    const alice = addLinkedUser(db, clientId, "Alice", "alice", 1001);
+    const bundle = createActivity(db, { kind: "domain_group", matcher: "ads" });
+    createSchedule(db, {
+      userId: alice,
+      targetKind: "activity",
+      targetId: bundle.id,
+      action: "deny",
+      recurrenceDays: 0b0011111,
+      recurrenceStartMinute: 16 * 60,
+      recurrenceEndMinute: 18 * 60,
+    });
+
+    expect(buildE2guardianPlan(db, clientId).users).toEqual([]);
+    db.$client.close();
+  });
+});
+
 const HOST: AnsibleHost = { hostname: "mint-01.lan", sshUser: "pct-agent" };
 
 const SAMPLE_PLAN: E2guardianPlan = {
@@ -261,6 +537,7 @@ const SAMPLE_PLAN: E2guardianPlan = {
       filterGroup: 2,
       listenPort: 8081,
       bannedSites: ["youtube.com"],
+      windows: [],
     },
   ],
 };
@@ -315,6 +592,44 @@ describe("pushE2guardianFiltering", () => {
             filterGroup: 2,
             listenPort: 8081,
             bannedSites: ["youtube.com"],
+            windows: [],
+          },
+        ],
+      },
+    });
+  });
+
+  it("passes recurring time-window denies through to the nested extra-vars", async () => {
+    const { runner, calls } = stubRunner();
+    const windowedPlan: E2guardianPlan = {
+      proxyPort: 8080,
+      redirectPorts: [80, 443],
+      users: [
+        {
+          osUsername: "alice",
+          osUserRef: "1001",
+          filterGroup: 2,
+          listenPort: 8081,
+          bannedSites: [],
+          windows: [{ timeTag: "16 0 18 0 12345", sites: ["reddit.com", "youtube.com"] }],
+        },
+      ],
+    };
+
+    await pushE2guardianFiltering({ runner, host: HOST, plan: windowedPlan });
+
+    expect(calls[0]?.extraVars).toEqual({
+      e2guardian: {
+        proxyPort: 8080,
+        redirectPorts: [80, 443],
+        users: [
+          {
+            osUsername: "alice",
+            osUserRef: "1001",
+            filterGroup: 2,
+            listenPort: 8081,
+            bannedSites: [],
+            windows: [{ timeTag: "16 0 18 0 12345", sites: ["reddit.com", "youtube.com"] }],
           },
         ],
       },
