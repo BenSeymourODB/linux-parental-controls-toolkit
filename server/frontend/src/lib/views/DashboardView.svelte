@@ -12,6 +12,7 @@
 <script lang="ts">
   import AddTimeToday from "$lib/components/AddTimeToday.svelte";
   import QueueSummaryWidget from "$lib/components/QueueSummaryWidget.svelte";
+  import SystemStatusStrip from "$lib/components/SystemStatusStrip.svelte";
 
   interface Props {
     username: string;
@@ -22,6 +23,7 @@
 </script>
 
 <section>
+  <SystemStatusStrip />
   <h1>Welcome, {username}</h1>
   <p class="lead">
     This is the admin dashboard for the parental-controls toolkit. Manage supervised users below;

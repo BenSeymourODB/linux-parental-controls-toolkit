@@ -95,6 +95,7 @@ function assemble(
     clientId: client.id,
     hostname: client.hostname,
     reachability: probe?.reachability ?? "unknown",
+    reachabilityReason: probe?.reachabilityReason ?? null,
     lastSeen: client.lastSeen === null ? null : client.lastSeen.toISOString(),
     enrolledAt: client.enrolledAt.toISOString(),
     probedAt: probe === undefined ? null : probe.at.toISOString(),

@@ -14,20 +14,17 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import { registerApi } from "../api/index.js";
 import { loadSettings, type Settings } from "../config.js";
-import { EventHub, type EventStreamOptions } from "../events/index.js";
-import { createDb, type PolicyDb } from "../policy/db.js";
-import { createAnsibleVenvSupervisor, type AnsibleVenvSupervisor } from "../setup/ansible-venv.js";
+import { type EventStreamOptions } from "../events/index.js";
+import { type PolicyDb } from "../policy/db.js";
+import type { EnforcementPipelineHandle } from "../enforcement/index.js";
+import { type AnsibleVenvSupervisor } from "../setup/ansible-venv.js";
 import {
-  createAdGuardManagedSupervisor,
-  createAdGuardService,
   type AdGuardHealthPollHandle,
   type AdGuardManagedSupervisor,
   type AdGuardService,
 } from "../transport/adguard/index.js";
-import {
-  createPolicyPushTransport,
-  type PolicyPushTransport,
-} from "../transport/policy-push/index.js";
+import { type PolicyPushTransport } from "../transport/policy-push/index.js";
+import { buildAppServices } from "./app-services.js";
 import { registerFrontend } from "./frontend.js";
 import { registerInstallScript } from "./install-script.js";
 import { REQUEST_ID_HEADER, buildLoggerOptions, genRequestId, type LogStream } from "./logger.js";
@@ -71,6 +68,15 @@ declare module "fastify" {
      * `onClose` hook stops it if set.
      */
     adguardHealthPoll: AdGuardHealthPollHandle | null;
+    /**
+     * The Phase-8 enforcement pipeline (#327): telemetry pull → #88 usage
+     * rollup → per-activity enforcement sweep, or `null` when the dashboard has
+     * no SSH key yet (nothing is reachable). Like the other schedulers it is
+     * **constructed** here but **not** started by `buildApp` (so building the
+     * app — including every test — starts no timer); `main.ts` calls `start()`
+     * after `listen`, and `buildApp`'s `onClose` hook stops it.
+     */
+    enforcementPipeline: EnforcementPipelineHandle | null;
   }
 }
 
@@ -126,6 +132,14 @@ export interface BuildAppOptions {
    * production; tests use it to exercise the N-1 refusal branches.
    */
   eventStream?: EventStreamOptions;
+  /**
+   * Inject the {@link EnforcementPipelineHandle} (#327), or `null` to force the
+   * not-wired contract. When omitted, {@link buildApp} builds it from settings —
+   * which yields `null` unless the SSH key exists — and never starts its timer
+   * (that is `main.ts`'s job after `listen`). Tests inject a fake to assert boot
+   * start/stop without a live SSH transport.
+   */
+  enforcementPipeline?: EnforcementPipelineHandle | null;
 }
 
 /**
@@ -152,102 +166,41 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     trustProxy: settings.trustProxy,
   });
 
-  // Open (and migrate) the policy store unless a handle was injected. buildApp
-  // owns only the handle it creates: that one is closed on shutdown; an
-  // injected handle's lifecycle belongs to its provider (no double-close).
-  // `app.log` carries the migrate-on-boot pre-migration backup outcome (#166).
-  const db = options.db ?? createDb(settings, { log: app.log });
-  const ownsDb = options.db === undefined;
-  app.decorate("db", db);
+  // Build the long-lived services (policy DB, policy-push transport, event hub,
+  // managed AdGuard, AdGuard mode router, Ansible venv) via the composition
+  // root, then decorate them onto the instance. Construction only — no
+  // subprocess, no timer; main.ts bootstraps/starts those after `listen`.
+  const services = buildAppServices(options, settings, app.log);
+  app.decorate("db", services.db);
+  app.decorate("eventHub", services.eventHub);
+  app.decorate("adguardManaged", services.adguardManaged);
+  app.decorate("adguard", services.adguard);
+  app.decorate("ansibleVenv", services.ansibleVenv);
+  // The Phase-8 enforcement pipeline (#327), or null when no SSH key exists.
+  // Constructed by the composition root; main.ts calls start() after listen and
+  // services.teardown stops it. Decorated here so main.ts reads it off the app.
+  app.decorate("enforcementPipeline", services.enforcementPipeline);
 
-  // Outbound policy-push transport (#201): the live `timekpra`-over-SSH
-  // dispatcher when the SSH key exists (#39), else the logging stub. It also
-  // owns the offline-queue drainer + pooled SSH connections, torn down on close
-  // — before the db it reads from (when buildApp owns that db). When live it
-  // also exposes the client health prober (#81), built over that same pooled
-  // SSH transport and injected into the /api/clients/health routes below. A
-  // test may inject one (e.g. with a fake `adjustTimeToday`); only the handle
-  // buildApp creates is disposed here, mirroring the `db` seam.
-  const policyPush =
-    options.policyPush ?? createPolicyPushTransport({ settings, db, log: app.log });
-  const ownsPolicyPush = options.policyPush === undefined;
-  app.addHook("onClose", async () => {
-    if (ownsPolicyPush) policyPush.dispose();
-    if (ownsDb) db.$client.close();
-  });
+  // Dispose the resources the composition root owns (owned policy-push + db, a
+  // non-null managed supervisor, and the enforcement pipeline). See
+  // AppServices.teardown for the ownership rules preserved here.
+  app.addHook("onClose", services.teardown);
 
-  // The process-wide event fan-out registry (#100). Created here so it is a
-  // single instance shared by the `/api/events/stream` route and every future
-  // event producer (`app.eventHub`), regardless of which `/api` sub-scope they
-  // live in. Holds no resources of its own (just the live-connection map), so
-  // it needs no teardown beyond the sockets the route closes on shutdown.
-  const eventHub = new EventHub();
-  app.decorate("eventHub", eventHub);
-
-  // The managed-mode AdGuard Home supervisor (#96), read by
-  // GET /api/system/adguard-managed. Built only in `managed` mode (else null);
-  // like ansibleVenv it is decorated here but bootstrapped by main.ts after
-  // listen, so constructing the app — including tests — spawns no process. An
-  // explicitly-injected value (including null) is honoured as-is. Built before
-  // the AdGuard service so it can be wired in as the service's managed-instance
-  // source (#283).
-  const adguardManaged =
-    options.adguardManaged !== undefined
-      ? options.adguardManaged
-      : settings.adguard.mode === "managed"
-        ? createAdGuardManagedSupervisor({
-            dataDir: settings.adguard.dataDir,
-            bindAddr: settings.adguard.bindAddr,
-            adminPort: settings.adguard.adminPort,
-            ...(settings.adguard.version !== undefined
-              ? { version: settings.adguard.version }
-              : {}),
-          })
-        : null;
-  app.decorate("adguardManaged", adguardManaged);
-  if (adguardManaged !== null) {
-    app.addHook("onClose", async () => {
-      await adguardManaged.stop();
-    });
-  }
-
-  // Route the configured AdGuard mode (#95) and decorate it so the /api/dns
-  // route reads one snapshot. In `managed` mode the supervisor above is wired in
-  // as the service's running-instance source (#283), so getClient()/runPreflight
-  // target the supervised endpoint. The preflight runs once the app is ready
-  // (after listen/inject triggers onReady); disabled is a no-op.
-  const adguard =
-    options.adguard ??
-    createAdGuardService(
-      settings.adguard,
-      adguardManaged !== null ? { managed: adguardManaged } : {},
-    );
-  app.decorate("adguard", adguard);
+  // Route the configured AdGuard mode's preflight once the app is ready (after
+  // listen/inject triggers onReady); disabled mode is a no-op.
   app.addHook("onReady", async () => {
-    await adguard.runPreflight(app.log);
+    await services.adguard.runPreflight(app.log);
   });
 
   // The managed-mode health poller (#283) is started by main.ts after listen
   // (not here, so building the app starts no timer); buildApp owns only its
-  // teardown. Initialised null and stopped on close if main.ts wired it.
+  // teardown. Initialised null and stopped on close if main.ts wired it — read
+  // from the decorator so the value main.ts assigns after listen is the one torn
+  // down. Registered after the owned-resource teardown so it stops first.
   app.decorate("adguardHealthPoll", null);
   app.addHook("onClose", async () => {
     app.adguardHealthPoll?.stop();
   });
-
-  // The first-run Ansible venv bootstrap supervisor (#39), read by
-  // GET /api/system/ansible. Built (or injected) here so the route has a status
-  // to serialise, but NOT run here: `main.ts` fires `bootstrap()` after `listen`
-  // so a slow `pip install` never delays startup, and constructing the app —
-  // including every test that builds it — spawns no subprocess.
-  const ansibleVenv =
-    options.ansibleVenv ??
-    createAnsibleVenvSupervisor({
-      ansibleDir: settings.ansibleDir,
-      coreVersion: settings.ansibleCoreVersion,
-      playbookSourceDir: settings.ansiblePlaybookSourceDir,
-    });
-  app.decorate("ansibleVenv", ansibleVenv);
 
   app.get("/", async (_request, reply) => {
     return reply.type("text/plain").send("hello, no policy yet");
@@ -265,10 +218,11 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   registerApi(
     app,
     settings,
-    eventHub,
-    policyPush.dispatcher,
-    policyPush.adjustTimeToday,
-    policyPush.prober,
+    services.eventHub,
+    services.policyPush.dispatcher,
+    services.policyPush.adjustTimeToday,
+    services.policyPush.pushPolicyNow,
+    services.policyPush.prober,
     options.eventStream,
   );
 

@@ -121,6 +121,13 @@ export {
   type AdjustTimeTodayRequest,
   type TimeTodayResponse,
   type ClientAdjustmentResultDto,
+  // Manual "push saved policy now" lever (#304)
+  pushPolicyRequestSchema,
+  clientPushResultSchema,
+  pushPolicyResponseSchema,
+  type PushPolicyRequest,
+  type ClientPushResultDto,
+  type PushPolicyResponse,
 } from "./policy/index.js";
 
 // Client-enrolment DTOs (#77): the admin token-mint + install-script enrol

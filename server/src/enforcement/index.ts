@@ -59,3 +59,19 @@ export {
   type EnforcementSweepResult,
   type EnforcementSweepHandle,
 } from "./sweep.js";
+
+export {
+  createUsageTelemetryConsumer,
+  type AwEventSource,
+  type AwEventSourceFactory,
+  type UsageTelemetryConsumerOptions,
+} from "./telemetry-consumer.js";
+
+export {
+  createEnforcementPipeline,
+  loadTelemetryClients,
+  ENFORCEMENT_PIPELINE_COMPONENT,
+  type CreateEnforcementPipelineOptions,
+  type EnforcementPipelineHandle,
+  type PipelineSshTransport,
+} from "./pipeline.js";
