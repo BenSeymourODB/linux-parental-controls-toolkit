@@ -271,8 +271,9 @@ jobs:
     # setup is needed here; molecule drives the pre-installed Docker daemon.
     #
     # Converging containers is expensive, so on a pull_request this only runs
-    # when client/ansible/** changed; it always runs on the nightly schedule
-    # and on manual dispatch.
+    # when client/ansible/** — or this workflow file itself — changed; it
+    # always runs on the nightly schedule and on manual dispatch. (Gating on
+    # the workflow file means a change to this job is exercised by its own PR.)
     steps:
       - uses: actions/checkout@v4
         with:
@@ -290,12 +291,12 @@ jobs:
           else
             git fetch --depth=1 origin "${{ github.base_ref }}"
             if git diff --name-only "origin/${{ github.base_ref }}"...HEAD \
-                 | grep -q '^client/ansible/'; then
+                 | grep -qE '^(client/ansible/|\.github/workflows/integration\.yml$)'; then
               echo "run=true" >> "$GITHUB_OUTPUT"
-              echo "client/ansible/ changed on this PR — running Molecule."
+              echo "client/ansible/ or this workflow changed on this PR — running Molecule."
             else
               echo "run=false" >> "$GITHUB_OUTPUT"
-              echo "No client/ansible/ changes on this PR — skipping Molecule."
+              echo "No client/ansible/ or workflow changes on this PR — skipping Molecule."
             fi
           fi
 

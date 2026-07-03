@@ -127,9 +127,12 @@ describe("integration.yml — Molecule job (#219)", () => {
     const decide = moleculeJob().steps.find((s) => s.name === "Decide whether to converge");
     expect(decide, "molecule job has no `Decide whether to converge` step").toBeDefined();
     const run = decide?.run ?? "";
-    // The gate keys on the event being a PR and on client/ansible/ diffs.
+    // The gate keys on the event being a PR and on client/ansible/ diffs —
+    // plus the workflow file itself, so a change to this job is exercised by
+    // its own PR.
     expect(run).toContain("pull_request");
     expect(run).toContain("client/ansible/");
+    expect(run).toContain(".github/workflows/integration");
     expect(run).toContain("github.base_ref");
   });
 

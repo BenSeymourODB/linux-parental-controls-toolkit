@@ -555,8 +555,9 @@ side of the client install actually works end-to-end.
 **In CI (#219).** The `molecule` job in `.github/workflows/integration.yml`
 runs `molecule test --all` on a systemd-enabled GitHub-hosted runner, so
 this is no longer a local-only step. Converging containers is expensive, so
-on a `pull_request` the job only runs when `client/ansible/**` changed; it
-always runs on the nightly `schedule` and on `workflow_dispatch`. Static
+on a `pull_request` the job only runs when `client/ansible/**` — or the
+workflow file itself — changed; it always runs on the nightly `schedule` and
+on `workflow_dispatch`. Static
 `ansible-lint` in `ci.yml` stays the fast gate that runs on every PR.
 
 ---

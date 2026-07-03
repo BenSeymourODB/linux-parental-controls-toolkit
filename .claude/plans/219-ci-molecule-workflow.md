@@ -21,10 +21,12 @@ static `ansible-lint`; `molecule test` is documented as a local-only step
    `integration.yml` already fires on `pull_request` → main, a nightly
    `schedule`, and `workflow_dispatch`. The molecule job:
    - always runs on `schedule` and `workflow_dispatch`;
-   - on a `pull_request`, only runs when `client/ansible/**` changed (a
-     per-job `git diff` gate that sets a `run` output, exactly the
-     "check-prereqs → gate steps with `if:`" idiom the sibling jobs already
-     use — no new third-party action).
+   - on a `pull_request`, only runs when `client/ansible/**` — or this
+     workflow file itself — changed (a per-job `git diff` gate that sets a
+     `run` output, exactly the "check-prereqs → gate steps with `if:`" idiom
+     the sibling jobs already use — no new third-party action). Gating on the
+     workflow file means a change to the job (like this one) is exercised by
+     its own PR's CI run.
 
 3. **Runner / privilege.** GitHub-hosted `ubuntu-22.04` (cgroup v2, Docker
    pre-installed). The existing `molecule.yml` already declares the
