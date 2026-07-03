@@ -23,27 +23,11 @@ import { spawn } from "node:child_process";
 import { join } from "node:path";
 
 import { acquireAdGuardHome, type AcquireConfig, type AcquireResult } from "./acquire.js";
+import { RestartBackoff } from "./backoff.js";
+import { LifecycleMachine, type AdGuardManagedState } from "./lifecycle.js";
 import { writeSeedConfigIfAbsent, type SeedConfigOptions } from "./managed-config.js";
 
-/**
- * Lifecycle state of the managed AdGuard Home process.
- *
- * - `idle` — built but not yet bootstrapped (a freshly constructed supervisor;
- *   building the app spawns nothing).
- * - `fetching` — `bootstrap()` is acquiring the binary / seeding config.
- * - `starting` — the child process is being spawned.
- * - `running` — the child is up.
- * - `stopped` — stopped on purpose (graceful shutdown).
- * - `failed` — acquisition failed, the process could not be spawned, or it
- *   exited unexpectedly too many times; `detail` says why.
- */
-export type AdGuardManagedState =
-  | "idle"
-  | "fetching"
-  | "starting"
-  | "running"
-  | "stopped"
-  | "failed";
+export { type AdGuardManagedState } from "./lifecycle.js";
 
 /** An immutable snapshot of the supervisor's last-observed state. */
 export interface AdGuardManagedStatus {
@@ -170,8 +154,8 @@ export class AdGuardManagedSupervisor {
   #version: string | null = null;
   #child: ManagedProcess | null = null;
   #stopping = false;
-  #restarts = 0;
-  #startedAt: number | null = null;
+  readonly #backoff: RestartBackoff;
+  readonly #lifecycle = new LifecycleMachine("idle");
   #logger: AdGuardManagedLogger | undefined;
   /** Resolvers awaiting the current child's exit (used by {@link stop}). */
   #exitWaiters: (() => void)[] = [];
@@ -190,6 +174,12 @@ export class AdGuardManagedSupervisor {
       backoffBaseMs: deps.backoffBaseMs ?? 1_000,
       backoffMaxMs: deps.backoffMaxMs ?? 60_000,
     };
+    this.#backoff = new RestartBackoff({
+      maxRestarts: this.#deps.maxRestarts,
+      stableMs: this.#deps.stableMs,
+      baseMs: this.#deps.backoffBaseMs,
+      maxMs: this.#deps.backoffMaxMs,
+    });
 
     this.#binaryPath = join(config.dataDir, "AdGuardHome");
     this.#configPath = join(config.dataDir, "conf", CONFIG_FILENAME);
@@ -197,7 +187,7 @@ export class AdGuardManagedSupervisor {
     this.#adminEndpoint = `http://127.0.0.1:${config.adminPort}`;
 
     this.#status = {
-      state: "idle",
+      state: this.#lifecycle.state,
       binaryPath: this.#binaryPath,
       version: null,
       adminEndpoint: this.#adminEndpoint,
@@ -280,7 +270,7 @@ export class AdGuardManagedSupervisor {
     const args = ["--no-check-update", "--config", this.#configPath, "--work-dir", this.#workDir];
     const child = this.#deps.spawn(this.#binaryPath, args);
     this.#child = child;
-    this.#startedAt = this.#deps.now().getTime();
+    this.#backoff.markStarted(this.#deps.now().getTime());
 
     // Capture `child` so a stale event from a previous process is ignored. Node
     // emits BOTH `error` and `exit` for a failed spawn; whichever fires first
@@ -309,30 +299,22 @@ export class AdGuardManagedSupervisor {
       return;
     }
 
-    // Reset the consecutive-restart counter when the run was stable long enough,
-    // so a single crash after days of uptime is not counted against the cap.
-    const startedAt = this.#startedAt;
-    if (startedAt !== null && this.#deps.now().getTime() - startedAt >= this.#deps.stableMs) {
-      this.#restarts = 0;
-    }
-
+    // The backoff owns the stable-run reset (a single crash after days of uptime
+    // is not counted against the cap), the cap check, and the delay computation.
     const reason = `exited unexpectedly (code ${String(code)}, signal ${String(signal)})`;
-    if (this.#restarts >= this.#deps.maxRestarts) {
+    const backoffMs = this.#backoff.nextDelayMs(this.#deps.now().getTime());
+    if (backoffMs === null) {
       const detail = `${reason}; exceeded the restart cap (${this.#deps.maxRestarts})`;
       this.#settle("failed", detail, `AdGuard Home ${detail}`, "error");
       return;
     }
 
-    this.#restarts += 1;
-    const backoff = Math.min(
-      this.#deps.backoffBaseMs * 2 ** (this.#restarts - 1),
-      this.#deps.backoffMaxMs,
-    );
+    const attempt = this.#backoff.count;
     this.#logger?.warn(
-      { event: "adguard_managed", restarts: this.#restarts, backoffMs: backoff },
-      `AdGuard Home ${reason}; restarting in ${backoff}ms (attempt ${this.#restarts})`,
+      { event: "adguard_managed", restarts: attempt, backoffMs },
+      `AdGuard Home ${reason}; restarting in ${backoffMs}ms (attempt ${attempt})`,
     );
-    void this.#scheduleRestart(backoff);
+    void this.#scheduleRestart(backoffMs);
   }
 
   async #scheduleRestart(backoffMs: number): Promise<void> {
@@ -354,12 +336,18 @@ export class AdGuardManagedSupervisor {
     msg: string,
     level: "info" | "error" = "info",
   ): void {
+    this.#lifecycle.transition(state, (from, to) =>
+      this.#logger?.warn(
+        { event: "adguard_managed", from, to },
+        `AdGuard Home managed supervisor: unexpected state transition ${from} -> ${to}`,
+      ),
+    );
     this.#status = {
-      state,
+      state: this.#lifecycle.state,
       binaryPath: this.#binaryPath,
       version: this.#version,
       adminEndpoint: this.#adminEndpoint,
-      restarts: this.#restarts,
+      restarts: this.#backoff.count,
       checkedAt: this.#deps.now().toISOString(),
       detail,
     };

@@ -48,13 +48,8 @@
 import { z } from "zod";
 
 import type { PolicyDb } from "../../policy/db.js";
-import {
-  getClient,
-  getUser,
-  listUserBudgets,
-  listUserLinks,
-  listUserSchedules,
-} from "../../policy/repository.js";
+import { gatherUserBudgets, gatherUserScheduleRules } from "../../policy/group-resolution.js";
+import { getClient, getUser, listUserLinks } from "../../policy/repository.js";
 import type { ActionExecutor, QueuedAction } from "../queue/types.js";
 import { policyPushPayloadSchema } from "./payload.js";
 import type { PlatformRunnerRegistry } from "./platform-runner.js";
@@ -148,8 +143,11 @@ export function createPolicyPushExecutor(options: PolicyPushExecutorOptions): Ac
     // defensive only, and a vanished user resolves to an empty-policy push.
     const user = getUser(db, userId);
     const tz = user?.tz ?? defaultTz;
-    const budgets = listUserBudgets(db, userId);
-    const schedules = listUserSchedules(db, userId);
+    // Effective policy = the user's own rules merged with any inherited group
+    // schedules/budgets (#362), so a group-targeted bedtime or budget actually
+    // reaches the client instead of being display-only.
+    const budgets = gatherUserBudgets(db, userId);
+    const schedules = gatherUserScheduleRules(db, userId);
 
     await runner.enforce({
       client,

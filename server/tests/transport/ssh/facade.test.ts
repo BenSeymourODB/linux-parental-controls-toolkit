@@ -345,6 +345,13 @@ describe("SshTransport.exec", () => {
     expect(error).toBeInstanceOf(SshExecTimeoutError);
     expect(error).toMatchObject({ retriable: true, timeoutMs: 10 });
     expect(state.instances[0]?.channels[0]?.destroyed).toBe(true);
+    // The connection stays pooled — the host is reachable, only the command
+    // hung. Eviction is centralised in #exec on SshUnreachableError (#306), so
+    // a timeout must NOT evict; a follow-up exec reuses the same connection.
+    expect(transport.connectionCount).toBe(1);
+    state.exec = { code: 0 };
+    await transport.exec(target, ["true"]);
+    expect(state.connectCalls).toBe(1);
   });
 });
 

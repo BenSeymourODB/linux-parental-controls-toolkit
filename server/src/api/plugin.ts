@@ -105,8 +105,10 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (scope, opt
   // Needs `settings` for the server-default timezone of users with no `tz`.
   registerUsageRoutes(scope, opts.settings);
   // Save-and-push preview (#64): POST /users/:userId/policy-preview — the
-  // side-effect-free "what will change on each client" diff before a save.
-  registerPreviewRoutes(scope, opts.settings);
+  // "what will change on each client" diff before a save. Side-effect-free by
+  // default; the live prober (injected like the Clients routes, absent pre-#39)
+  // powers the opt-in `probe: true` live-reachability marker (#281).
+  registerPreviewRoutes(scope, opts.settings, opts.prober);
   // Client enrolment (#77): admin-minted token + the install script's enrol
   // exchange. `settings` carries the SSH-public-key path the enrol response returns.
   registerClientEnrolmentRoutes(scope, opts.settings);

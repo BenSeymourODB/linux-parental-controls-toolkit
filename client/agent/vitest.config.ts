@@ -12,10 +12,10 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       include: ["src/**"],
-      // src/main.ts is a thin bootstrap (load config + start the bridge + wait
-      // for a shutdown signal); its process-lifecycle wiring can't run under
-      // the unit harness. The bridge it builds is covered via Bridge in tests.
-      exclude: ["src/main.ts"],
+      // Thin bootstraps (load config + build + start + wait for a shutdown
+      // signal); their process-lifecycle wiring can't run under the unit
+      // harness. What they build (Bridge, Agent) is covered via tests.
+      exclude: ["src/main.ts", "src/agent/main.ts"],
       thresholds: {
         lines: 80,
         branches: 80,

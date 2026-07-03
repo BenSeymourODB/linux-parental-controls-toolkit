@@ -327,3 +327,49 @@ describe("createAdGuardManagedSupervisor", () => {
     expect(spy).not.toHaveBeenCalled();
   });
 });
+
+describe("AdGuardManagedSupervisor lifecycle transitions", () => {
+  it("never logs an unexpected state transition across the real flows", async () => {
+    const { spawn, procs } = fakeSpawn();
+    const warnings: string[] = [];
+    // Record only the message text so we can assert the advisory transition
+    // warning is never emitted while still allowing the legit restart warning.
+    const logger = {
+      info: () => undefined,
+      warn: (_obj: object, msg?: string) => {
+        if (msg !== undefined) warnings.push(msg);
+      },
+      error: () => undefined,
+    };
+    const sup = createAdGuardManagedSupervisor(CONFIG, {
+      acquire: okAcquire,
+      writeSeedConfig: () => true,
+      spawn,
+      delay: () => Promise.resolve(),
+      maxRestarts: 2,
+      stableMs: 60_000,
+      now: () => new Date(0), // every run instantaneous → no stable reset
+    });
+
+    // Exercise every real path the transition table must cover:
+    // idle→fetching→starting→running, running→starting (restart) ×2,
+    // running→failed (cap), failed→fetching→…→running (re-bootstrap),
+    // running→stopped (graceful stop).
+    await sup.bootstrap(logger);
+    only(procs, procs.length - 1).triggerExit(1, null); // restart 1
+    await flush();
+    only(procs, procs.length - 1).triggerExit(1, null); // restart 2
+    await flush();
+    only(procs, procs.length - 1).triggerExit(1, null); // cap exceeded → failed
+    await flush();
+    expect(sup.status.state).toBe("failed");
+
+    await sup.bootstrap(logger); // re-bootstrap from failed
+    expect(sup.status.state).toBe("running");
+    only(procs, procs.length - 1).autoExitOn = "SIGTERM";
+    await sup.stop();
+    expect(sup.status.state).toBe("stopped");
+
+    expect(warnings.some((msg) => msg.includes("unexpected state transition"))).toBe(false);
+  });
+});

@@ -3,12 +3,14 @@
  *
  * A thin typed wrapper over {@link apiFetch}, mirroring `$lib/api/budgets`:
  * the request/response types are imported from the shared `/api` contract so
- * the frontend never re-declares a DTO. The endpoint is **side-effect-free** —
- * it resolves the user's *current* persisted overall policy and the *proposed*
- * policy in the body through the Phase-4 resolver, diffs the two, and returns
- * the human-readable change set plus the clients the push would reach (each
- * annotated with last-seen + pending-queue depth). It never probes, pushes, or
- * writes the queue.
+ * the frontend never re-declares a DTO. The endpoint is **side-effect-free by
+ * default** — it resolves the user's *current* persisted overall policy and the
+ * *proposed* policy in the body through the Phase-4 resolver, diffs the two, and
+ * returns the human-readable change set plus the clients the push would reach
+ * (each annotated with last-seen + pending-queue depth). Passing `probe: true`
+ * (#281) opts into a live-reachability check: the endpoint then also probes each
+ * affected client over the SSH facade, annotating `reachability`/`probedAt` and
+ * bumping the client's last-seen — the only side effect, and only on that path.
  *
  * The body reuses the same `BudgetResponse` / `ScheduleResponse` rows the editor
  * already holds (the contract's note: "no parallel wire shape"), so a caller
