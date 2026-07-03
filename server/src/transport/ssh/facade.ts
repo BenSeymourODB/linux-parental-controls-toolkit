@@ -29,11 +29,11 @@ import type { ZodType } from "zod";
 import type { clients } from "../../policy/schema.js";
 import {
   SshCommandError,
-  SshExecTimeoutError,
   SshParseError,
   SshUnreachableError,
   type SshTargetRef,
 } from "./errors.js";
+import { ExecBuffer } from "./exec-buffer.js";
 import { shellQuoteCommand } from "./shell-quote.js";
 
 /** A `clients` row (the persisted enrolment record) the facade can target. */
@@ -328,73 +328,16 @@ export class SshTransport {
     const client = await this.#connect(resolved);
     const timeoutMs = options.timeoutMs ?? this.#execTimeoutMs;
 
-    return new Promise<ExecResult>((resolve, reject) => {
-      let settled = false;
-      let timer: NodeJS.Timeout | undefined;
-      const finish = (run: () => void): void => {
-        if (settled) return;
-        settled = true;
-        if (timer !== undefined) clearTimeout(timer);
-        run();
-      };
-
-      client.exec(command, (err: Error | undefined, channel: ClientChannel) => {
-        if (err !== undefined) {
-          // The session could not carry our command — treat it as a dead
-          // connection so the next call reconnects, and surface it as
-          // unreachable (the offline-queue's retry signal).
-          this.#connections.delete(resolved.key);
-          finish(() => reject(new SshUnreachableError(resolved.ref, { cause: err })));
-          return;
-        }
-
-        const stdoutChunks: Buffer[] = [];
-        const stderrChunks: Buffer[] = [];
-        let exited = false;
-        let code: number | null = null;
-        let signal: string | null = null;
-
-        channel.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
-        channel.stderr.on("data", (chunk: Buffer) => stderrChunks.push(chunk));
-        channel.on("exit", (exitCode: number | null, exitSignal?: string) => {
-          exited = true;
-          code = exitCode;
-          signal = exitSignal ?? null;
-        });
-        channel.on("close", () => {
-          if (!exited) {
-            // The channel closed without the peer reporting an exit status —
-            // the session dropped mid-command rather than the command
-            // finishing. Surface it as unreachable (retriable) so it can't be
-            // mistaken for a clean signal-kill (`code: null`), and evict the
-            // (now-suspect) connection so the next call reconnects.
-            this.#connections.delete(resolved.key);
-            finish(() => reject(new SshUnreachableError(resolved.ref)));
-            return;
-          }
-          finish(() =>
-            resolve({
-              stdout: Buffer.concat(stdoutChunks).toString("utf8"),
-              stderr: Buffer.concat(stderrChunks).toString("utf8"),
-              code,
-              signal,
-            }),
-          );
-        });
-
-        if (timeoutMs > 0) {
-          timer = setTimeout(() => {
-            finish(() => {
-              // Tear down only the hung channel; the connection stays pooled
-              // (the host is reachable — the command, not the session, hung).
-              channel.destroy();
-              reject(new SshExecTimeoutError(resolved.ref, argv, timeoutMs));
-            });
-          }, timeoutMs);
-          timer.unref();
-        }
-      });
-    });
+    try {
+      return await new ExecBuffer({ ref: resolved.ref, argv, timeoutMs }).run(client, command);
+    } catch (error) {
+      // A dead session — the exec request failed, or the channel dropped
+      // mid-command — surfaces as SshUnreachableError; evict the (now-suspect)
+      // pooled connection so the next call reconnects. A timeout leaves it
+      // pooled: the host answered, only the command hung.
+      if (error instanceof SshUnreachableError) this.#connections.delete(resolved.key);
+      throw error;
+    }
   }
 
   /** Close and forget the pooled connection to `target`, if any. */
