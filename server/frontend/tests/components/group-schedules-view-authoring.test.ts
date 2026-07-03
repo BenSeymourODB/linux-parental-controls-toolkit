@@ -14,6 +14,7 @@ import type {
   GroupScheduleResponse,
   UserGroupResponse,
 } from "../../src/lib/api/contract.js";
+import { dateInputToInstant } from "../../src/lib/recurrence.js";
 
 const listUserGroups = vi.fn<() => Promise<UserGroupResponse[]>>();
 const listActivities = vi.fn<() => Promise<ActivityResponse[]>>();
@@ -120,6 +121,30 @@ describe("GroupSchedulesView create with recurrence", () => {
     expect(body).not.toHaveProperty("userId");
   });
 
+  it("creates a date-scoped group rule from the effective-date pickers", async () => {
+    render(GroupSchedulesView);
+    await selectGroup("Kids");
+    await screen.findAllByRole("listitem");
+
+    await fireEvent.input(screen.getByLabelText("Active from date"), {
+      target: { value: "2026-03-01" },
+    });
+    await fireEvent.input(screen.getByLabelText("Active until date"), {
+      target: { value: "2026-09-01" },
+    });
+    await fireEvent.click(screen.getByRole("button", { name: "Add schedule" }));
+
+    await waitFor(() => expect(createGroupSchedule).toHaveBeenCalledTimes(1));
+    const [groupId, body] = createGroupSchedule.mock.calls[0]!;
+    expect(groupId).toBe(1);
+    expect(body).toEqual(
+      expect.objectContaining({
+        effectiveFrom: dateInputToInstant("2026-03-01"),
+        effectiveTo: dateInputToInstant("2026-09-01"),
+      }),
+    );
+  });
+
   it("blocks Add for an invalid window (end only) and never calls the API", async () => {
     render(GroupSchedulesView);
     await selectGroup("Kids");
@@ -161,5 +186,24 @@ describe("GroupSchedulesView edit with recurrence", () => {
         effectiveTo: null,
       }),
     );
+  });
+
+  it("disables Save and does not PATCH when the edited window is invalid", async () => {
+    getGroupScheduleOrder.mockResolvedValue(
+      orderView([schedule({ id: 1, recurrenceStartMinute: 960, recurrenceEndMinute: 1080 })]),
+    );
+    render(GroupSchedulesView);
+    await selectGroup("Kids");
+
+    const item = (await screen.findAllByRole("listitem"))[0]!;
+    await fireEvent.click(within(item).getByRole("button", { name: "Edit" }));
+
+    // End before start → invalid.
+    await fireEvent.input(within(item).getByLabelText("End time"), { target: { value: "08:00" } });
+
+    const saveButton = within(item).getByRole("button", { name: "Save" });
+    expect(saveButton).toBeDisabled();
+    await fireEvent.click(saveButton);
+    expect(updateGroupSchedule).not.toHaveBeenCalled();
   });
 });

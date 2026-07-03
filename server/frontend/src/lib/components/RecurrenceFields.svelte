@@ -45,25 +45,29 @@
     error?: string | null;
   } = $props();
 
-  function onDayToggle(index: number, event: Event): void {
-    const checked = (event.currentTarget as HTMLInputElement).checked;
-    recurrenceDays = toggleDay(recurrenceDays, index, checked);
+  // The DOM event Svelte hands an input's on:change / on:input handler — typing
+  // `currentTarget` on the parameter reads the value without an unchecked `as`
+  // cast (CLAUDE.md → "no unchecked `as` casts").
+  type InputElementEvent = Event & { currentTarget: EventTarget & HTMLInputElement };
+
+  function onDayToggle(index: number, event: InputElementEvent): void {
+    recurrenceDays = toggleDay(recurrenceDays, index, event.currentTarget.checked);
   }
 
-  function onStartInput(event: Event): void {
-    recurrenceStartMinute = timeInputToMinutes((event.currentTarget as HTMLInputElement).value, false);
+  function onStartInput(event: InputElementEvent): void {
+    recurrenceStartMinute = timeInputToMinutes(event.currentTarget.value, false);
   }
 
-  function onEndInput(event: Event): void {
-    recurrenceEndMinute = timeInputToMinutes((event.currentTarget as HTMLInputElement).value, true);
+  function onEndInput(event: InputElementEvent): void {
+    recurrenceEndMinute = timeInputToMinutes(event.currentTarget.value, true);
   }
 
-  function onFromInput(event: Event): void {
-    effectiveFrom = dateInputToInstant((event.currentTarget as HTMLInputElement).value);
+  function onFromInput(event: InputElementEvent): void {
+    effectiveFrom = dateInputToInstant(event.currentTarget.value);
   }
 
-  function onToInput(event: Event): void {
-    effectiveTo = dateInputToInstant((event.currentTarget as HTMLInputElement).value);
+  function onToInput(event: InputElementEvent): void {
+    effectiveTo = dateInputToInstant(event.currentTarget.value);
   }
 </script>
 
