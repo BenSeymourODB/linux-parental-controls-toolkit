@@ -129,6 +129,24 @@ describe("SystemStatusStrip (#321)", () => {
     expect(screen.getByText("Running")).toBeInTheDocument();
   });
 
+  it("shows an in-progress AdGuard (fetching) as amber", async () => {
+    fetchAdGuardManagedStatus.mockResolvedValue(adguard({ state: "fetching" }));
+    render(SystemStatusStrip);
+
+    await screen.findByText("AdGuard Home");
+    expect(pillFor("AdGuard Home")).toHaveClass("tone-amber");
+    expect(screen.getByText("Fetching")).toBeInTheDocument();
+  });
+
+  it("treats an enabled AdGuard with a null state as amber 'Unknown'", async () => {
+    fetchAdGuardManagedStatus.mockResolvedValue(adguard({ state: null }));
+    render(SystemStatusStrip);
+
+    await screen.findByText("AdGuard Home");
+    expect(pillFor("AdGuard Home")).toHaveClass("tone-amber");
+    expect(screen.getByText("Unknown")).toBeInTheDocument();
+  });
+
   it("shows a failed AdGuard as red with detail and a non-zero restart count", async () => {
     fetchAdGuardManagedStatus.mockResolvedValue(
       adguard({ state: "failed", restarts: 3, detail: "exited with code 1" }),

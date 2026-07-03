@@ -162,6 +162,7 @@
             class={`pill tone-${pill.tone}`}
             title={pill.detail}
             aria-expanded={expandedKey === pill.key}
+            aria-controls={`detail-${pill.key}`}
             onclick={() => toggle(pill.key)}
           >
             <span class="dot" aria-hidden="true"></span>
@@ -169,7 +170,7 @@
             <span class="state">{pill.state}</span>
           </button>
           {#if expandedKey === pill.key}
-            <p class="detail" role="note">{pill.detail}</p>
+            <p id={`detail-${pill.key}`} class="detail" role="note">{pill.detail}</p>
           {/if}
         {:else}
           <span class={`pill tone-${pill.tone}`} title={pill.detail ?? undefined}>
