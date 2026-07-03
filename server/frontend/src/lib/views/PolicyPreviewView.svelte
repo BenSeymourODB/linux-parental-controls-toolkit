@@ -74,6 +74,10 @@
   let preview = $state<PolicyPreviewResponse | null>(null);
   let previewing = $state(false);
   let previewError = $state<string | null>(null);
+  // The opt-in live-reachability probe (#281): its own busy flag so the
+  // "Check live status" button shows progress without touching the cheap
+  // auto-preview's `previewing` state.
+  let probing = $state(false);
 
   // Guard against out-of-order preview responses (each edit supersedes the
   // last); only the newest request's result is applied.
@@ -174,15 +178,23 @@
     }, 200);
   }
 
-  async function runPreview(): Promise<void> {
+  /**
+   * Preview the push. `probe` opts into the live-reachability check — a one-shot
+   * SSH probe of each affected client. The debounced auto-preview leaves it
+   * `false` (cheap, side-effect-free); only the explicit "Check live status"
+   * button passes `true`.
+   */
+  async function runPreview(probe = false): Promise<void> {
     if (selectedUserId === null) return;
     const seq = ++previewSeq;
     previewing = true;
+    if (probe) probing = true;
     previewError = null;
     try {
       const result = await previewPolicyPush(selectedUserId, {
         budgets: proposedBudgets(),
         schedules: proposedSchedules(),
+        ...(probe ? { probe: true } : {}),
       });
       if (seq === previewSeq) preview = result;
     } catch (err) {
@@ -192,7 +204,15 @@
       }
     } finally {
       if (seq === previewSeq) previewing = false;
+      // Always clear the probe spinner: a superseding auto-preview never sets
+      // it, so leaving it to the seq guard could strand it on `true`.
+      probing = false;
     }
+  }
+
+  /** Re-run the current preview with the live-reachability probe requested. */
+  function checkLiveStatus(): void {
+    void runPreview(true);
   }
 
   function onMinutesChange(id: number, value: string): void {
@@ -249,6 +269,17 @@
   /** Render a client's last-seen instant, or "never" when it has never reported. */
   function lastSeenLabel(iso: string | null): string {
     return iso === null ? "never seen" : `last seen ${new Date(iso).toLocaleString()}`;
+  }
+
+  const REACHABILITY_LABEL: Readonly<Record<"online" | "offline" | "unknown", string>> = {
+    online: "online",
+    offline: "offline",
+    unknown: "unknown",
+  };
+
+  /** Human label for a probed reachability verdict. */
+  function reachabilityLabel(reachability: "online" | "offline" | "unknown"): string {
+    return REACHABILITY_LABEL[reachability];
   }
 
   /** Render any thrown value as a UI-safe message. */
@@ -401,11 +432,23 @@
             </div>
 
             <div class="push-clients">
-              <h3>
-                {preview.affectedClients.length} client{preview.affectedClients.length === 1
-                  ? ""
-                  : "s"} affected
-              </h3>
+              <div class="clients-head">
+                <h3>
+                  {preview.affectedClients.length} client{preview.affectedClients.length === 1
+                    ? ""
+                    : "s"} affected
+                </h3>
+                {#if preview.affectedClients.length > 0}
+                  <button
+                    type="button"
+                    class="probe-btn"
+                    onclick={checkLiveStatus}
+                    disabled={probing}
+                  >
+                    {probing ? "Checking…" : "Check live status"}
+                  </button>
+                {/if}
+              </div>
               {#if preview.affectedClients.length === 0}
                 <p class="push-muted">No clients linked — nothing to push to yet.</p>
               {:else}
@@ -413,6 +456,13 @@
                   {#each preview.affectedClients as client (client.clientId)}
                     <li class="client">
                       <span class="host">{client.hostname}</span>
+                      {#if client.reachability !== null}
+                        <span
+                          class="reach reach-{client.reachability}"
+                          data-testid="reachability-{client.clientId}"
+                          >{reachabilityLabel(client.reachability)}</span
+                        >
+                      {/if}
                       <span class="meta">{lastSeenLabel(client.lastSeen)}</span>
                       <span class="queue"
                         >{client.pendingQueueDepth} queued action{client.pendingQueueDepth === 1
@@ -633,6 +683,49 @@
   .client .queue {
     color: #9aa3c0;
     font-size: 0.8rem;
+  }
+  .clients-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+  .probe-btn {
+    background: transparent;
+    color: #cdd2e6;
+    border: 1px solid #3a3f5c;
+    border-radius: 0.4rem;
+    padding: 0.25rem 0.55rem;
+    font-size: 0.75rem;
+    cursor: pointer;
+  }
+  .probe-btn:hover:not(:disabled) {
+    background: #21263f;
+  }
+  .probe-btn:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
+  .reach {
+    text-transform: uppercase;
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    padding: 0.1rem 0.35rem;
+    border-radius: 0.3rem;
+    flex: 0 0 auto;
+  }
+  .reach-online {
+    background: #14532d;
+    color: #bbf7d0;
+  }
+  .reach-offline {
+    background: #7f1d1d;
+    color: #fecaca;
+  }
+  .reach-unknown {
+    background: #374151;
+    color: #d1d5db;
   }
   .note {
     margin: 0.6rem 0 0;

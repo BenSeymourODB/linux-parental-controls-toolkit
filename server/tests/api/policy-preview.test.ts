@@ -12,6 +12,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { SESSION_COOKIE } from "../../src/auth/session.js";
 import { loadSettings } from "../../src/config.js";
+import type { ClientRow } from "../../src/policy/repository.js";
+import type { ClientProbeResult, ClientReachability } from "../../src/transport/health/index.js";
+import type { PolicyPushTransport } from "../../src/transport/policy-push/index.js";
 import {
   budgets,
   clients,
@@ -287,6 +290,9 @@ describe("POST /api/users/:userId/policy-preview", () => {
         hostname: "mint-laptop",
         lastSeen: null,
         pendingQueueDepth: 2,
+        // No probe requested (and none wired) → reachability un-annotated.
+        reachability: null,
+        probedAt: null,
       },
     ]);
   });
@@ -348,5 +354,149 @@ describe("POST /api/users/:userId/policy-preview", () => {
         summary: "Daily overall limit: 2h → 2h 30m",
       },
     ]);
+  });
+
+  it("leaves reachability un-annotated on the default (no-probe) path", async () => {
+    const userId = await createUser("Alice");
+    linkClient(userId, "mint-laptop");
+    const res = await auth({
+      method: "POST",
+      url: `/api/users/${userId}/policy-preview`,
+      payload: { budgets: [], schedules: [], now: "2026-06-17T12:00:00Z" },
+    });
+    expect(res.statusCode).toBe(200);
+    const [client] = res.json().affectedClients;
+    expect(client).toMatchObject({ reachability: null, probedAt: null });
+  });
+
+  it("still returns null reachability when `probe:true` but no prober is wired", async () => {
+    // The default test app has no live prober (pre-#39); an opt-in probe must
+    // degrade to null, never a stand-in verdict.
+    const userId = await createUser("Alice");
+    linkClient(userId, "mint-laptop");
+    const res = await auth({
+      method: "POST",
+      url: `/api/users/${userId}/policy-preview`,
+      payload: { budgets: [], schedules: [], probe: true, now: "2026-06-17T12:00:00Z" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().affectedClients[0]).toMatchObject({ reachability: null, probedAt: null });
+  });
+});
+
+/**
+ * The opt-in live-reachability probe (#281): with a live prober injected, a
+ * `probe: true` request annotates each affected client with online/offline and
+ * bumps `last_seen` on a client that answers.
+ */
+describe("POST /api/users/:userId/policy-preview — live reachability probe", () => {
+  let harness: TestApp;
+  let cookie: string;
+  const probeAt = new Date("2026-06-17T12:00:05Z");
+  /** hostname → reachability the fake prober reports. */
+  let verdicts: Map<string, ClientReachability>;
+  let probedHosts: string[];
+
+  /** A fake PolicyPushTransport whose prober reports per-host canned verdicts. */
+  function fakeTransport(): PolicyPushTransport {
+    return {
+      dispatcher: { push: () => undefined },
+      prober: {
+        probe: (client: Pick<ClientRow, "hostname" | "sshUser">): Promise<ClientProbeResult> => {
+          probedHosts.push(client.hostname);
+          const reachability = verdicts.get(client.hostname) ?? "offline";
+          return Promise.resolve({ reachability, at: probeAt, components: [] });
+        },
+      },
+      dispose: () => undefined,
+    };
+  }
+
+  beforeEach(async () => {
+    verdicts = new Map();
+    probedHosts = [];
+    harness = buildTestApp({
+      appOptions: { settings: configuredSettings(), policyPush: fakeTransport() },
+    });
+    await harness.app.ready();
+    const login = await harness.app.inject({
+      method: "POST",
+      url: "/api/auth/login",
+      payload: { username: "ben", password: "hunter2" },
+    });
+    cookie = sessionCookie(login);
+  });
+
+  afterEach(async () => {
+    await harness.close();
+  });
+
+  function auth(opts: InjectOptions) {
+    return harness.app.inject({ ...opts, headers: { ...opts.headers, cookie } });
+  }
+
+  async function createUser(displayName: string): Promise<number> {
+    const res = await auth({ method: "POST", url: "/api/users", payload: { displayName } });
+    expect(res.statusCode).toBe(201);
+    return res.json().id as number;
+  }
+
+  function linkClient(userId: number, hostname: string): number {
+    const client = harness.db
+      .insert(clients)
+      .values({ hostname, sshUser: "pct-agent" })
+      .returning({ id: clients.id })
+      .get();
+    if (client === undefined) throw new Error("client insert returned no row");
+    harness.db
+      .insert(usersOnClients)
+      .values({ userId, clientId: client.id, osUsername: "alice", osUserRef: `1000-${client.id}` })
+      .run();
+    return client.id;
+  }
+
+  it("annotates online (bumping last_seen) and offline when probe is requested", async () => {
+    const userId = await createUser("Alice");
+    const onlineId = linkClient(userId, "mint-online");
+    const offlineId = linkClient(userId, "mint-offline");
+    verdicts.set("mint-online", "online");
+    verdicts.set("mint-offline", "offline");
+
+    const res = await auth({
+      method: "POST",
+      url: `/api/users/${userId}/policy-preview`,
+      payload: { budgets: [], schedules: [], probe: true, now: "2026-06-17T12:00:00Z" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(probedHosts.sort()).toEqual(["mint-offline", "mint-online"]);
+
+    const byId = new Map(
+      res.json().affectedClients.map((c: { clientId: number }) => [c.clientId, c]),
+    );
+    expect(byId.get(onlineId)).toMatchObject({
+      reachability: "online",
+      probedAt: probeAt.toISOString(),
+      lastSeen: probeAt.toISOString(), // bumped by the successful probe
+    });
+    expect(byId.get(offlineId)).toMatchObject({
+      reachability: "offline",
+      probedAt: probeAt.toISOString(),
+      lastSeen: null, // an offline probe never bumps last_seen
+    });
+  });
+
+  it("does not probe when `probe` is omitted, even with a prober wired", async () => {
+    const userId = await createUser("Alice");
+    linkClient(userId, "mint-online");
+    verdicts.set("mint-online", "online");
+
+    const res = await auth({
+      method: "POST",
+      url: `/api/users/${userId}/policy-preview`,
+      payload: { budgets: [], schedules: [], now: "2026-06-17T12:00:00Z" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(probedHosts).toEqual([]);
+    expect(res.json().affectedClients[0]).toMatchObject({ reachability: null, probedAt: null });
   });
 });
