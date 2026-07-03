@@ -70,6 +70,24 @@ describe("QueueSummaryWidget (#322)", () => {
     expect(screen.queryByText(/all policy pushes delivered/i)).not.toBeInTheDocument();
   });
 
+  it("renders all three signals together in the combined pending + failed state", async () => {
+    const oldestPendingAt = new Date(Date.now() - 90 * 60 * 1000).toISOString(); // 1h 30m ago
+    fetchQueueSummary.mockResolvedValue({ pending: 5, failed: 3, oldestPendingAt });
+
+    render(QueueSummaryWidget, { onnavigate });
+
+    // Failed count carries the attribute that drives the red styling — the
+    // "always visible red count" criterion, asserted structurally not just by text.
+    const failedCount = await screen.findByText("3");
+    expect(failedCount).toHaveAttribute("data-state", "failed");
+    // Pending count and oldest-age render alongside it.
+    expect(screen.getByText("5")).toBeInTheDocument();
+    expect(screen.getByText("oldest waiting")).toBeInTheDocument();
+    expect(screen.getByText(/^1h 30m/)).toBeInTheDocument();
+    // The dead-letter hint is present too.
+    expect(screen.getByRole("alert")).toHaveTextContent(/3 dead-lettered actions need attention/i);
+  });
+
   it("omits the oldest-waiting age when nothing is pending", async () => {
     fetchQueueSummary.mockResolvedValue({ pending: 0, failed: 1, oldestPendingAt: null });
 

@@ -150,10 +150,11 @@ export function countPendingByClient(db: PolicyDb): PendingCount[] {
 /**
  * Fleet-wide queue summary (#322): total `pending` + `failed` counts and the
  * `enqueued_at` of the oldest still-`pending` action. A cheap two-read
- * aggregation — a grouped `COUNT(*)` over the indexed `status` column plus one
- * ordered lookup for the oldest pending row (Drizzle returns the timestamp
- * column as a `Date`, so no raw epoch handling). `oldestPendingAt` is `null`
- * when nothing is pending.
+ * aggregation — a grouped `COUNT(*)` by `status` plus one ordered lookup for
+ * the oldest pending row (Drizzle returns the timestamp column as a `Date`, so
+ * no raw epoch handling). The status domain is just two values, so the counts
+ * scan is trivial at household-fleet scale. `oldestPendingAt` is `null` when
+ * nothing is pending.
  */
 export function queueSummary(db: PolicyDb): QueueSummary {
   const counts = db
