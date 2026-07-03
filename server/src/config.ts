@@ -316,6 +316,32 @@ const settingsSchema = z
       pullConcurrency: z.coerce.number().int().positive().default(4),
     }),
     /**
+     * Phase-8 per-activity enforcement sweep (#292/#327). The sweep runs right
+     * after each telemetry rollup (one timer — `telemetry.pullCron` — so
+     * enforcement reads fresh usage), so it has no cadence of its own here.
+     */
+    enforcement: z.object({
+      /**
+       * Cool-down seconds threaded to the decision core (#98) so a near-boundary
+       * budget doesn't re-fire a force-close every rollup
+       * (`PCT_ENFORCEMENT_COOLDOWN_SECONDS`). Mirrors the sweep's
+       * `DEFAULT_COOLDOWN_SECONDS`; defaults to 300 (five minutes).
+       */
+      cooldownSeconds: z.coerce.number().int().positive().default(300),
+      /**
+       * How far back the first telemetry pull for a client reaches when there is
+       * no in-memory cursor yet — at boot or after a restart
+       * (`PCT_ENFORCEMENT_INITIAL_LOOKBACK_SECONDS`). Bounds the re-pull window
+       * so a restart can't sweep in an unbounded backlog; defaults to 900 (15
+       * minutes) — intentionally a few pull cadences wide so a boot that lands
+       * between pulls still catches the recent window rather than leaving a gap.
+       * Samples are clipped to the pull window and the cursor is in-memory only
+       * until #382 makes it durable, so a restart re-pulls at most this window;
+       * missing telemetry credits no consumption (#88), so a gap is non-punitive.
+       */
+      initialLookbackSeconds: z.coerce.number().int().positive().default(900),
+    }),
+    /**
      * Data retention (#136, epic #135). `defaultDays` is the global default
      * window applied to every dated-data category that has no per-category
      * override in the policy store (`PCT_RETENTION_DEFAULT_DAYS`, default 365).
@@ -483,6 +509,10 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
     telemetry: {
       pullCron: env.PCT_TELEMETRY_PULL_CRON,
       pullConcurrency: env.PCT_TELEMETRY_PULL_CONCURRENCY,
+    },
+    enforcement: {
+      cooldownSeconds: env.PCT_ENFORCEMENT_COOLDOWN_SECONDS,
+      initialLookbackSeconds: env.PCT_ENFORCEMENT_INITIAL_LOOKBACK_SECONDS,
     },
     retention: {
       defaultDays: env.PCT_RETENTION_DEFAULT_DAYS,

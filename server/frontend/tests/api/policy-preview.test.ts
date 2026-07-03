@@ -42,7 +42,14 @@ describe("policy-preview API", () => {
         },
       ],
       affectedClients: [
-        { clientId: 3, hostname: "mint-livingroom", lastSeen: null, pendingQueueDepth: 0 },
+        {
+          clientId: 3,
+          hostname: "mint-livingroom",
+          lastSeen: null,
+          pendingQueueDepth: 0,
+          reachability: null,
+          probedAt: null,
+        },
       ],
     };
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(200, response));
@@ -54,6 +61,32 @@ describe("policy-preview API", () => {
     expect(url).toBe("/api/users/7/policy-preview");
     expect((init as RequestInit).method).toBe("POST");
     expect((init as RequestInit).body).toBe(JSON.stringify(proposed));
+  });
+
+  it("passes the opt-in probe flag through to the request body", async () => {
+    const response: PolicyPreviewResponse = {
+      userId: 7,
+      hasChanges: false,
+      changes: [],
+      affectedClients: [
+        {
+          clientId: 3,
+          hostname: "mint-livingroom",
+          lastSeen: null,
+          pendingQueueDepth: 0,
+          reachability: "online",
+          probedAt: "2026-06-17T12:00:05.000Z",
+        },
+      ],
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(200, response));
+
+    const withProbe: PolicyPreviewRequest = { ...proposed, probe: true };
+    const result = await previewPolicyPush(7, withProbe);
+
+    expect(result).toEqual(response);
+    const [, init] = fetchMock.mock.calls[0]!;
+    expect((init as RequestInit).body).toBe(JSON.stringify(withProbe));
   });
 
   it("surfaces a 404 as an ApiError when the user does not exist", async () => {

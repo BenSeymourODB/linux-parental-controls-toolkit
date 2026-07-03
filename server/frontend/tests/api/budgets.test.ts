@@ -4,6 +4,7 @@ import {
   createBudget,
   deleteBudget,
   listBudgets,
+  listResolvedBudgets,
   updateBudget,
 } from "../../src/lib/api/budgets.js";
 
@@ -87,5 +88,24 @@ describe("budgets API", () => {
     const [url, init] = fetchMock.mock.calls[0]!;
     expect(url).toBe("/api/budgets/4");
     expect((init as RequestInit).method).toBe("DELETE");
+  });
+
+  it("listResolvedBudgets GETs /api/users/:userId/budgets/resolved", async () => {
+    const rows = [
+      { scope: "overall", targetId: null, window: "daily", secondsAllowed: 7200, source: { kind: "user" } },
+      {
+        scope: "activity",
+        targetId: 9,
+        window: "daily",
+        secondsAllowed: 1800,
+        source: { kind: "group", groupId: 3 },
+      },
+    ];
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(200, rows));
+
+    const result = await listResolvedBudgets(42);
+
+    expect(result).toEqual(rows);
+    expect(fetchMock.mock.calls[0]![0]).toBe("/api/users/42/budgets/resolved");
   });
 });

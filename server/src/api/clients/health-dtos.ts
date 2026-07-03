@@ -20,6 +20,7 @@ import {
   clientComponentValues,
   componentHealthStatusValues,
   clientReachabilityValues,
+  sshUnreachableReasonValues,
 } from "../../transport/health/index.js";
 import { clientVersionStatusValues } from "./version-status.js";
 
@@ -62,6 +63,14 @@ export const clientHealthSchema = z.object({
   clientId: z.number().int(),
   hostname: z.string(),
   reachability: z.enum(clientReachabilityValues),
+  /**
+   * When the client is `offline`, the classified SSH failure cause (#353) —
+   * `dns` / `connection_refused` / `timeout` / `auth` / `handshake` / `unknown`
+   * — so the card can badge *why* and offer a targeted remediation hint instead
+   * of one catch-all string. `null` when the client is online or wasn't probed.
+   * The free-text `components[].detail` still carries the full human message.
+   */
+  reachabilityReason: z.enum(sshUnreachableReasonValues).nullable(),
   /** Last time the client was confirmed reachable (ISO), or null if never. */
   lastSeen: z.string().nullable(),
   enrolledAt: z.string(),

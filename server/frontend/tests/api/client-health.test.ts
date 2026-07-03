@@ -19,6 +19,7 @@ describe("client-health API", () => {
     clientId: 1,
     hostname: "mint-01",
     reachability: "unknown",
+    reachabilityReason: null,
     lastSeen: null,
     enrolledAt: "2026-01-01T00:00:00.000Z",
     probedAt: null,

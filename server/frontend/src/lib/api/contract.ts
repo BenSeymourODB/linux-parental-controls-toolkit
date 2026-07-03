@@ -58,9 +58,14 @@ export type {
   GroupScheduleResponse,
   CreateGroupScheduleRequest,
   GroupScheduleOrderView,
+  GroupBudgetResponse,
+  CreateGroupBudgetRequest,
+  GroupExceptionResponse,
+  CreateGroupExceptionRequest,
   ExceptionResponse,
   CreateExceptionRequest,
   UpdateExceptionRequest,
+  ResolvedBudgetResponse,
   AdjustTimeTodayRequest,
   TimeTodayResponse,
   ClientAdjustmentResultDto,
@@ -107,4 +112,7 @@ export type {
   AuditOutcome,
 } from "../../../../src/policy/enums.js";
 export type { ErrorEnvelope, ErrorDetail } from "../../../../src/api/errors.js";
-export type { AnsibleVenvStatusResponse } from "../../../../src/api/system/dtos.js";
+export type {
+  AnsibleVenvStatusResponse,
+  AdGuardManagedStatusResponse,
+} from "../../../../src/api/system/dtos.js";

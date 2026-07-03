@@ -29,12 +29,16 @@ const onlineResult: ClientProbeResult = {
   reachability: "online",
   at: PROBE_AT,
   components: [{ component: "timekpr-next", status: "ok", detail: "active" }],
+  reachabilityReason: null,
 };
 
 const offlineResult: ClientProbeResult = {
   reachability: "offline",
   at: PROBE_AT,
-  components: [{ component: "timekpr-next", status: "unknown", detail: "host unreachable" }],
+  components: [
+    { component: "timekpr-next", status: "unknown", detail: "host unreachable (timeout)" },
+  ],
+  reachabilityReason: "timeout",
 };
 
 let db: TestDb;
@@ -53,6 +57,7 @@ describe("getClientHealth", () => {
   it("degrades to unknown reachability/components when no prober is wired", async () => {
     const health = await getClientHealth(db, client.id);
     expect(health?.reachability).toBe("unknown");
+    expect(health?.reachabilityReason).toBeNull();
     expect(health?.probedAt).toBeNull();
     expect(health?.lastSeen).toBeNull();
     // One row per catalogue component, all unknown with the pre-#39 detail.
@@ -68,6 +73,7 @@ describe("getClientHealth", () => {
     expect(prober.seen).toHaveLength(1);
     expect(prober.seen[0]).toMatchObject({ hostname: "alice-pc.local", sshUser: "pct-agent" });
     expect(health?.reachability).toBe("online");
+    expect(health?.reachabilityReason).toBeNull();
     expect(health?.probedAt).toBe("2026-06-19T12:00:00.000Z");
     expect(health?.lastSeen).toBe("2026-06-19T12:00:00.000Z");
     expect(health?.components).toEqual([
@@ -96,6 +102,8 @@ describe("getClientHealth", () => {
   it("does not touch last_seen when the probe reports the client offline", async () => {
     const health = await getClientHealth(db, client.id, new FakeProber(offlineResult));
     expect(health?.reachability).toBe("offline");
+    expect(health?.reachabilityReason).toBe("timeout");
+    expect(health?.components[0]?.detail).toBe("host unreachable (timeout)");
     expect(health?.lastSeen).toBeNull();
     expect(health?.probedAt).toBe("2026-06-19T12:00:00.000Z");
     expect(repo.getClient(db, client.id)?.lastSeen).toBeNull();
