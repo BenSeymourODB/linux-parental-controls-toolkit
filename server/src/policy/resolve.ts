@@ -272,6 +272,83 @@ function grantOverlapsDay(grant: GrantInput, dayStart: Date, dayEnd: Date): bool
 }
 
 /**
+ * The day's UTC `[start, end)` bounds, as returned by
+ * {@link import("./budget-window.js").localDayBounds}. These already encode the
+ * user's effective timezone, so the budget resolvers below take them directly
+ * and never need the `tz` string again — grant overlap is a UTC-instant test.
+ */
+interface DayBounds {
+  readonly start: Date;
+  readonly end: Date;
+}
+
+/**
+ * The effective overall daily allowance in seconds: the sum of the user's
+ * `overall`/`daily` budgets plus any active overall grants overlapping the day.
+ * Returns `null` when no daily overall budget is defined (no daily limit — a
+ * grant on an unlimited base is moot).
+ */
+function resolveOverallSeconds(
+  budgets: readonly BudgetInput[],
+  grants: readonly GrantInput[],
+  dayBounds: DayBounds,
+): number | null {
+  const dailyOverall = budgets.filter((b) => b.scope === "overall" && b.window === "daily");
+  if (dailyOverall.length === 0) return null;
+
+  let seconds = dailyOverall.reduce((sum, b) => sum + b.secondsAllowed, 0);
+  for (const grant of grants) {
+    if (grant.scope === "overall" && grantOverlapsDay(grant, dayBounds.start, dayBounds.end)) {
+      seconds += grant.secondsGranted;
+    }
+  }
+  return seconds;
+}
+
+/**
+ * The effective per-activity / per-group daily quotas: every `(scope, target)`
+ * with a `daily` budget, folding in that target's active same-scope grants.
+ *
+ * Quotas are accumulated in a `Map` keyed `"scope:targetId"` (e.g.
+ * `"activity:2"`, `"group:1"`) so multiple budget rows and grants for the same
+ * target sum onto one slot. A grant on a target with **no** daily budget is
+ * skipped — an unlimited base stays unlimited. The result is emitted ascending
+ * by `(scope, targetId)`.
+ */
+function buildActivityQuotas(
+  budgets: readonly BudgetInput[],
+  grants: readonly GrantInput[],
+  dayBounds: DayBounds,
+): ActivityQuota[] {
+  const quotas = new Map<string, ActivityQuota>();
+  for (const b of budgets) {
+    if (b.window !== "daily") continue;
+    if ((b.scope !== "activity" && b.scope !== "group") || b.targetId === null) continue;
+    const key = `${b.scope}:${b.targetId}`;
+    const existing = quotas.get(key);
+    quotas.set(key, {
+      scope: b.scope,
+      targetId: b.targetId,
+      seconds: (existing?.seconds ?? 0) + b.secondsAllowed,
+    });
+  }
+  for (const grant of grants) {
+    if (grant.scope !== "activity" && grant.scope !== "group") continue;
+    if (grant.targetId === null || !grantOverlapsDay(grant, dayBounds.start, dayBounds.end)) {
+      continue;
+    }
+    const key = `${grant.scope}:${grant.targetId}`;
+    const existing = quotas.get(key);
+    // Grant-only targets (no daily budget) leave the base unlimited → skip.
+    if (existing === undefined) continue;
+    quotas.set(key, { ...existing, seconds: existing.seconds + grant.secondsGranted });
+  }
+  return [...quotas.values()].sort(
+    (a, b) => a.scope.localeCompare(b.scope) || a.targetId - b.targetId,
+  );
+}
+
+/**
  * Resolve the effective policy for user *U* on day *D* — the core computation
  * documented at the top of this module. Pure: every input row is supplied by
  * the caller (the `/api/.../effective` route loads them), so this is fully
@@ -302,45 +379,12 @@ export function effectivePolicy(input: EffectivePolicyInput): EffectivePolicy {
     activeRules.filter((rule) => rule.targetKind === "overall"),
   );
 
-  // Overall budget: daily baseline + active overall grants. Null when no daily
-  // overall budget exists (no daily limit; a grant on an unlimited base is moot).
-  const dailyOverall = input.budgets.filter((b) => b.scope === "overall" && b.window === "daily");
-  let overallSeconds: number | null = null;
-  if (dailyOverall.length > 0) {
-    overallSeconds = dailyOverall.reduce((sum, b) => sum + b.secondsAllowed, 0);
-    for (const grant of input.grants) {
-      if (grant.scope === "overall" && grantOverlapsDay(grant, dayStart, dayEnd)) {
-        overallSeconds += grant.secondsGranted;
-      }
-    }
-  }
-
-  // Per-activity / per-group quotas: each (scope, target) with a daily budget,
-  // plus its active grants. Keyed `scope:targetId`, emitted ascending.
-  const quotas = new Map<string, ActivityQuota>();
-  for (const b of input.budgets) {
-    if (b.window !== "daily") continue;
-    if ((b.scope !== "activity" && b.scope !== "group") || b.targetId === null) continue;
-    const key = `${b.scope}:${b.targetId}`;
-    const existing = quotas.get(key);
-    quotas.set(key, {
-      scope: b.scope,
-      targetId: b.targetId,
-      seconds: (existing?.seconds ?? 0) + b.secondsAllowed,
-    });
-  }
-  for (const grant of input.grants) {
-    if (grant.scope !== "activity" && grant.scope !== "group") continue;
-    if (grant.targetId === null || !grantOverlapsDay(grant, dayStart, dayEnd)) continue;
-    const key = `${grant.scope}:${grant.targetId}`;
-    const existing = quotas.get(key);
-    // Grant-only targets (no daily budget) leave the base unlimited → skip.
-    if (existing === undefined) continue;
-    quotas.set(key, { ...existing, seconds: existing.seconds + grant.secondsGranted });
-  }
-  const perActivitySeconds = [...quotas.values()].sort(
-    (a, b) => a.scope.localeCompare(b.scope) || a.targetId - b.targetId,
-  );
+  // Budgets: the overall daily allowance and the per-activity/per-group quotas,
+  // each folding in active grants overlapping the day (`dayBounds` carries the
+  // effective-tz day edges the grant-overlap test needs).
+  const dayBounds: DayBounds = { start: dayStart, end: dayEnd };
+  const overallSeconds = resolveOverallSeconds(input.budgets, input.grants, dayBounds);
+  const perActivitySeconds = buildActivityQuotas(input.budgets, input.grants, dayBounds);
 
   return {
     date: `${year}-${pad2(month)}-${pad2(day)}`,
