@@ -14,9 +14,10 @@
  * (Timekpr-nExT) concern, not per-app process-kill, so they are not enforced
  * here.
  *
- * Reads are done inline here rather than through `policy/repository.ts` — the
- * same pattern `api/policy/effective.ts` uses — so this enforcement seam stays
- * decoupled from the CRUD repository surface.
+ * Schedules and budgets are read through the shared group-aware composition
+ * helpers (`policy/group-resolution.ts`) — the same entry point the push and
+ * `api/policy/effective.ts` use — so group-inherited per-activity quotas drive
+ * force-close and the enforced answer can't drift from the displayed one (#362).
  *
  * The telemetry scheduler (#117) calls this after each rollup and holds the
  * returned cool-down state for the next pass. The decisions it returns are what
@@ -29,10 +30,10 @@ import { eq } from "drizzle-orm";
 
 import type { PolicyDb } from "../policy/db.js";
 import { localCalendarDate } from "../policy/budget-window.js";
+import { gatherUserBudgets, gatherUserScheduleRules } from "../policy/group-resolution.js";
 import { DEFAULT_GRACE_SECONDS } from "../policy/notification.js";
-import { effectivePolicy, type BudgetInput, type GrantInput } from "../policy/resolve.js";
-import type { ScheduleRule } from "../policy/schedule-precedence.js";
-import { budgets, grants, notificationPolicies, schedules } from "../policy/schema.js";
+import { effectivePolicy, type GrantInput } from "../policy/resolve.js";
+import { grants, notificationPolicies } from "../policy/schema.js";
 import { groupSecondsInWindow, usageByActivityInWindow } from "../policy/usage.js";
 
 import { decideEnforcement, type EnforcementOutcome } from "./decision.js";
@@ -74,16 +75,11 @@ export function evaluateUserEnforcement(
 ): EnforcementOutcome {
   const { userId, now, tz, cooldownSeconds } = input;
 
-  const scheduleRules: ScheduleRule[] = db
-    .select()
-    .from(schedules)
-    .where(eq(schedules.userId, userId))
-    .all();
-  const budgetRows: BudgetInput[] = db
-    .select()
-    .from(budgets)
-    .where(eq(budgets.userId, userId))
-    .all();
+  // Effective policy = the user's own rules merged with any inherited group
+  // schedules/budgets (#362), so a group per-activity quota drives force-close.
+  // Grants stay own-only — they are a per-user additive overlay, not inherited.
+  const scheduleRules = gatherUserScheduleRules(db, userId);
+  const budgetRows = gatherUserBudgets(db, userId);
   const grantRows: GrantInput[] = db.select().from(grants).where(eq(grants.userId, userId)).all();
 
   const effective = effectivePolicy({
