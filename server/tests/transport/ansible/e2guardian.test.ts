@@ -8,11 +8,14 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   addActivityToGroup,
+  addUserToGroup,
   createActivity,
   createActivityGroup,
   createClient,
+  createGroupSchedule,
   createSchedule,
   createUser,
+  createUserGroup,
   upsertLink,
 } from "../../../src/policy/repository.js";
 import {
@@ -196,6 +199,37 @@ describe("buildE2guardianPlan", () => {
     expect(plan.proxyPort).toBe(9000);
     expect(plan.redirectPorts).toEqual([80]);
     expect(plan.users[0]?.listenPort).toBe(9001);
+    db.$client.close();
+  });
+
+  it("includes an inherited always-on group-schedule domain deny in the plan (#362)", () => {
+    const db = testDb();
+    const clientId = createClient(db, { hostname: "mint-01", sshUser: "pct-agent" }).id;
+    const alice = addLinkedUser(db, clientId, "Alice", "alice", 1001);
+
+    // The deny is authored on a user-group the child belongs to, not on the child.
+    const kids = createUserGroup(db, { name: "Kids" });
+    addUserToGroup(db, kids.id, alice);
+    const youtube = createActivity(db, { kind: "domain", matcher: "youtube.com" });
+    createGroupSchedule(db, {
+      userGroupId: kids.id,
+      targetKind: "activity",
+      targetId: youtube.id,
+      action: "deny",
+    });
+    // Plus an own deny, to prove own + inherited denies combine (deduped + sorted).
+    const tiktok = createActivity(db, { kind: "domain", matcher: "tiktok.com" });
+    createSchedule(db, {
+      userId: alice,
+      targetKind: "activity",
+      targetId: tiktok.id,
+      action: "deny",
+    });
+
+    const plan = buildE2guardianPlan(db, clientId);
+
+    expect(plan.users).toHaveLength(1);
+    expect(plan.users[0]?.bannedSites).toEqual(["tiktok.com", "youtube.com"]);
     db.$client.close();
   });
 
@@ -423,6 +457,30 @@ describe("buildE2guardianPlan — recurring time-window denies (#216)", () => {
     expect(plan.users[0]?.windows).toEqual([
       { timeTag: "16 0 18 0 12345", sites: ["facebook.com", "instagram.com"] },
     ]);
+    db.$client.close();
+  });
+
+  it("includes an inherited recurring group deny as a window (recurring half of #362)", () => {
+    const db = testDb();
+    const clientId = createClient(db, { hostname: "mint-01", sshUser: "pct-agent" }).id;
+    const alice = addLinkedUser(db, clientId, "Alice", "alice", 1001);
+
+    // A recurring deny authored on a user-group the child belongs to, not the child.
+    const kids = createUserGroup(db, { name: "Kids" });
+    addUserToGroup(db, kids.id, alice);
+    const reddit = createActivity(db, { kind: "domain", matcher: "reddit.com" });
+    createGroupSchedule(db, {
+      userGroupId: kids.id,
+      targetKind: "activity",
+      targetId: reddit.id,
+      action: "deny",
+      recurrenceDays: 0b0011111,
+      recurrenceStartMinute: 16 * 60,
+      recurrenceEndMinute: 18 * 60,
+    });
+
+    const plan = buildE2guardianPlan(db, clientId);
+    expect(plan.users[0]?.windows).toEqual([{ timeTag: "16 0 18 0 12345", sites: ["reddit.com"] }]);
     db.$client.close();
   });
 

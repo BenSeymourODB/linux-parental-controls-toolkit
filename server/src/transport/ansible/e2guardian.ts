@@ -23,15 +23,11 @@
  */
 import { z } from "zod";
 
-import {
-  getActivity,
-  listClientLinks,
-  listGroupActivities,
-  listUserSchedules,
-} from "../../policy/repository.js";
+import { getActivity, listClientLinks, listGroupActivities } from "../../policy/repository.js";
 import type { PolicyDb } from "../../policy/db.js";
-import type { ScheduleRow } from "../../policy/repository.js";
+import { gatherUserScheduleRules } from "../../policy/group-resolution.js";
 import { MINUTES_PER_DAY } from "../../policy/recurrence.js";
+import type { ScheduleRule } from "../../policy/schedule-precedence.js";
 import { redactArgv, type AuditEntry, type AuditSink } from "../audit/index.js";
 
 import type { AnsibleHost, AnsibleRunner, AnsibleRunResult, ExtraVarValue } from "./index.js";
@@ -132,7 +128,7 @@ export interface BuildE2guardianPlanOptions {
  * static filter group; recurring "no YouTube during homework" windows are
  * handled separately via {@link resolveWindowedDenies} (#216).
  */
-function isAlwaysOn(rule: ScheduleRow): boolean {
+function isAlwaysOn(rule: ScheduleRule): boolean {
   return (
     rule.recurrenceDays === null &&
     rule.recurrenceStartMinute === null &&
@@ -150,7 +146,7 @@ function isAlwaysOn(rule: ScheduleRow): boolean {
  * date-scoped denies are deliberately excluded and ride with the date-scoped
  * resolver work (#142).
  */
-function isRecurringWindow(rule: ScheduleRow): boolean {
+function isRecurringWindow(rule: ScheduleRule): boolean {
   if (rule.effectiveFrom !== null || rule.effectiveTo !== null) return false;
   return (
     rule.recurrenceDays !== null ||
@@ -210,8 +206,12 @@ export function e2guardianTimeTag(
  * `domain_group` activities (named bundles the client expands) are intentionally
  * skipped — resolving a named bundle to concrete domains is owned by the
  * richer-matcher work (#178/#195); this handles concrete `domain` matchers only.
+ *
+ * The rule comes from {@link gatherUserScheduleRules}, so both the user's own and
+ * inherited group denies flow through here (#362) — a group-targeted domain block
+ * reaches e2guardian, and a group *recurring* deny reaches the windowed lists.
  */
-function domainsForRule(db: PolicyDb, rule: ScheduleRow): string[] {
+function domainsForRule(db: PolicyDb, rule: ScheduleRule): string[] {
   if (rule.targetId === null) return [];
   const domains: string[] = [];
   if (rule.targetKind === "activity") {
@@ -225,10 +225,14 @@ function domainsForRule(db: PolicyDb, rule: ScheduleRow): string[] {
   return domains;
 }
 
-/** Collect the domains a single user *always-on* denies, deduplicated and sorted. */
+/**
+ * Collect the domains a single user *always-on* denies, deduplicated and sorted.
+ * Reads the user's effective schedules — own rules plus inherited group denies
+ * (#362) — via {@link gatherUserScheduleRules}.
+ */
 function resolveBannedSites(db: PolicyDb, userId: number): string[] {
   const sites = new Set<string>();
-  for (const rule of listUserSchedules(db, userId)) {
+  for (const rule of gatherUserScheduleRules(db, userId)) {
     if (rule.action !== "deny" || !isAlwaysOn(rule)) continue;
     for (const domain of domainsForRule(db, rule)) sites.add(domain);
   }
@@ -240,11 +244,13 @@ function resolveBannedSites(db: PolicyDb, userId: number): string[] {
  * their e2guardian `#time:` tag so denies sharing an identical window collapse to
  * one list. Sites within a window are deduplicated and sorted; windows are sorted
  * by tag — so re-running against unchanged policy yields an identical plan and
- * the playbook stays idempotent.
+ * the playbook stays idempotent. Reads effective schedules via
+ * {@link gatherUserScheduleRules}, so inherited group recurring denies are
+ * honoured too (the recurring half of #362's group-deny deferral).
  */
 function resolveWindowedDenies(db: PolicyDb, userId: number): E2guardianWindow[] {
   const sitesByTag = new Map<string, Set<string>>();
-  for (const rule of listUserSchedules(db, userId)) {
+  for (const rule of gatherUserScheduleRules(db, userId)) {
     if (rule.action !== "deny" || !isRecurringWindow(rule)) continue;
     const domains = domainsForRule(db, rule);
     if (domains.length === 0) continue;

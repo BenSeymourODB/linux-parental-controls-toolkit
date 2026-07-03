@@ -7,9 +7,13 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { gatherUserBudgets, gatherUserScheduleRules } from "../../src/policy/group-resolution.js";
+import {
+  gatherUserBudgets,
+  gatherUserScheduleRules,
+  mergeScheduleRulesWithGroups,
+} from "../../src/policy/group-resolution.js";
 import * as repo from "../../src/policy/repository.js";
-import { resolveEffectiveRule } from "../../src/policy/schedule-precedence.js";
+import { resolveEffectiveRule, type ScheduleRule } from "../../src/policy/schedule-precedence.js";
 import { testDb, type TestDb } from "../helpers/db.js";
 
 describe("gatherUserScheduleRules (#182)", () => {
@@ -115,6 +119,33 @@ describe("gatherUserScheduleRules (#182)", () => {
     const winner = resolveEffectiveRule(gatherUserScheduleRules(db, userId), () => true);
     expect(winner?.action).toBe("allow");
     expect(winner?.source).toEqual({ kind: "user" });
+  });
+
+  it("resolves passed-in own rules by ordinal, not array order (preview fidelity, #362)", () => {
+    // The save-and-push preview passes proposed own rules straight from the
+    // request body, which need not arrive in ordinal order. The merge must sort
+    // them by (ordinal, id) so precedence matches what the save + reload yields.
+    const base = {
+      targetKind: "overall" as const,
+      targetId: null,
+      recurrenceDays: null,
+      recurrenceStartMinute: null,
+      recurrenceEndMinute: null,
+      effectiveFrom: null,
+      effectiveTo: null,
+    };
+    const outOfOrder: ScheduleRule[] = [
+      { id: 2, ordinal: 1, action: "deny", ...base },
+      { id: 1, ordinal: 0, action: "allow", ...base },
+    ];
+
+    const merged = mergeScheduleRulesWithGroups(db, userId, outOfOrder);
+
+    // ordinal 0 (allow, id 1) wins the first slot despite being passed second.
+    expect(merged.map((r) => r.id)).toEqual([1, 2]);
+    expect(merged.map((r) => r.ordinal)).toEqual([0, 1]);
+    expect(merged.map((r) => r.action)).toEqual(["allow", "deny"]);
+    expect(resolveEffectiveRule(merged, () => true)?.action).toBe("allow");
   });
 
   it("falls back to the inherited group rule when the user has none", () => {
