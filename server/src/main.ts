@@ -81,6 +81,13 @@ async function main(): Promise<void> {
     // the app starts no timer; buildApp's onClose hook stops it on shutdown.
     app.adguardHealthPoll = startAdGuardHealthPoll({ service: app.adguard, log: app.log });
   }
+
+  // Start the Phase-8 enforcement loop (#327): the telemetry pull → #88 usage
+  // rollup → per-activity enforcement sweep, on the telemetry cadence. Wired
+  // here (not in buildApp) so building the app starts no timer; buildApp's
+  // onClose hook stops it. `null` when the SSH key is absent (nothing to reach),
+  // so the `?.` keeps a keyless first boot a no-op.
+  app.enforcementPipeline?.start();
 }
 
 void main();

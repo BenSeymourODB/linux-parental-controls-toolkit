@@ -9,7 +9,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { buildApp } from "../../src/web/app.js";
 import { loadSettings } from "../../src/config.js";
@@ -179,5 +179,37 @@ describe("app.db decorator (#49)", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("app.enforcementPipeline decorator (#327)", () => {
+  it("is null by default (no SSH key ⇒ nothing reachable) and starts no timer", () => {
+    const db = testDb();
+    const app = buildApp({ settings: loadSettings({ PCT_LOG_LEVEL: "silent" }), db });
+    // Without a first-run SSH key, the pipeline can reach no client, so buildApp
+    // wires null — and constructing the app has started nothing.
+    expect(app.enforcementPipeline).toBeNull();
+    db.$client.close();
+  });
+
+  it("decorates an injected handle and stops it on app.close() (not before)", async () => {
+    const db = testDb();
+    const stop = vi.fn();
+    const start = vi.fn();
+    const pipeline = { start, stop, runOnce: vi.fn() };
+    const app = buildApp({
+      settings: loadSettings({ PCT_LOG_LEVEL: "silent" }),
+      db,
+      enforcementPipeline: pipeline,
+    });
+
+    // Decorated as-is; buildApp never starts it (that is main.ts's job).
+    expect(app.enforcementPipeline).toBe(pipeline);
+    expect(start).not.toHaveBeenCalled();
+    expect(stop).not.toHaveBeenCalled();
+
+    await app.close();
+    expect(stop).toHaveBeenCalledTimes(1);
+    db.$client.close();
   });
 });

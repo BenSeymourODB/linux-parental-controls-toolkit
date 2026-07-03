@@ -14,8 +14,11 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import { registerApi } from "../api/index.js";
 import { loadSettings, type Settings } from "../config.js";
+import { createEnforcementPipeline, type EnforcementPipelineHandle } from "../enforcement/index.js";
 import { EventHub, type EventStreamOptions } from "../events/index.js";
 import { createDb, type PolicyDb } from "../policy/db.js";
+import { DrizzleAuditSink } from "../transport/audit/index.js";
+import { loadSshCredentials } from "../transport/ssh/index.js";
 import { createAnsibleVenvSupervisor, type AnsibleVenvSupervisor } from "../setup/ansible-venv.js";
 import {
   createAdGuardManagedSupervisor,
@@ -71,6 +74,15 @@ declare module "fastify" {
      * `onClose` hook stops it if set.
      */
     adguardHealthPoll: AdGuardHealthPollHandle | null;
+    /**
+     * The Phase-8 enforcement pipeline (#327): telemetry pull → #88 usage
+     * rollup → per-activity enforcement sweep, or `null` when the dashboard has
+     * no SSH key yet (nothing is reachable). Like the other schedulers it is
+     * **constructed** here but **not** started by `buildApp` (so building the
+     * app — including every test — starts no timer); `main.ts` calls `start()`
+     * after `listen`, and `buildApp`'s `onClose` hook stops it.
+     */
+    enforcementPipeline: EnforcementPipelineHandle | null;
   }
 }
 
@@ -126,6 +138,14 @@ export interface BuildAppOptions {
    * production; tests use it to exercise the N-1 refusal branches.
    */
   eventStream?: EventStreamOptions;
+  /**
+   * Inject the {@link EnforcementPipelineHandle} (#327), or `null` to force the
+   * not-wired contract. When omitted, {@link buildApp} builds it from settings —
+   * which yields `null` unless the SSH key exists — and never starts its timer
+   * (that is `main.ts`'s job after `listen`). Tests inject a fake to assert boot
+   * start/stop without a live SSH transport.
+   */
+  enforcementPipeline?: EnforcementPipelineHandle | null;
 }
 
 /**
@@ -183,6 +203,36 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   // it needs no teardown beyond the sockets the route closes on shutdown.
   const eventHub = new EventHub();
   app.decorate("eventHub", eventHub);
+
+  // The Phase-8 enforcement pipeline (#327): telemetry pull → #88 usage rollup →
+  // per-activity enforcement sweep. Built (or injected) here so it is a single
+  // instance sharing the app's db + event hub, but — like the other schedulers —
+  // NOT started by buildApp; main.ts calls start() after listen and this
+  // onClose hook stops it. createEnforcementPipeline returns null when the SSH
+  // key is absent (nothing is reachable — dev/CI/tests/pre-keygen), so building
+  // the app spawns no SSH transport in that case. An injected value (including
+  // null) is honoured as-is.
+  const enforcementPipeline =
+    options.enforcementPipeline !== undefined
+      ? options.enforcementPipeline
+      : createEnforcementPipeline({
+          db,
+          eventHub,
+          sink: new DrizzleAuditSink(db, app.log),
+          log: app.log,
+          defaultTz: settings.defaultTz,
+          credentials: loadSshCredentials(settings.sshPrivateKeyPath),
+          pullCron: settings.telemetry.pullCron,
+          pullConcurrency: settings.telemetry.pullConcurrency,
+          cooldownSeconds: settings.enforcement.cooldownSeconds,
+          initialLookbackSeconds: settings.enforcement.initialLookbackSeconds,
+        });
+  app.decorate("enforcementPipeline", enforcementPipeline);
+  if (enforcementPipeline !== null) {
+    app.addHook("onClose", async () => {
+      enforcementPipeline.stop();
+    });
+  }
 
   // The managed-mode AdGuard Home supervisor (#96), read by
   // GET /api/system/adguard-managed. Built only in `managed` mode (else null);
