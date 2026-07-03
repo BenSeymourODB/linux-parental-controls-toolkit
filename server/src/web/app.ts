@@ -16,6 +16,7 @@ import { registerApi } from "../api/index.js";
 import { loadSettings, type Settings } from "../config.js";
 import { type EventStreamOptions } from "../events/index.js";
 import { type PolicyDb } from "../policy/db.js";
+import type { EnforcementPipelineHandle } from "../enforcement/index.js";
 import { type AnsibleVenvSupervisor } from "../setup/ansible-venv.js";
 import {
   type AdGuardHealthPollHandle,
@@ -67,6 +68,15 @@ declare module "fastify" {
      * `onClose` hook stops it if set.
      */
     adguardHealthPoll: AdGuardHealthPollHandle | null;
+    /**
+     * The Phase-8 enforcement pipeline (#327): telemetry pull → #88 usage
+     * rollup → per-activity enforcement sweep, or `null` when the dashboard has
+     * no SSH key yet (nothing is reachable). Like the other schedulers it is
+     * **constructed** here but **not** started by `buildApp` (so building the
+     * app — including every test — starts no timer); `main.ts` calls `start()`
+     * after `listen`, and `buildApp`'s `onClose` hook stops it.
+     */
+    enforcementPipeline: EnforcementPipelineHandle | null;
   }
 }
 
@@ -122,6 +132,14 @@ export interface BuildAppOptions {
    * production; tests use it to exercise the N-1 refusal branches.
    */
   eventStream?: EventStreamOptions;
+  /**
+   * Inject the {@link EnforcementPipelineHandle} (#327), or `null` to force the
+   * not-wired contract. When omitted, {@link buildApp} builds it from settings —
+   * which yields `null` unless the SSH key exists — and never starts its timer
+   * (that is `main.ts`'s job after `listen`). Tests inject a fake to assert boot
+   * start/stop without a live SSH transport.
+   */
+  enforcementPipeline?: EnforcementPipelineHandle | null;
 }
 
 /**
@@ -158,10 +176,14 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   app.decorate("adguardManaged", services.adguardManaged);
   app.decorate("adguard", services.adguard);
   app.decorate("ansibleVenv", services.ansibleVenv);
+  // The Phase-8 enforcement pipeline (#327), or null when no SSH key exists.
+  // Constructed by the composition root; main.ts calls start() after listen and
+  // services.teardown stops it. Decorated here so main.ts reads it off the app.
+  app.decorate("enforcementPipeline", services.enforcementPipeline);
 
-  // Dispose the resources the composition root owns (owned policy-push + db, and
-  // a non-null managed supervisor). See AppServices.teardown for the ownership
-  // rules preserved here.
+  // Dispose the resources the composition root owns (owned policy-push + db, a
+  // non-null managed supervisor, and the enforcement pipeline). See
+  // AppServices.teardown for the ownership rules preserved here.
   app.addHook("onClose", services.teardown);
 
   // Route the configured AdGuard mode's preflight once the app is ready (after

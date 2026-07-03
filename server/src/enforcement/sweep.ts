@@ -77,8 +77,16 @@ export interface EnforcementSweepOptions {
   readonly defaultTz: string;
   /** Cool-down seconds threaded to the decision core; defaults to {@link DEFAULT_COOLDOWN_SECONDS}. */
   readonly cooldownSeconds?: number;
-  /** croner pattern; defaults to {@link DEFAULT_SWEEP_PATTERN}. */
-  readonly pattern?: string;
+  /**
+   * croner pattern for the internal schedule. Defaults to
+   * {@link DEFAULT_SWEEP_PATTERN}. Pass **`null`** to run **caller-driven** with
+   * no internal cron: the returned handle's `tick()` is invoked by the caller
+   * (the boot wiring drives it right after each telemetry rollup, #327, so
+   * enforcement reads fresh usage rather than racing the rollup on a separate
+   * timer) and `stop()` becomes a no-op. `undefined` keeps the standalone
+   * self-scheduling behaviour.
+   */
+  readonly pattern?: string | null;
   /** IANA timezone the pattern is interpreted in; defaults to the host's. */
   readonly timezone?: string;
   /** Clock seam for the evaluation instant; defaults to `() => new Date()`. */
@@ -140,7 +148,9 @@ function errorMessage(error: unknown): string {
 export function startEnforcementSweep(options: EnforcementSweepOptions): EnforcementSweepHandle {
   const { db, loadSupervisedUsers: load, trigger, defaultTz } = options;
   const cooldownSeconds = options.cooldownSeconds ?? DEFAULT_COOLDOWN_SECONDS;
-  const pattern = options.pattern ?? DEFAULT_SWEEP_PATTERN;
+  // `undefined` → the default self-scheduling pattern; an explicit `null` →
+  // caller-driven with no internal cron (the #327 boot wiring owns the cadence).
+  const pattern = options.pattern === undefined ? DEFAULT_SWEEP_PATTERN : options.pattern;
   const now = options.now ?? ((): Date => new Date());
   const evaluate = options.evaluate ?? evaluateUserEnforcement;
   const child = options.log.child({ component: SWEEP_LOG_COMPONENT });
@@ -204,6 +214,20 @@ export function startEnforcementSweep(options: EnforcementSweepOptions): Enforce
     const result: EnforcementSweepResult = { evaluated, enforced, decisions, failed };
     child.info({ ...result }, "enforcement sweep pass complete");
     return result;
+  }
+
+  // Caller-driven mode (`pattern: null`): construct no cron. The boot wiring
+  // (#327) calls `tick()` after each telemetry rollup, so a second timer would
+  // only race the rollup. `stop()` is then a no-op — there is no schedule to
+  // cancel; the caller stops the telemetry cron that drives `tick()`.
+  if (pattern === null) {
+    return {
+      tick,
+      stop: (): void => {
+        // Caller-driven: no internal schedule to cancel. The caller stops the
+        // telemetry cron that drives `tick()`.
+      },
+    };
   }
 
   // `protect` is harmless for a synchronous pass; it keeps the option shape

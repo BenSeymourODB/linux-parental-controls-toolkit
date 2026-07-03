@@ -18,8 +18,11 @@
 import type { FastifyBaseLogger } from "fastify";
 
 import type { Settings } from "../config.js";
+import { createEnforcementPipeline, type EnforcementPipelineHandle } from "../enforcement/index.js";
 import { EventHub } from "../events/index.js";
 import { createDb, type PolicyDb } from "../policy/db.js";
+import { DrizzleAuditSink } from "../transport/audit/index.js";
+import { loadSshCredentials } from "../transport/ssh/index.js";
 import { createAnsibleVenvSupervisor, type AnsibleVenvSupervisor } from "../setup/ansible-venv.js";
 import {
   createAdGuardManagedSupervisor,
@@ -53,6 +56,13 @@ export interface AppServices {
   adguardManaged: AdGuardManagedSupervisor | null;
   /** The first-run Ansible venv bootstrap supervisor (#39). */
   ansibleVenv: AnsibleVenvSupervisor;
+  /**
+   * The Phase-8 enforcement pipeline (#327): telemetry pull → #88 usage rollup →
+   * per-activity enforcement sweep, or `null` when no SSH key exists (nothing is
+   * reachable). Constructed here but started by `main.ts` after `listen`; stopped
+   * by {@link AppServices.teardown}.
+   */
+  enforcementPipeline: EnforcementPipelineHandle | null;
   /**
    * Dispose the resources this composition root owns, on `app.close()`, in the
    * pre-refactor order:
@@ -147,7 +157,32 @@ export function buildAppServices(
       playbookSourceDir: settings.ansiblePlaybookSourceDir,
     });
 
+  // The Phase-8 enforcement pipeline (#327): telemetry pull → #88 usage rollup →
+  // per-activity enforcement sweep, sharing the db + event hub. Built (or
+  // injected) here but NOT started — main.ts calls start() after listen, and
+  // teardown stops it. createEnforcementPipeline returns null when the SSH key
+  // is absent (nothing is reachable — dev/CI/tests/pre-keygen), so constructing
+  // it spawns no SSH transport in that case. An injected value (including null)
+  // is honoured as-is.
+  const enforcementPipeline =
+    options.enforcementPipeline !== undefined
+      ? options.enforcementPipeline
+      : createEnforcementPipeline({
+          db,
+          eventHub,
+          sink: new DrizzleAuditSink(db, log),
+          log,
+          defaultTz: settings.defaultTz,
+          credentials: loadSshCredentials(settings.sshPrivateKeyPath),
+          pullCron: settings.telemetry.pullCron,
+          pullConcurrency: settings.telemetry.pullConcurrency,
+          cooldownSeconds: settings.enforcement.cooldownSeconds,
+          initialLookbackSeconds: settings.enforcement.initialLookbackSeconds,
+        });
+
   const teardown = async (): Promise<void> => {
+    // Stop the enforcement loop's timers before tearing down the deps it reads.
+    if (enforcementPipeline !== null) enforcementPipeline.stop();
     // Order mirrors the pre-refactor buildApp onClose hooks (Fastify runs them
     // LIFO): stop the managed supervisor first, then dispose the policy-push
     // transport before closing the db it reads from. Only the push→db step is
@@ -159,5 +194,14 @@ export function buildAppServices(
     if (ownsDb) db.$client.close();
   };
 
-  return { db, policyPush, eventHub, adguard, adguardManaged, ansibleVenv, teardown };
+  return {
+    db,
+    policyPush,
+    eventHub,
+    adguard,
+    adguardManaged,
+    ansibleVenv,
+    enforcementPipeline,
+    teardown,
+  };
 }
