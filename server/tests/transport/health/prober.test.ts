@@ -4,11 +4,19 @@
  * The SSH transport is a lightweight in-memory fake implementing the
  * {@link HealthProbeTransport} structural interface — it records the argv it is
  * handed and returns canned `systemctl is-active` output (or throws the facade's
- * error taxonomy), so these tests assert reachability + per-component
- * classification without opening a socket.
+ * error taxonomy), and its `withPortForward` runs the callback against a canned
+ * loopback endpoint. The ActivityWatch REST probe is injected as a function so
+ * these tests assert reachability + per-component classification (including the
+ * `activitywatch` verdict) without opening a socket.
  */
 import { beforeEach, describe, expect, it } from "vitest";
 
+import {
+  ActivityWatchParseError,
+  ActivityWatchRequestError,
+  ActivityWatchUnreachableError,
+} from "../../../src/transport/activitywatch/errors.js";
+import type { AwServerInfo } from "../../../src/transport/activitywatch/schemas.js";
 import {
   SshExecTimeoutError,
   SshUnreachableError,
@@ -17,16 +25,21 @@ import {
 import type {
   ExecOptions,
   ExecResult,
+  PortForwardTarget,
   SshCredentials,
   SshTarget,
 } from "../../../src/transport/ssh/facade.js";
 import {
   SshClientProber,
+  type ActivityWatchInfoProbe,
   type HealthProbeTransport,
 } from "../../../src/transport/health/prober.js";
 
 const CREDENTIALS: SshCredentials = { privateKey: "PRIVATE-KEY", port: 2222 };
 const CLIENT = { hostname: "alice-pc.local", sshUser: "pct-agent" };
+const HEALTHY_INFO: AwServerInfo = { hostname: "alice-pc", version: "v0.13.2", testing: false };
+/** The loopback endpoint the fake's `withPortForward` hands its callback. */
+const FORWARDED_BASE_URL = "http://127.0.0.1:54321";
 
 interface RecordedCall {
   target: SshTarget;
@@ -34,15 +47,26 @@ interface RecordedCall {
   options: ExecOptions | undefined;
 }
 
+interface RecordedForward {
+  target: SshTarget;
+  remote: PortForwardTarget;
+}
+
 const active = (): ExecResult => ({ stdout: "active\n", stderr: "", code: 0, signal: null });
 const inactive = (): ExecResult => ({ stdout: "inactive\n", stderr: "", code: 3, signal: null });
 
-/** A fake transport: canned per-unit output, or an error thrown on exec. */
+/**
+ * A fake transport: canned per-unit `exec` output (or a thrown error), and a
+ * `withPortForward` that runs its callback against {@link FORWARDED_BASE_URL}
+ * (or throws {@link throwOnPortForward} to simulate the tunnel failing to open).
+ */
 class FakeProbeTransport implements HealthProbeTransport {
   readonly calls: RecordedCall[] = [];
+  readonly forwards: RecordedForward[] = [];
   readonly responses = new Map<string, ExecResult>();
   throwOnEveryExec: Error | undefined;
   throwForUnit: { unit: string; error: Error } | undefined;
+  throwOnPortForward: Error | undefined;
 
   async exec(
     target: SshTarget,
@@ -57,6 +81,16 @@ class FakeProbeTransport implements HealthProbeTransport {
     }
     return this.responses.get(unit) ?? active();
   }
+
+  async withPortForward<T>(
+    target: SshTarget,
+    remote: PortForwardTarget,
+    fn: (local: { host: string; port: number }) => Promise<T>,
+  ): Promise<T> {
+    this.forwards.push({ target, remote });
+    if (this.throwOnPortForward !== undefined) throw this.throwOnPortForward;
+    return fn({ host: "127.0.0.1", port: 54321 });
+  }
 }
 
 let transport: FakeProbeTransport;
@@ -67,12 +101,19 @@ beforeEach(() => {
 
 const FIXED = new Date("2026-06-19T12:00:00.000Z");
 
-function proberWith(): SshClientProber {
+/** Prober with fixed clock, tight timeout, and a healthy AW probe by default. */
+function proberWith(
+  probeActivityWatch: ActivityWatchInfoProbe = async () => HEALTHY_INFO,
+): SshClientProber {
   return new SshClientProber(transport, CREDENTIALS, {
     execOptions: { timeoutMs: 5000 },
     now: () => FIXED,
+    probeActivityWatch,
   });
 }
+
+const awComponent = (result: { components: readonly { component: string }[] }): unknown =>
+  result.components.find((c) => c.component === "activitywatch");
 
 describe("SshClientProber.probe", () => {
   it("reports online with per-component verdicts and resolves the target from credentials", async () => {
@@ -90,11 +131,7 @@ describe("SshClientProber.probe", () => {
     expect(result.at).toBe(FIXED);
     expect(result.components).toEqual([
       { component: "timekpr-next", status: "ok", detail: "active" },
-      {
-        component: "activitywatch",
-        status: "unknown",
-        detail: "per-user aw-server probe lands with Phase 5 (#86)",
-      },
+      { component: "activitywatch", status: "ok", detail: "aw-server v0.13.2" },
       { component: "e2guardian", status: "unhealthy", detail: "inactive" },
       { component: "pct-client-bridge", status: "unhealthy", detail: "failed" },
       {
@@ -117,6 +154,99 @@ describe("SshClientProber.probe", () => {
       port: 2222,
     });
     expect(transport.calls[0]?.options).toEqual({ timeoutMs: 5000 });
+  });
+
+  it("probes aw-server over a loopback forward to port 5600 and reports its version", async () => {
+    let seenBaseUrl: string | undefined;
+    const result = await proberWith(async (baseUrl) => {
+      seenBaseUrl = baseUrl;
+      return HEALTHY_INFO;
+    }).probe(CLIENT);
+
+    expect(result.reachability).toBe("online");
+    expect(awComponent(result)).toEqual({
+      component: "activitywatch",
+      status: "ok",
+      detail: "aw-server v0.13.2",
+    });
+    // Forwarded once, to the loopback aw-server port, with the resolved target.
+    expect(transport.forwards).toEqual([
+      {
+        target: {
+          host: "alice-pc.local",
+          username: "pct-agent",
+          privateKey: "PRIVATE-KEY",
+          port: 2222,
+        },
+        remote: { port: 5600 },
+      },
+    ]);
+    expect(seenBaseUrl).toBe(FORWARDED_BASE_URL);
+  });
+
+  it("reports activitywatch unhealthy when the tunnel opens but aw-server doesn't answer", async () => {
+    const result = await proberWith(async () => {
+      throw new ActivityWatchUnreachableError(
+        FORWARDED_BASE_URL,
+        "/api/0/info",
+        new Error("ECONNREFUSED"),
+        false,
+      );
+    }).probe(CLIENT);
+
+    // The host is reachable (SSH is fine); only AW is down.
+    expect(result.reachability).toBe("online");
+    expect(awComponent(result)).toEqual({
+      component: "activitywatch",
+      status: "unhealthy",
+      detail: "aw-server not responding",
+    });
+  });
+
+  it.each([
+    [
+      "a non-2xx answer",
+      new ActivityWatchRequestError(FORWARDED_BASE_URL, "/api/0/info", 503, "Service Unavailable"),
+      "aw-server returned HTTP 503",
+    ],
+    [
+      "an unparseable body",
+      new ActivityWatchParseError(FORWARDED_BASE_URL, "/api/0/info", "not json"),
+      "aw-server sent an unrecognised response",
+    ],
+  ])("classifies %s as unhealthy without going offline", async (_label, error, detail) => {
+    const result = await proberWith(async () => {
+      throw error;
+    }).probe(CLIENT);
+    expect(result.reachability).toBe("online");
+    expect(awComponent(result)).toEqual({
+      component: "activitywatch",
+      status: "unhealthy",
+      detail,
+    });
+  });
+
+  it("goes offline (all unknown) when the aw-server tunnel itself fails to open", async () => {
+    transport.throwOnPortForward = new SshUnreachableError({
+      host: CLIENT.hostname,
+      port: 2222,
+      username: CLIENT.sshUser,
+    });
+
+    const result = await proberWith().probe(CLIENT);
+
+    expect(result.reachability).toBe("offline");
+    expect(result.components).toHaveLength(5);
+    expect(result.components.every((c) => c.status === "unknown")).toBe(true);
+    expect(result.components.every((c) => c.detail === "host unreachable")).toBe(true);
+  });
+
+  it("rethrows an unexpected (non-SSH, non-AW) error from the aw probe", async () => {
+    await expect(
+      proberWith(async () => {
+        throw new Error("aw boom");
+      }).probe(CLIENT),
+    ).rejects.toThrow("aw boom");
   });
 
   it("reports offline with all components unknown when the host is unreachable", async () => {
@@ -180,7 +310,9 @@ describe("SshClientProber.probe", () => {
 
   it("defaults the clock to wall time when no `now` is injected", async () => {
     const before = Date.now();
-    const result = await new SshClientProber(transport, CREDENTIALS).probe(CLIENT);
+    const result = await new SshClientProber(transport, CREDENTIALS, {
+      probeActivityWatch: async () => HEALTHY_INFO,
+    }).probe(CLIENT);
     expect(result.at.getTime()).toBeGreaterThanOrEqual(before);
   });
 });

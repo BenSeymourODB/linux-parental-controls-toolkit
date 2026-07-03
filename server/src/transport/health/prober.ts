@@ -18,19 +18,27 @@
  * REST/subprocess boundary is collapsed.
  */
 import type { ClientRow } from "../../policy/repository.js";
+import { ActivityWatchClient } from "../activitywatch/client.js";
+import type { AwServerInfo } from "../activitywatch/schemas.js";
 import { SshError } from "../ssh/errors.js";
 import {
   targetFromClient,
   type ExecOptions,
   type ExecResult,
+  type PortForwardOptions,
+  type PortForwardTarget,
   type SshCredentials,
   type SshTarget,
 } from "../ssh/facade.js";
 import {
-  CLIENT_COMPONENTS,
+  activityWatchFailureDetail,
+  classifyActivityWatchInfo,
   classifyServiceState,
+  CLIENT_COMPONENTS,
   systemdIsActiveArgv,
+  type ActivityWatchRestProbe,
   type ClientComponent,
+  type ComponentClassification,
   type ComponentHealthStatus,
 } from "./components.js";
 
@@ -67,13 +75,24 @@ export interface ClientProber {
 
 /**
  * The slice of the SSH transport the prober needs: an *unchecked* `exec`
- * (a non-zero `systemctl is-active` is data, not an error). Declared
- * structurally so the real {@link SshTransport} satisfies it and tests can pass
- * a lightweight fake without an `as` cast — same pattern as `TimekprTransport`.
+ * (a non-zero `systemctl is-active` is data, not an error) for the system
+ * services, and `withPortForward` for the loopback ActivityWatch REST probe
+ * (#323). Declared structurally so the real {@link SshTransport} satisfies it
+ * and tests can pass a lightweight fake without an `as` cast — same pattern as
+ * `TimekprTransport`.
  */
 export interface HealthProbeTransport {
   exec(target: SshTarget, argv: readonly string[], options?: ExecOptions): Promise<ExecResult>;
+  withPortForward<T>(
+    target: SshTarget,
+    remote: PortForwardTarget,
+    fn: (local: { host: string; port: number }) => Promise<T>,
+    options?: PortForwardOptions,
+  ): Promise<T>;
 }
+
+/** Reach a tunnelled `aw-server` at `baseUrl` and return its `/api/0/info`. */
+export type ActivityWatchInfoProbe = (baseUrl: string) => Promise<AwServerInfo>;
 
 /** Construction options for {@link SshClientProber}. */
 export interface SshClientProberOptions {
@@ -81,6 +100,12 @@ export interface SshClientProberOptions {
   readonly execOptions?: ExecOptions;
   /** Clock for `result.at`; overridable in tests. Defaults to `() => new Date()`. */
   readonly now?: () => Date;
+  /**
+   * How the ActivityWatch probe reaches the tunnelled `aw-server`. Defaults to
+   * a REST-only {@link ActivityWatchClient} `getInfo()`; injectable so unit
+   * tests exercise the verdict mapping without a live `fetch`.
+   */
+  readonly probeActivityWatch?: ActivityWatchInfoProbe;
 }
 
 /** Every component reported `unknown` with one shared detail (used when offline). */
@@ -101,11 +126,12 @@ export class SshClientProber implements ClientProber {
   readonly #credentials: SshCredentials;
   readonly #execOptions: ExecOptions | undefined;
   readonly #now: () => Date;
+  readonly #probeActivityWatch: ActivityWatchInfoProbe;
 
   /**
    * @param transport the SSH transport (or a structural stand-in) to probe over.
    * @param credentials the dashboard's SSH key material (from #39's bootstrap).
-   * @param options per-exec overrides and an injectable clock.
+   * @param options per-exec overrides, an injectable clock, and the AW probe.
    */
   constructor(
     transport: HealthProbeTransport,
@@ -116,6 +142,9 @@ export class SshClientProber implements ClientProber {
     this.#credentials = credentials;
     this.#execOptions = options.execOptions;
     this.#now = options.now ?? ((): Date => new Date());
+    this.#probeActivityWatch =
+      options.probeActivityWatch ??
+      ((baseUrl): Promise<AwServerInfo> => new ActivityWatchClient({ baseUrl }).getInfo());
   }
 
   async probe(client: Pick<ClientRow, "hostname" | "sshUser">): Promise<ClientProbeResult> {
@@ -123,33 +152,33 @@ export class SshClientProber implements ClientProber {
     const at = this.#now();
     const components: ComponentHealthResult[] = [];
 
-    for (const descriptor of CLIENT_COMPONENTS) {
-      if (descriptor.probe.method === "deferred") {
-        components.push({
-          component: descriptor.component,
-          status: "unknown",
-          detail: descriptor.probe.detail,
-        });
+    for (const { component, probe } of CLIENT_COMPONENTS) {
+      if (probe.method === "deferred") {
+        components.push({ component, status: "unknown", detail: probe.detail });
         continue;
       }
       try {
-        const result = await this.#transport.exec(
-          target,
-          systemdIsActiveArgv(descriptor.probe.unit),
-          this.#execOptions,
-        );
-        const verdict = classifyServiceState(result.stdout);
-        components.push({
-          component: descriptor.component,
-          status: verdict.status,
-          detail: verdict.detail,
-        });
+        const verdict =
+          probe.method === "systemd-system"
+            ? classifyServiceState(
+                (
+                  await this.#transport.exec(
+                    target,
+                    systemdIsActiveArgv(probe.unit),
+                    this.#execOptions,
+                  )
+                ).stdout,
+              )
+            : await this.#probeAwComponent(target, probe);
+        components.push({ component, status: verdict.status, detail: verdict.detail });
       } catch (error) {
-        // The facade's unchecked `exec` only rejects with the SSH error taxonomy
-        // (unreachable / timed out — `inactive` is a non-zero exit, not a
-        // rejection). Any of these means the box stopped answering mid-probe, so
-        // the whole client is offline. A non-`SshError` is an unexpected bug and
-        // must surface, not masquerade as "offline".
+        // A component probe only rejects with the SSH error taxonomy at the
+        // transport layer (`exec` unreachable/timed out; `withPortForward`
+        // failing to open the tunnel). Any of these means the box stopped
+        // answering mid-probe, so the whole client is offline. A non-`SshError`
+        // is an unexpected bug and must surface, not masquerade as "offline".
+        // (An `aw-server`-level failure over a *working* tunnel never reaches
+        // here — it is classified `unhealthy` in `#probeAwComponent`.)
         if (error instanceof SshError) {
           return { reachability: "offline", at, components: allUnknown("host unreachable") };
         }
@@ -158,5 +187,31 @@ export class SshClientProber implements ClientProber {
     }
 
     return { reachability: "online", at, components };
+  }
+
+  /**
+   * Probe the loopback `aw-server` over a port-forward and classify the result.
+   * The tunnel is torn down by the facade the moment `getInfo()` settles.
+   *
+   * An {@link ActivityWatchClient} failure means the tunnel opened but
+   * `aw-server` didn't answer usefully → `unhealthy`. An `SshError` (the tunnel
+   * itself failed to open) or any other error is rethrown for the caller to map
+   * to client-offline / surface as a bug — the SSH layer's reachability is not
+   * duplicated here.
+   */
+  async #probeAwComponent(
+    target: SshTarget,
+    probe: ActivityWatchRestProbe,
+  ): Promise<ComponentClassification> {
+    try {
+      const info = await this.#transport.withPortForward(target, { port: probe.port }, (local) =>
+        this.#probeActivityWatch(`http://${local.host}:${local.port}`),
+      );
+      return classifyActivityWatchInfo(info);
+    } catch (error) {
+      const detail = activityWatchFailureDetail(error);
+      if (detail !== undefined) return { status: "unhealthy", detail };
+      throw error;
+    }
   }
 }
