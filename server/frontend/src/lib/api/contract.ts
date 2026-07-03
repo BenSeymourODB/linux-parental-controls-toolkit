@@ -64,6 +64,8 @@ export type {
   AdjustTimeTodayRequest,
   TimeTodayResponse,
   ClientAdjustmentResultDto,
+  PushPolicyResponse,
+  ClientPushResultDto,
   NotificationPolicyResponse,
   UpsertNotificationPolicyRequest,
 } from "../../../../src/api/policy/dtos.js";

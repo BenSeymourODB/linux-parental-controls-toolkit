@@ -15,6 +15,7 @@ import type {
   BudgetResponse,
   PolicyPreviewRequest,
   PolicyPreviewResponse,
+  PushPolicyResponse,
   ScheduleResponse,
   UserResponse,
 } from "../../src/lib/api/contract.js";
@@ -24,6 +25,7 @@ const listBudgets = vi.fn<(userId?: number) => Promise<BudgetResponse[]>>();
 const listSchedules = vi.fn<(userId?: number) => Promise<ScheduleResponse[]>>();
 const previewPolicyPush =
   vi.fn<(userId: number, body: PolicyPreviewRequest) => Promise<PolicyPreviewResponse>>();
+const pushPolicyNow = vi.fn<(userId: number, clientId?: number) => Promise<PushPolicyResponse>>();
 
 /** The proposed payload from the most recent `previewPolicyPush` call. */
 function lastProposed(): PolicyPreviewRequest {
@@ -38,11 +40,10 @@ vi.mock("$lib/api/schedules", () => ({
 vi.mock("$lib/api/policy-preview", () => ({
   previewPolicyPush: (userId: number, body: PolicyPreviewRequest) =>
     previewPolicyPush(userId, body),
+  pushPolicyNow: (userId: number, clientId?: number) => pushPolicyNow(userId, clientId),
 }));
 
-const { default: PolicyPreviewView } = await import(
-  "../../src/lib/views/PolicyPreviewView.svelte"
-);
+const { default: PolicyPreviewView } = await import("../../src/lib/views/PolicyPreviewView.svelte");
 
 function user(overrides: Partial<UserResponse> = {}): UserResponse {
   return {
@@ -113,6 +114,10 @@ beforeEach(() => {
   listBudgets.mockReset().mockResolvedValue([budget()]);
   listSchedules.mockReset().mockResolvedValue([schedule()]);
   previewPolicyPush.mockReset().mockResolvedValue(previewResponse());
+  pushPolicyNow.mockReset().mockResolvedValue({
+    userId: 1,
+    results: [{ clientId: 3, hostname: "mint-livingroom", osUsername: "alice", status: "pushed" }],
+  });
 });
 
 afterEach(() => {
@@ -173,9 +178,7 @@ describe("PolicyPreviewView", () => {
     await selectUser();
 
     expect(await screen.findByText("0 clients affected")).toBeInTheDocument();
-    expect(
-      screen.getByText("No clients linked — nothing to push to yet."),
-    ).toBeInTheDocument();
+    expect(screen.getByText("No clients linked — nothing to push to yet.")).toBeInTheDocument();
   });
 
   it("re-previews with the edited overall minutes", async () => {
@@ -282,5 +285,63 @@ describe("PolicyPreviewView", () => {
     render(PolicyPreviewView);
 
     expect(await screen.findByRole("alert")).toHaveTextContent("users load failed");
+  });
+
+  // --- "Push saved policy now" (#304) ---
+
+  it("pushes the saved policy for the selected user and renders per-client results", async () => {
+    pushPolicyNow.mockResolvedValue({
+      userId: 1,
+      results: [
+        { clientId: 3, hostname: "mint-livingroom", osUsername: "alice", status: "pushed" },
+        {
+          clientId: 4,
+          hostname: "mint-kitchen",
+          osUsername: "alice",
+          status: "queued",
+          error: "host unreachable",
+        },
+      ],
+    });
+
+    render(PolicyPreviewView);
+    await selectUser();
+
+    await fireEvent.click(await screen.findByRole("button", { name: "Push saved policy now" }));
+
+    // Pushes the SAVED policy for the selected user — no clientId (all clients).
+    await waitFor(() => expect(pushPolicyNow).toHaveBeenCalledWith(1, undefined));
+    const results = await screen.findByTestId("push-results");
+    expect(results).toHaveTextContent("mint-livingroom");
+    expect(results).toHaveTextContent("pushed");
+    expect(results).toHaveTextContent("mint-kitchen");
+    expect(results).toHaveTextContent("queued (offline)");
+    expect(results).toHaveTextContent("host unreachable");
+  });
+
+  it("disables the push button while a user has no linked clients", async () => {
+    previewPolicyPush.mockResolvedValue(previewResponse({ affectedClients: [] }));
+
+    render(PolicyPreviewView);
+    await selectUser();
+
+    const button = await screen.findByRole("button", { name: "Push saved policy now" });
+    expect(button).toBeDisabled();
+  });
+
+  it("surfaces a push failure without touching the preview diff", async () => {
+    pushPolicyNow.mockRejectedValue(new Error("transport unavailable"));
+
+    render(PolicyPreviewView);
+    await selectUser();
+    // The preview diff is present before the push.
+    expect(await screen.findByText("Daily overall limit: 2h → 2h 30m")).toBeInTheDocument();
+
+    await fireEvent.click(await screen.findByRole("button", { name: "Push saved policy now" }));
+
+    expect(await screen.findByText("transport unavailable")).toBeInTheDocument();
+    // The diff is still shown — a push error never blanks the preview.
+    expect(screen.getByText("Daily overall limit: 2h → 2h 30m")).toBeInTheDocument();
+    expect(screen.queryByTestId("push-results")).not.toBeInTheDocument();
   });
 });
