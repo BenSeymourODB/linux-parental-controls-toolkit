@@ -142,9 +142,20 @@ export class SshClientProber implements ClientProber {
     this.#credentials = credentials;
     this.#execOptions = options.execOptions;
     this.#now = options.now ?? ((): Date => new Date());
+    // Bound the AW probe by the same per-probe timeout as the `exec` probes when
+    // one is configured (a positive `timeoutMs`; `0` is exec's "disable"
+    // sentinel, which the AW client would misread as "abort immediately"), so a
+    // hung `aw-server` can't eat more of the health-service's per-client
+    // deadline than a hung `systemctl` would. Falls back to the client's own
+    // default when unset.
+    const awTimeoutMs = options.execOptions?.timeoutMs;
     this.#probeActivityWatch =
       options.probeActivityWatch ??
-      ((baseUrl): Promise<AwServerInfo> => new ActivityWatchClient({ baseUrl }).getInfo());
+      ((baseUrl): Promise<AwServerInfo> =>
+        new ActivityWatchClient({
+          baseUrl,
+          ...(awTimeoutMs !== undefined && awTimeoutMs > 0 ? { timeoutMs: awTimeoutMs } : {}),
+        }).getInfo());
   }
 
   async probe(client: Pick<ClientRow, "hostname" | "sshUser">): Promise<ClientProbeResult> {
@@ -193,10 +204,18 @@ export class SshClientProber implements ClientProber {
    * Probe the loopback `aw-server` over a port-forward and classify the result.
    * The tunnel is torn down by the facade the moment `getInfo()` settles.
    *
-   * An {@link ActivityWatchClient} failure means the tunnel opened but
-   * `aw-server` didn't answer usefully → `unhealthy`. An `SshError` (the tunnel
-   * itself failed to open) or any other error is rethrown for the caller to map
-   * to client-offline / surface as a bug — the SSH layer's reachability is not
+   * An {@link ActivityWatchClient} failure means the host is reachable but
+   * `aw-server` didn't answer usefully → `unhealthy`. This covers a *connect-
+   * time* SSH failure only indirectly: if the SSH session drops **mid-fetch**
+   * the AW client surfaces an `ActivityWatchUnreachableError`, so this component
+   * is (correctly, transiently) `unhealthy` — and the very next `systemd-system`
+   * probe then re-hits the dead connection and raises an `SshError`, flipping
+   * the whole client to `offline`. That relies on a system-service probe
+   * following `activitywatch` in {@link CLIENT_COMPONENTS} (it does today).
+   *
+   * A connect-time `SshError` (the tunnel never opened, so `getInfo()` never
+   * ran) or any other non-AW error is rethrown for the caller to map to
+   * client-offline / surface as a bug — the SSH layer's reachability is not
    * duplicated here.
    */
   async #probeAwComponent(
