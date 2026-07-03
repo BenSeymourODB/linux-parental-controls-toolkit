@@ -192,3 +192,25 @@ export function buildExceptionUpdatePatch(body: UpdateExceptionRequest): repo.Ex
     ...(body.expiresAt !== undefined ? { expiresAt: new Date(body.expiresAt) } : {}),
   };
 }
+
+/**
+ * Compile-time guard that the group-targeted update types stay structurally
+ * interchangeable with the user-targeted ones the builders return. The builders
+ * emit `repo.ScheduleUpdate` / `repo.ExceptionUpdate` yet their results also feed
+ * `updateGroupSchedule` / `updateGroupException` (the shapes are identical
+ * today). If a future optional field is added to only one side of a pair — e.g.
+ * to `GroupScheduleUpdate` and its schema but not the builder — these assertions
+ * fail to compile, rather than the group PATCH path silently dropping the field
+ * (the latent risk called out in #225 review). Type-level only; erased at build.
+ */
+type MutuallyAssignable<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+type AssertTrue<T extends true> = T;
+// These aliases exist only to be type-checked; they are intentionally unreferenced.
+/* eslint-disable @typescript-eslint/no-unused-vars */
+type _ScheduleUpdatesInterchangeable = AssertTrue<
+  MutuallyAssignable<repo.ScheduleUpdate, repo.GroupScheduleUpdate>
+>;
+type _ExceptionUpdatesInterchangeable = AssertTrue<
+  MutuallyAssignable<repo.ExceptionUpdate, repo.GroupExceptionUpdate>
+>;
+/* eslint-enable @typescript-eslint/no-unused-vars */
