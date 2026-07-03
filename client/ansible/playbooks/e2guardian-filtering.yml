@@ -60,6 +60,24 @@
         label: "{{ item.osUsername }} ({{ item.bannedSites | length }} site(s))"
       notify: Reload e2guardian
 
+    # Recurring time-window denies (#216). One list file per (user, window),
+    # named by the same time-tag slug the filter group's `.Include` references
+    # (pct-filtergroup.conf.j2). `subelements(..., skip_missing=true)` skips users
+    # whose `windows` list is empty. e2guardian applies the window itself via the
+    # `#time:` tag on the include, so no client-side scheduler is involved.
+    - name: Render each supervised user's windowed banned-site lists
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/templates/pct-windowed-bannedsites.j2"
+        dest: >-
+          {{ pct_e2g_managed_dir }}/{{ item.0.osUsername }}-win-{{ item.1.timeTag | replace(' ', '-') }}.bannedsites
+        owner: root
+        group: root
+        mode: "0644"
+      loop: "{{ e2guardian.users | subelements('windows', skip_missing=true) }}"
+      loop_control:
+        label: "{{ item.0.osUsername }} @ [{{ item.1.timeTag }}] ({{ item.1.sites | length }} site(s))"
+      notify: Reload e2guardian
+
     - name: Render each supervised user's filter group config
       ansible.builtin.template:
         src: "{{ playbook_dir }}/templates/pct-filtergroup.conf.j2"

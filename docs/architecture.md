@@ -367,7 +367,7 @@ server, which is consistent with the upstream project's guidance.
 | Per-app deny (hard block) | AppArmor | Ansible-deployed profile |
 | Per-app / app-group time quota | Dashboard polling + agent force-close (SSH `pkill` fallback) | usage-poll decision (#98/#99) |
 | Per-website filter | e2guardian | Ansible-deployed config |
-| Per-website time-window | e2guardian config swap on schedule | Ansible + systemd timer |
+| Per-website time-window | e2guardian (native `#time:` list tag) | Ansible-deployed config |
 | DNS-level block | AdGuard Home | Dashboard via REST API |
 
 Per-app *and* app-group time quotas share **one** enforcement authority: the
@@ -376,6 +376,18 @@ evaluated as the app-group mechanism and **not adopted** — it provides only a
 single shared budget across all its activities, not the independent per-activity
 budgets the policy model requires; see
 [ADR 0010](adr/0010-per-activity-enforcement-mechanism.md).
+
+Per-website **time-windows** (a recurring "no YouTube 16:00–18:00 on weekdays"
+deny, #216) are enforced by e2guardian's **native `#time:` list support**, not by
+a client-side systemd timer or a dashboard re-push at each window boundary. The
+dashboard renders the window into a `#time:`-tagged `.Include` on the user's
+filter group (`<sh> <sm> <eh> <em> <days>`, days as cron digits Sun=0..Sat=6),
+and e2guardian evaluates the constraint itself at request time. This keeps
+enforcement purely *config-file + reload* — no extra scheduler to install or keep
+in sync, and no clock-drift race between a re-push and the window edge. e2guardian
+`#time:` expresses weekday + time-of-day only; calendar **date-scoped** denies
+(`effective_from`/`effective_to`) are not representable this way and ride with the
+date-scoped resolver work (#142).
 
 ## External integrations
 
