@@ -552,6 +552,13 @@ verifies the resulting state (config files present, services enabled,
 iptables rules applied). It is the authoritative test that the Ansible
 side of the client install actually works end-to-end.
 
+**In CI (#219).** The `molecule` job in `.github/workflows/integration.yml`
+runs `molecule test --all` on a systemd-enabled GitHub-hosted runner, so
+this is no longer a local-only step. Converging containers is expensive, so
+on a `pull_request` the job only runs when `client/ansible/**` changed; it
+always runs on the nightly `schedule` and on `workflow_dispatch`. Static
+`ansible-lint` in `ci.yml` stays the fast gate that runs on every PR.
+
 ---
 
 ## The stub `timekpra` binary
