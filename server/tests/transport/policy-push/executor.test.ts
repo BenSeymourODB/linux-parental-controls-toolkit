@@ -13,10 +13,14 @@ import { describe, expect, it, vi } from "vitest";
 import { ZodError } from "zod";
 
 import {
+  addUserToGroup,
   createBudget,
   createClient,
+  createGroupBudget,
+  createGroupSchedule,
   createSchedule,
   createUser,
+  createUserGroup,
   upsertLink,
 } from "../../../src/policy/repository.js";
 import { clients } from "../../../src/policy/schema.js";
@@ -360,6 +364,82 @@ describe("createPolicyPushExecutor", () => {
 
       await executor(unlinkAction(9999, userId));
       expect(build).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("group-inherited policy reaches the push (#362)", () => {
+    it("pushes a group-inherited overall daily budget over timekpra", async () => {
+      const { userId, clientId } = setup();
+      const group = createUserGroup(db, { name: "Kids" });
+      addUserToGroup(db, group.id, userId);
+      // The budget lives on the group only — the user has none of their own.
+      createGroupBudget(db, {
+        userGroupId: group.id,
+        scope: "overall",
+        window: "daily",
+        secondsAllowed: 7200,
+      });
+
+      const rec = recordingClient();
+      const executor = linuxExecutor({ db, defaultTz: "UTC", buildClient: () => rec.client });
+
+      await executor(action(clientId, userId));
+
+      // The inherited group limit reaches the client — no longer display-only.
+      expect(rec.calls).toEqual([
+        "setTimeLimits:7200,7200,7200,7200,7200,7200,7200",
+        "setWeeklyAllowedHours:7",
+      ]);
+    });
+
+    it("lets the user's own budget override the inherited group budget in the push", async () => {
+      const { userId, clientId } = setup();
+      const group = createUserGroup(db, { name: "Kids" });
+      addUserToGroup(db, group.id, userId);
+      createGroupBudget(db, {
+        userGroupId: group.id,
+        scope: "overall",
+        window: "daily",
+        secondsAllowed: 7200,
+      });
+      // The user's own overall/daily budget fully replaces the group's for that slot.
+      createBudget(db, { userId, scope: "overall", window: "daily", secondsAllowed: 1800 });
+
+      const rec = recordingClient();
+      const executor = linuxExecutor({ db, defaultTz: "UTC", buildClient: () => rec.client });
+
+      await executor(action(clientId, userId));
+
+      expect(rec.calls).toEqual([
+        "setTimeLimits:1800,1800,1800,1800,1800,1800,1800",
+        "setWeeklyAllowedHours:7",
+      ]);
+    });
+
+    it("resolves a group-inherited always-on overall deny in the push (skips allowed-hours)", async () => {
+      const { userId, clientId } = setup();
+      const group = createUserGroup(db, { name: "Kids" });
+      addUserToGroup(db, group.id, userId);
+      createBudget(db, { userId, scope: "overall", window: "daily", secondsAllowed: 3600 });
+      // The deny lives on the group; it must still shape the resolved push.
+      createGroupSchedule(db, { userGroupId: group.id, targetKind: "overall", action: "deny" });
+
+      const rec = recordingClient();
+      const warn = vi.fn();
+      const executor = linuxExecutor({
+        db,
+        defaultTz: "UTC",
+        runnerLog: { warn },
+        buildClient: () => rec.client,
+      });
+
+      await executor(action(clientId, userId));
+
+      // The group deny denies all week → the unrepresentable allowed-hours push is skipped,
+      // proving the group schedule participated in the resolution.
+      expect(rec.calls).toEqual(["setTimeLimits:3600,3600,3600,3600,3600,3600,3600"]);
+      expect(rec.calls).not.toContain("setWeeklyAllowedHours:7");
+      expect(warn).toHaveBeenCalledTimes(1);
     });
   });
 

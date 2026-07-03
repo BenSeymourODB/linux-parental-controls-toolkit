@@ -23,14 +23,10 @@
  */
 import { z } from "zod";
 
-import {
-  getActivity,
-  listClientLinks,
-  listGroupActivities,
-  listUserSchedules,
-} from "../../policy/repository.js";
+import { getActivity, listClientLinks, listGroupActivities } from "../../policy/repository.js";
 import type { PolicyDb } from "../../policy/db.js";
-import type { ScheduleRow } from "../../policy/repository.js";
+import { gatherUserScheduleRules } from "../../policy/group-resolution.js";
+import type { ScheduleRule } from "../../policy/schedule-precedence.js";
 import { redactArgv, type AuditEntry, type AuditSink } from "../audit/index.js";
 
 import type { AnsibleHost, AnsibleRunner, AnsibleRunResult, ExtraVarValue } from "./index.js";
@@ -105,7 +101,7 @@ export interface BuildE2guardianPlanOptions {
  * static filter group; recurring "no YouTube during homework" windows are the
  * per-website time-window swap deferred to a #90 follow-up.
  */
-function isAlwaysOn(rule: ScheduleRow): boolean {
+function isAlwaysOn(rule: ScheduleRule): boolean {
   return (
     rule.recurrenceDays === null &&
     rule.recurrenceStartMinute === null &&
@@ -123,10 +119,15 @@ function isAlwaysOn(rule: ScheduleRow): boolean {
  * `domain_group` activities (named bundles the client expands) are intentionally
  * skipped here — resolving a named bundle to concrete domains is owned by the
  * richer-matcher work (#178/#195); this slice handles concrete `domain` matchers.
+ *
+ * Reads the user's effective schedules — own rules plus inherited always-on
+ * group denies (#362) — so a group-targeted domain block reaches e2guardian.
+ * Recurring/date-scoped group denies remain a #216 follow-up (only always-on
+ * denies belong in the static filter group, matching the own-rule behaviour).
  */
 function resolveBannedSites(db: PolicyDb, userId: number): string[] {
   const sites = new Set<string>();
-  for (const rule of listUserSchedules(db, userId)) {
+  for (const rule of gatherUserScheduleRules(db, userId)) {
     if (rule.action !== "deny" || !isAlwaysOn(rule) || rule.targetId === null) continue;
     if (rule.targetKind === "activity") {
       const activity = getActivity(db, rule.targetId);
