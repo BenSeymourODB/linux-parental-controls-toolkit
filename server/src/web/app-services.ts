@@ -54,14 +54,15 @@ export interface AppServices {
   /** The first-run Ansible venv bootstrap supervisor (#39). */
   ansibleVenv: AnsibleVenvSupervisor;
   /**
-   * Dispose the resources this composition root owns, on `app.close()`:
+   * Dispose the resources this composition root owns, on `app.close()`, in the
+   * pre-refactor order:
    *
+   * - `adguardManaged.stop()` runs first whenever the supervisor is non-null,
+   *   including an injected one (it owns a spawned process either way).
    * - `policyPush.dispose()` and `db.$client.close()` run **only** when
    *   `buildAppServices` created them (an injected handle's lifecycle belongs to
    *   its provider — no double-close); `policyPush` is disposed before the db it
    *   reads from.
-   * - `adguardManaged.stop()` runs whenever the supervisor is non-null,
-   *   including an injected one (it owns a spawned process either way).
    *
    * The managed AdGuard **health poll** is torn down by `buildApp` instead: it
    * is assigned onto the decorator by `main.ts` after `listen`, so its teardown
@@ -147,9 +148,15 @@ export function buildAppServices(
     });
 
   const teardown = async (): Promise<void> => {
+    // Order mirrors the pre-refactor buildApp onClose hooks (Fastify runs them
+    // LIFO): stop the managed supervisor first, then dispose the policy-push
+    // transport before closing the db it reads from. Only the push→db step is
+    // load-bearing (the drainer reads the db); adguardManaged holds no handle
+    // into either, so its position is not — but keeping it identical avoids any
+    // behavioural drift from the extraction.
+    if (adguardManaged !== null) await adguardManaged.stop();
     if (ownsPolicyPush) policyPush.dispose();
     if (ownsDb) db.$client.close();
-    if (adguardManaged !== null) await adguardManaged.stop();
   };
 
   return { db, policyPush, eventHub, adguard, adguardManaged, ansibleVenv, teardown };

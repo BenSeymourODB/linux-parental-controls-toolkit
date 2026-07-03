@@ -130,33 +130,44 @@ describe("buildAppServices", () => {
   });
 
   describe("teardown ownership", () => {
-    it("disposes the owned policy-push before closing the owned db", async () => {
-      // Own both: :memory: db (backup off = no file I/O) + built policy-push.
+    it("stops the managed supervisor, then disposes policy-push, then closes the db", async () => {
+      // Own db + policy-push (:memory: db, backup off = no file I/O), plus an
+      // injected managed supervisor, to pin the full pre-refactor teardown order.
       const settings = loadSettings({
         PCT_LOG_LEVEL: "silent",
         PCT_SECRET_KEY: "app-services-test",
         DATABASE_URL: ":memory:",
         PCT_PRE_MIGRATION_BACKUP: "false",
       });
-      const services = buildAppServices({}, settings, log);
+      const managed = createAdGuardManagedSupervisor({
+        dataDir: "/tmp/pct-app-services-test",
+        bindAddr: "127.0.0.1",
+        adminPort: 3000,
+      });
+      const stopSpy = vi.spyOn(managed, "stop").mockResolvedValue();
 
+      const services = buildAppServices({ adguardManaged: managed }, settings, log);
       const disposeSpy = vi.spyOn(services.policyPush, "dispose");
       const closeSpy = vi.spyOn(services.db.$client, "close");
 
       await services.teardown();
 
+      expect(stopSpy).toHaveBeenCalledOnce();
       expect(disposeSpy).toHaveBeenCalledOnce();
       expect(closeSpy).toHaveBeenCalledOnce();
-      // policy-push reads the db, so it must be disposed first.
+      // Order: managed supervisor first, then policy-push (which reads the db),
+      // then the db — mirroring the pre-refactor buildApp onClose (LIFO) hooks.
+      const [stopOrder] = stopSpy.mock.invocationCallOrder;
       const [disposeOrder] = disposeSpy.mock.invocationCallOrder;
       const [closeOrder] = closeSpy.mock.invocationCallOrder;
-      if (disposeOrder === undefined || closeOrder === undefined) {
-        throw new Error("expected both teardown steps to have run");
+      if (stopOrder === undefined || disposeOrder === undefined || closeOrder === undefined) {
+        throw new Error("expected all three teardown steps to have run");
       }
+      expect(stopOrder).toBeLessThan(disposeOrder);
       expect(disposeOrder).toBeLessThan(closeOrder);
     });
 
-    it("closes an owned db but not an injected policy-push", async () => {
+    it("does not close an injected db or dispose an injected policy-push", async () => {
       const db = testDb();
       openDbs.push(db);
       const settings = disabledSettings();
