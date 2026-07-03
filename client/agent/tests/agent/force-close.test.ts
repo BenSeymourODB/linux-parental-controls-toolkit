@@ -1,13 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import type { NotificationHandle, Notifier, ProcessSignaller } from "../../src/agent/effects.js";
-import {
-  ForceCloseController,
-  SystemScheduler,
-  type ForceCloseDeps,
-  type Scheduler,
-  type TimerHandle,
-} from "../../src/agent/force-close.js";
+import { ForceCloseController, type ForceCloseDeps } from "../../src/agent/force-close.js";
+import type { Scheduler, TimerHandle } from "../../src/agent/scheduler.js";
 
 const flush = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
 
@@ -78,12 +73,13 @@ function build(overrides: Partial<ForceCloseDeps> = {}): {
     resolvePids: () => Promise.resolve([111, 222]),
     graceSeconds: 3,
     sigkillEscalationMs: 5_000,
+    renderToasts: true,
     ...overrides,
   };
   return { controller: new ForceCloseController(deps), notifier, signaller, scheduler };
 }
 
-describe("ForceCloseController", () => {
+describe("ForceCloseController.begin (local grace path)", () => {
   it("counts down, updating the toast each second, then SIGTERM→SIGKILL", async () => {
     const { controller, notifier, signaller, scheduler } = build();
     await controller.begin({ activityId: 7, label: "YouTube" });
@@ -119,6 +115,26 @@ describe("ForceCloseController", () => {
     expect(signaller.sent.map((s) => s.signal)).toEqual(["SIGTERM", "SIGTERM"]);
   });
 
+  it("ignores a repeat begin for an already-counting activity", async () => {
+    const { controller, notifier } = build();
+    await controller.begin({ activityId: 7, label: "YouTube" });
+    await controller.begin({ activityId: 7, label: "YouTube" });
+    expect(notifier.notified).toHaveLength(1);
+  });
+});
+
+describe("ForceCloseController.forceCloseNow (server path — grace already elapsed)", () => {
+  it("kills immediately with no fresh countdown even when graceSeconds > 0", async () => {
+    const { controller, notifier, signaller, scheduler } = build({ graceSeconds: 15 });
+    await controller.forceCloseNow({ activityId: 7, label: "YouTube" });
+    // No 1 Hz countdown interval was started.
+    expect(scheduler.intervals.size).toBe(0);
+    expect(notifier.notified[0]?.body).toContain("closing now");
+    expect(signaller.sent.map((s) => s.signal)).toEqual(["SIGTERM", "SIGTERM"]);
+  });
+});
+
+describe("ForceCloseController grant-cancel", () => {
   it("cancels the countdown on a grant top-up and does not kill", async () => {
     const { controller, notifier, signaller, scheduler } = build();
     await controller.begin({ activityId: 7, label: "YouTube" });
@@ -131,6 +147,24 @@ describe("ForceCloseController", () => {
     expect(signaller.sent).toHaveLength(0);
   });
 
+  it("a grant during the SIGTERM→SIGKILL window cancels the pending SIGKILL", async () => {
+    const { controller, signaller, scheduler } = build({ graceSeconds: 0 });
+    await controller.forceCloseNow({ activityId: 7, label: "YouTube" });
+    // SIGTERM sent, escalation scheduled but not yet fired.
+    expect(signaller.sent.map((s) => s.signal)).toEqual(["SIGTERM", "SIGTERM"]);
+    await controller.cancel(7, "granted — keep going");
+    scheduler.fireTimeouts(); // the escalation must have been cancelled
+    expect(signaller.sent.some((s) => s.signal === "SIGKILL")).toBe(false);
+  });
+
+  it("cancel is a no-op for an unknown activity", async () => {
+    const { controller, notifier } = build();
+    await controller.cancel(999, "nope");
+    expect(notifier.updated).toHaveLength(0);
+  });
+});
+
+describe("ForceCloseController misc", () => {
   it("skips the kill (degraded) when no PIDs resolve", async () => {
     const { controller, signaller } = build({
       graceSeconds: 0,
@@ -141,49 +175,19 @@ describe("ForceCloseController", () => {
     expect(controller.isCountingDown(7)).toBe(false);
   });
 
-  it("ignores a repeat begin for an already-counting activity", async () => {
-    const { controller, notifier } = build();
+  it("suppresses toasts and sound when renderToasts is false, but still kills", async () => {
+    const { controller, notifier, signaller } = build({ graceSeconds: 0, renderToasts: false });
     await controller.begin({ activityId: 7, label: "YouTube" });
-    await controller.begin({ activityId: 7, label: "YouTube" });
-    expect(notifier.notified).toHaveLength(1);
+    expect(notifier.notified).toHaveLength(0);
+    expect(signaller.sent.map((s) => s.signal)).toEqual(["SIGTERM", "SIGTERM"]);
   });
 
-  it("cancel is a no-op for an unknown activity", async () => {
-    const { controller, notifier } = build();
-    await controller.cancel(999, "nope");
-    expect(notifier.updated).toHaveLength(0);
-  });
-
-  it("stop clears all in-flight countdowns", async () => {
-    const { controller } = build();
-    await controller.begin({ activityId: 7, label: "A" });
-    await controller.begin({ activityId: 8, label: "B" });
+  it("stop clears all in-flight countdowns and escalations", async () => {
+    const { controller, signaller, scheduler } = build({ graceSeconds: 0 });
+    await controller.forceCloseNow({ activityId: 7, label: "A" });
     controller.stop();
     expect(controller.isCountingDown(7)).toBe(false);
-    expect(controller.isCountingDown(8)).toBe(false);
-  });
-});
-
-describe("SystemScheduler", () => {
-  it("fires a real timeout and lets cancel prevent it", async () => {
-    const scheduler = new SystemScheduler();
-    let fired = false;
-    await new Promise<void>((resolve) => scheduler.timeout(() => resolve(), 1));
-    const cancelled = scheduler.timeout(() => (fired = true), 10);
-    scheduler.cancel(cancelled);
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(fired).toBe(false);
-  });
-
-  it("fires a real interval that cancel stops", async () => {
-    const scheduler = new SystemScheduler();
-    let ticks = 0;
-    const handle = scheduler.interval(() => (ticks += 1), 1);
-    await new Promise((resolve) => setTimeout(resolve, 15));
-    scheduler.cancel(handle);
-    const seen = ticks;
-    await new Promise((resolve) => setTimeout(resolve, 15));
-    expect(seen).toBeGreaterThan(0);
-    expect(ticks).toBe(seen);
+    scheduler.fireTimeouts(); // escalation was cancelled by stop()
+    expect(signaller.sent.some((s) => s.signal === "SIGKILL")).toBe(false);
   });
 });

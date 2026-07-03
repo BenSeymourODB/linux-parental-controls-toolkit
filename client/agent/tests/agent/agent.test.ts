@@ -11,12 +11,8 @@ import type {
   NotificationHandle,
   SoundPlayer,
 } from "../../src/agent/effects.js";
-import type {
-  ForceClose,
-  ForceCloseTarget,
-  Scheduler,
-  TimerHandle,
-} from "../../src/agent/force-close.js";
+import type { ForceClose, ForceCloseTarget } from "../../src/agent/force-close.js";
+import type { Scheduler, TimerHandle } from "../../src/agent/scheduler.js";
 import type { SocketFactory, SocketLike } from "../../src/agent/socket-client.js";
 import type { UsageSource } from "../../src/agent/usage.js";
 
@@ -47,10 +43,15 @@ class FakeSound implements SoundPlayer {
 
 class FakeForceClose implements ForceClose {
   begun: ForceCloseTarget[] = [];
+  forcedNow: ForceCloseTarget[] = [];
   cancelled: { activityId: number; message: string }[] = [];
   stopped = 0;
   begin(target: ForceCloseTarget): Promise<void> {
     this.begun.push(target);
+    return Promise.resolve();
+  }
+  forceCloseNow(target: ForceCloseTarget): Promise<void> {
+    this.forcedNow.push(target);
     return Promise.resolve();
   }
   cancel(activityId: number, message: string): Promise<void> {
@@ -258,11 +259,13 @@ describe("Agent event handling", () => {
     expect(h.sound.played.at(-1)).toBe("complete");
   });
 
-  it("a per-app grant cancels that activity's in-flight countdown", async () => {
+  it("a server force_close kills immediately, and a later per-app grant cancels it", async () => {
     const h = build([activity(7, 5 * MIN)]);
     h.agent.start();
     await emit(h, { type: "enforce.force_close", userId: 42, activityId: 7 });
-    expect(h.forceClose.begun).toEqual([{ activityId: 7, label: "YouTube" }]);
+    // The server already waited out the grace period → immediate, not a countdown.
+    expect(h.forceClose.forcedNow).toEqual([{ activityId: 7, label: "YouTube" }]);
+    expect(h.forceClose.begun).toHaveLength(0);
     await emit(h, {
       type: "grant.applied",
       userId: 42,
@@ -273,11 +276,11 @@ describe("Agent event handling", () => {
     expect(h.forceClose.cancelled[0]?.activityId).toBe(7);
   });
 
-  it("force_close for an uncached activity still begins with a fallback label", async () => {
+  it("force_close for an uncached activity uses a fallback label", async () => {
     const h = build([]);
     h.agent.start();
     await emit(h, { type: "enforce.force_close", userId: 42, activityId: 9 });
-    expect(h.forceClose.begun).toEqual([{ activityId: 9, label: "This app" }]);
+    expect(h.forceClose.forcedNow).toEqual([{ activityId: 9, label: "This app" }]);
   });
 
   it("toasts a policy summary, a session lock, and a cleared lockout", async () => {

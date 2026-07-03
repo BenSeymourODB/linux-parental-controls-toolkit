@@ -31,7 +31,8 @@ import {
   OsProcessSignaller,
   SpawnCommandRunner,
 } from "./effects.js";
-import { ForceCloseController, SystemScheduler } from "./force-close.js";
+import { ForceCloseController } from "./force-close.js";
+import { SystemScheduler } from "./scheduler.js";
 import { AwUsageSource } from "./usage.js";
 
 function main(): void {
@@ -44,15 +45,19 @@ function main(): void {
     const runner = new SpawnCommandRunner();
     const notifier = new DesktopNotifier({ runner, logger });
     const soundPlayer = new CanberraSoundPlayer({ runner, logger });
+    // The sound player is omitted entirely when the profile is `off`, so the
+    // force-close path can't play a bell against an opted-out policy.
+    const soundEnabled = config.notifications.soundProfile !== "off";
     const forceClose = new ForceCloseController({
       notifier,
       signaller: new OsProcessSignaller(),
       scheduler,
-      // Degraded until client-side activity matchers land (tracked follow-up).
+      // Degraded until client-side activity matchers land (tracked follow-up, #381).
       resolvePids: () => Promise.resolve([]),
       graceSeconds: config.notifications.graceSeconds,
       sigkillEscalationMs: config.sigkillEscalationMs,
-      soundPlayer,
+      renderToasts: config.notifications.enabled,
+      ...(soundEnabled ? { soundPlayer } : {}),
       logger,
     });
     agent = new Agent({

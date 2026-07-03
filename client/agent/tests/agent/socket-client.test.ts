@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Dispatcher } from "../../src/bridge/dispatch.js";
 import { StreamLogger, type Logger } from "../../src/bridge/logger.js";
 import type { EventFrame, ServerEvent } from "../../src/bridge/protocol.js";
-import type { Scheduler, TimerHandle } from "../../src/agent/force-close.js";
+import type { Scheduler, TimerHandle } from "../../src/agent/scheduler.js";
 import {
   AgentSocketClient,
   type SocketFactory,

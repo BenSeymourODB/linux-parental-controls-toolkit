@@ -29,17 +29,14 @@ import { budgetKey, remainingSeconds, type BudgetCache, type CachedBudget } from
 import {
   CadenceTracker,
   coalesceWarnings,
+  formatCadenceMessage,
   type CadenceWarning,
   type CoalescedWarning,
 } from "./cadence.js";
 import type { AgentConfig, NotificationPrefs } from "./config.js";
 import { soundNameForEvent, type Notifier, type SoundEvent, type SoundPlayer } from "./effects.js";
-import {
-  ForceCloseController,
-  type ForceClose,
-  type Scheduler,
-  type TimerHandle,
-} from "./force-close.js";
+import type { ForceClose } from "./force-close.js";
+import type { Scheduler, TimerHandle } from "./scheduler.js";
 import { AgentSocketClient, type SocketFactory } from "./socket-client.js";
 import type { UsageSource } from "./usage.js";
 
@@ -129,24 +126,37 @@ export class Agent {
   }
 
   async #render(group: CoalescedWarning): Promise<void> {
-    const isTimesUp = group.kind === "timesUp";
+    if (group.kind === "timesUp") {
+      await this.#renderTimesUp(group);
+      return;
+    }
     if (this.#prefs.enabled) {
       await this.#opts.notifier.notify({
-        title: isTimesUp ? "Time's up" : "Time remaining",
+        title: "Time remaining",
         body: group.message,
-        urgency:
-          isTimesUp || group.thresholdSeconds <= FINAL_WARNING_SECONDS ? "critical" : "normal",
+        urgency: group.thresholdSeconds <= FINAL_WARNING_SECONDS ? "critical" : "normal",
       });
       await this.#playSound(this.#soundEventFor(group));
     }
-    // Local force-close fallback: a per-app budget that hit zero.
-    if (isTimesUp) {
-      for (const b of group.budgets) {
-        const activityId = this.#activityIdForKey(b.key);
-        if (activityId !== null) {
-          await this.#opts.forceClose.begin({ activityId, label: b.label });
-        }
-      }
+  }
+
+  async #renderTimesUp(group: CoalescedWarning): Promise<void> {
+    // A per-app budget at zero begins the local grace countdown — whose own
+    // countdown toast IS the "time's up" toast, so the agent does not also
+    // toast those budgets (that would double up). Only the overall budget,
+    // which has no force-close (Timekpr handles the session lock), is toasted.
+    const overall = group.budgets.filter((b) => this.#activityIdForKey(b.key) === null);
+    for (const b of group.budgets) {
+      const activityId = this.#activityIdForKey(b.key);
+      if (activityId !== null) await this.#opts.forceClose.begin({ activityId, label: b.label });
+    }
+    if (overall.length > 0 && this.#prefs.enabled) {
+      await this.#opts.notifier.notify({
+        title: "Time's up",
+        body: formatCadenceMessage({ kind: "timesUp", thresholdSeconds: 0, budgets: overall }),
+        urgency: "critical",
+      });
+      await this.#playSound("timesUp");
     }
   }
 
@@ -169,8 +179,10 @@ export class Agent {
         );
         break;
       case "enforce.force_close": {
+        // The server fires this only after the grace period has already
+        // elapsed, so kill straight away rather than starting a fresh countdown.
         const label = this.#opts.budgets.get(budgetKey(event.activityId))?.label ?? "This app";
-        await this.#opts.forceClose.begin({ activityId: event.activityId, label });
+        await this.#opts.forceClose.forceCloseNow({ activityId: event.activityId, label });
         break;
       }
       case "enforce.session_lock":
@@ -225,10 +237,10 @@ export class Agent {
   }
 }
 
-/** Whole minutes for a granted-seconds figure, for the toast copy. */
+/**
+ * Whole minutes for a granted-seconds figure, for the toast copy. A positive
+ * sub-minute grant rounds up to 1 so it never reads as "+0 min granted".
+ */
 function minutes(seconds: number): number {
-  return Math.round(seconds / 60);
+  return Math.max(1, Math.round(seconds / 60));
 }
-
-/** Re-export so `main.ts` can build the controller alongside the agent. */
-export { ForceCloseController };

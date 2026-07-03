@@ -23,7 +23,7 @@ import net from "node:net";
 import { computeBackoffDelayMs, type BackoffOptions } from "../bridge/backoff.js";
 import type { Logger } from "../bridge/logger.js";
 import { decodeFrame, FrameDecodeError, type ServerEvent } from "../bridge/protocol.js";
-import type { Scheduler, TimerHandle } from "./force-close.js";
+import type { Scheduler, TimerHandle } from "./scheduler.js";
 
 /** The minimal slice of a connected socket {@link AgentSocketClient} drives. */
 export interface SocketLike {

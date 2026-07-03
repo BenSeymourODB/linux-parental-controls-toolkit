@@ -239,10 +239,5 @@ export class OsProcessSignaller implements ProcessSignaller {
 
 /** True if `err` is an `ESRCH` ("no such process") errno error. */
 function isNoSuchProcess(err: unknown): boolean {
-  return (
-    typeof err === "object" &&
-    err !== null &&
-    "code" in err &&
-    (err as { code?: unknown }).code === "ESRCH"
-  );
+  return typeof err === "object" && err !== null && "code" in err && err.code === "ESRCH";
 }
