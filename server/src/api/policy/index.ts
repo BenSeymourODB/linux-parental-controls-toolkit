@@ -6,6 +6,7 @@
 export { registerPolicyRoutes } from "./routes.js";
 export { registerScheduleOrderRoutes } from "./schedule-order.js";
 export { registerTimeTodayRoutes } from "./time-today.js";
+export { registerPushNowRoutes } from "./push-now.js";
 export {
   registerEffectiveRoutes,
   activeRuleResponseSchema,
@@ -128,4 +129,11 @@ export {
   type AdjustTimeTodayRequest,
   type TimeTodayResponse,
   type ClientAdjustmentResultDto,
+  // Manual "push saved policy now" lever (#304)
+  pushPolicyRequestSchema,
+  clientPushResultSchema,
+  pushPolicyResponseSchema,
+  type PushPolicyRequest,
+  type ClientPushResultDto,
+  type PushPolicyResponse,
 } from "./dtos.js";

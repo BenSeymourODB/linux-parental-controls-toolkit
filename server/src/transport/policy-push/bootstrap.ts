@@ -59,6 +59,7 @@ import { createPolicyPushDispatcher } from "./dispatcher.js";
 import { createPolicyPushExecutor } from "./executor.js";
 import { createLinuxPolicyRunner } from "./linux-runner.js";
 import { createPlatformRunnerRegistry } from "./platform-runner.js";
+import { pushUserPolicyNow, type PolicyPushNow } from "./push-now.js";
 
 /**
  * The SSH transport surface the bootstrap needs: the audited-command surface
@@ -94,6 +95,13 @@ export interface PolicyPushTransport {
    * then reports the transport as unavailable rather than silently no-op'ing.
    */
   readonly adjustTimeToday?: TimeTodayAdjuster;
+  /**
+   * The manual "push saved policy now" lever (#304), present only when the live
+   * transport is wired (SSH key exists). Absent in the logging fallback — the
+   * admin route then reports the transport as unavailable rather than silently
+   * no-op'ing.
+   */
+  readonly pushPolicyNow?: PolicyPushNow;
   /**
    * The live client health prober (#81), present only when the live transport
    * is wired (the SSH key exists). It runs `systemctl is-active` over the same
@@ -265,9 +273,39 @@ export function createPolicyPushTransport(
       },
     );
 
+  // The manual "push saved policy now" lever (#304): re-push the user's saved
+  // effective policy, awaited and reported per-client. An unreachable client's
+  // push is durably queued (the push is idempotent/absolute), so it degrades to
+  // `queued` rather than a bare failure.
+  //
+  // It runs over an ADMIN-attributed executor (mirroring the time-today lever
+  // above) so a deliberate admin re-push is distinguishable in the audit log
+  // (#85) from the routine `actor:"system"` CRUD-side-effect pushes the
+  // dispatcher issues. A push that must be queued for an offline client is later
+  // replayed by the `system` drainer, so that deferred replay is attributed to
+  // `system` — the drainer's action, not the admin's original click.
+  const adminRunner = createLinuxPolicyRunner({
+    log,
+    buildClient: ({ client, username, userId, reason }) =>
+      new TimekprClient(
+        auditing.withContext({ clientId: client.id, userId, reason, actor: "admin" }),
+        targetFromClient(client, credentials),
+        username,
+      ),
+  });
+  const adminExecutor = createPolicyPushExecutor({
+    db,
+    registry: createPlatformRunnerRegistry([adminRunner]),
+    defaultTz: settings.defaultTz,
+    log,
+    ...(options.now !== undefined ? { now: options.now } : {}),
+  });
+  const pushPolicyNow: PolicyPushNow = (request) => pushUserPolicyNow(db, adminExecutor, request);
+
   return {
     dispatcher,
     adjustTimeToday: timeTodayAdjuster,
+    pushPolicyNow,
     prober,
     dispose: (): void => {
       drainer.stop();

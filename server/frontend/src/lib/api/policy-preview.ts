@@ -19,7 +19,11 @@
  * License boundary: none — JSON API only.
  */
 import { apiFetch } from "./client.js";
-import type { PolicyPreviewRequest, PolicyPreviewResponse } from "./contract.js";
+import type {
+  PolicyPreviewRequest,
+  PolicyPreviewResponse,
+  PushPolicyResponse,
+} from "./contract.js";
 
 /**
  * Preview the save-and-push diff for `userId` against a `proposed` policy.
@@ -34,5 +38,25 @@ export function previewPolicyPush(
   return apiFetch<PolicyPreviewResponse>(`/users/${userId}/policy-preview`, {
     method: "POST",
     body: proposed,
+  });
+}
+
+/**
+ * Re-push `userId`'s **currently saved** effective policy to their linked
+ * client(s) — the on-demand companion to {@link previewPolicyPush} (#304).
+ * Unlike the preview, this **has side effects**: it drives the live Phase-4
+ * transport (or durably queues an unreachable client's idempotent push) and
+ * returns a per-client `pushed | queued | failed` result. It does **not** save
+ * the what-if edits in the preview sandbox — it pushes the saved policy.
+ *
+ * `clientId`, when given, restricts the push to that one linked client; omitted,
+ * it pushes to every client the user is linked to. Throws {@link ApiError} on a
+ * non-2xx response (`404` unknown user / unlinked client, `409` no linked
+ * clients, `503` when the transport is not configured).
+ */
+export function pushPolicyNow(userId: number, clientId?: number): Promise<PushPolicyResponse> {
+  return apiFetch<PushPolicyResponse>(`/users/${userId}/policy-push`, {
+    method: "POST",
+    body: clientId === undefined ? {} : { clientId },
   });
 }

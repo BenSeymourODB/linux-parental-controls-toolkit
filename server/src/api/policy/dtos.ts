@@ -962,3 +962,41 @@ export function toTimeLeftCommand(body: AdjustTimeTodayRequest): {
   // The refine guarantees setSeconds is present when deltaSeconds is not.
   return { operation: "=", seconds: body.setSeconds ?? 0 };
 }
+
+// --- Manual "push saved policy now" lever (#304) ---------------------------
+
+/**
+ * Body of `POST /users/:userId/policy-push`: re-push the user's **currently
+ * saved** effective policy to their linked client(s) — the on-demand companion
+ * to the side-effect-free preview (#281). `clientId`, when given, restricts the
+ * push to that one linked client; omitted, it pushes to every client the user is
+ * linked to. There is nothing else to send: the push resolves the user's saved
+ * budgets/schedules server-side, so the body carries no policy.
+ */
+export const pushPolicyRequestSchema = z.object({
+  clientId: z.number().int().positive().optional(),
+});
+
+/**
+ * Per-client outcome of a manual push (mirrors the transport service result).
+ * `pushed` — delivered now; `queued` — the client was unreachable, so the
+ * idempotent absolute push was durably queued for replay on reconnect (#84);
+ * `failed` — a non-retriable error.
+ */
+export const clientPushResultSchema = z.object({
+  clientId: z.number().int(),
+  hostname: z.string(),
+  osUsername: z.string(),
+  status: z.enum(["pushed", "queued", "failed"]),
+  error: z.string().optional(),
+});
+
+/** Response of `POST /users/:userId/policy-push`: the per-client push results. */
+export const pushPolicyResponseSchema = z.object({
+  userId: z.number().int(),
+  results: z.array(clientPushResultSchema),
+});
+
+export type PushPolicyRequest = z.infer<typeof pushPolicyRequestSchema>;
+export type ClientPushResultDto = z.infer<typeof clientPushResultSchema>;
+export type PushPolicyResponse = z.infer<typeof pushPolicyResponseSchema>;

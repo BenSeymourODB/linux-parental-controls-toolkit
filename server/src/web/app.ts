@@ -221,6 +221,7 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     services.eventHub,
     services.policyPush.dispatcher,
     services.policyPush.adjustTimeToday,
+    services.policyPush.pushPolicyNow,
     services.policyPush.prober,
     options.eventStream,
   );

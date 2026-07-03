@@ -93,6 +93,9 @@ describe("createPolicyPushTransport", () => {
     // The "Add time today" adjuster (#257) is absent in the fallback, so the
     // admin route can report the transport as unavailable rather than no-op.
     expect(transport.adjustTimeToday).toBeUndefined();
+    // The manual "push now" lever (#304) is absent in the fallback for the same
+    // reason: the admin route reports the transport as unavailable.
+    expect(transport.pushPolicyNow).toBeUndefined();
     // The health prober (#81) is absent too, so /api/clients/health keeps
     // degrading to `unknown` rather than probing over a non-existent SSH pool.
     expect(transport.prober).toBeUndefined();
@@ -208,6 +211,40 @@ describe("createPolicyPushTransport", () => {
           e.reason === "time.adjusted",
       ),
     ).toBe(true);
+
+    transport.dispose();
+  });
+
+  it("exposes a 'push saved policy now' lever that re-pushes over the live executor (#304)", async () => {
+    const userId = createUser(db, { displayName: "Alice", tz: "UTC" }).id;
+    const clientId = createClient(db, { hostname: "mint-01", sshUser: "pct-agent" }).id;
+    upsertLink(db, userId, clientId, { osUsername: "alice", osUserRef: "1001" });
+
+    const ssh = fakeSsh();
+    const transport = createPolicyPushTransport({
+      settings,
+      db,
+      log,
+      loadCredentials: () => ({ privateKey: "FAKE-KEY" }),
+      sshTransport: ssh,
+    });
+
+    const push = transport.pushPolicyNow;
+    expect(push).toBeDefined();
+    if (push === undefined) throw new Error("expected a live pusher");
+    const result = await push({ userId });
+
+    // The push reaches the fake SSH transport (real `timekpra` argv) and reports
+    // the client as delivered.
+    expect(result.results).toEqual([
+      { clientId, hostname: "mint-01", osUsername: "alice", status: "pushed" },
+    ]);
+    expect(ssh.checked.length).toBeGreaterThan(0);
+    // ...and it is audited with admin attribution, so a deliberate re-push is
+    // distinguishable from the `actor:"system"` CRUD-side-effect pushes (#85).
+    const entries = listAuditEntries(db, { limit: 50 });
+    expect(entries.length).toBeGreaterThan(0);
+    expect(entries.every((e) => e.actor === "admin" && e.clientId === clientId)).toBe(true);
 
     transport.dispose();
   });
