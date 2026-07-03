@@ -80,6 +80,13 @@ export interface ForceCloseDeps {
   logger?: Logger;
 }
 
+/** The force-close surface the agent orchestrator drives (injectable in tests). */
+export interface ForceClose {
+  begin(target: ForceCloseTarget): Promise<void>;
+  cancel(activityId: number, message: string): Promise<void>;
+  stop(): void;
+}
+
 /** Per-activity countdown state. */
 interface Countdown {
   target: ForceCloseTarget;
@@ -93,7 +100,7 @@ interface Countdown {
  * exhausts. One countdown per `activityId` at a time; a repeat `begin` for an
  * activity already counting down is ignored.
  */
-export class ForceCloseController {
+export class ForceCloseController implements ForceClose {
   readonly #deps: ForceCloseDeps;
   readonly #active = new Map<number, Countdown>();
 
