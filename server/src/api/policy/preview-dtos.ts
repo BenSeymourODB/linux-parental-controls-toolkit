@@ -15,6 +15,7 @@
  */
 import { z } from "zod";
 
+import { clientReachabilityValues } from "../../transport/health/index.js";
 import { budgetResponseSchema, scheduleResponseSchema } from "./dtos.js";
 
 /**
@@ -34,11 +35,19 @@ import { budgetResponseSchema, scheduleResponseSchema } from "./dtos.js";
  * proposed rule at worst yields a misleading *preview*, never a bad write. If a
  * non-editor caller is ever given this endpoint, tighten this to apply
  * `scheduleRecurrenceSchema`'s refinements.
+ *
+ * `probe` is an **opt-in** flag: absent/false keeps the endpoint
+ * side-effect-free (last-seen + queue depth only); `true` asks it to also probe
+ * each affected client's live reachability over the Phase-4 SSH facade (only
+ * effective once the live prober is wired, #39). It is deliberately *not*
+ * `.default(false)` so the inferred request type keeps `probe?: boolean` and
+ * callers that never probe omit it.
  */
 export const policyPreviewRequestSchema = z.object({
   budgets: z.array(budgetResponseSchema).default([]),
   schedules: z.array(scheduleResponseSchema).default([]),
   now: z.string().datetime().optional(),
+  probe: z.boolean().optional(),
 });
 
 export type PolicyPreviewRequest = z.infer<typeof policyPreviewRequestSchema>;
@@ -65,16 +74,22 @@ export const policyPushChangeResponseSchema = z.object({
 });
 
 /**
- * A client the push would fan out to, with the side-effect-free annotation the
- * preview can offer: when the client was last seen, and how many actions are
- * already queued for it. The live push-vs-queue decision still happens at push
- * time against real reachability — preview never probes.
+ * A client the push would fan out to, with the annotations the preview can
+ * offer: when the client was last seen and how many actions are already queued
+ * for it (both cheap, always present), plus — only when the request opted into
+ * `probe` and the live prober is wired — a point-in-time `reachability`
+ * (`online`/`offline`/`unknown`) and the `probedAt` instant. When the probe was
+ * not requested or no prober is wired, both are `null` (the default,
+ * side-effect-free shape); the live push-vs-queue decision still happens at push
+ * time against real reachability regardless.
  */
 export const previewAffectedClientSchema = z.object({
   clientId: z.number().int(),
   hostname: z.string(),
   lastSeen: z.string().nullable(),
   pendingQueueDepth: z.number().int().nonnegative(),
+  reachability: z.enum(clientReachabilityValues).nullable(),
+  probedAt: z.string().nullable(),
 });
 
 /** The preview response: the change set + the clients it would reach. */
