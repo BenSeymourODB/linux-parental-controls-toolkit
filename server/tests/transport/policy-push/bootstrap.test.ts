@@ -42,6 +42,11 @@ function fakeSsh(): BootstrapSshTransport & { checked: string[][]; disposed: num
     async execAndParse() {
       throw new Error("not used in these tests");
     },
+    async withPortForward(_target, _remote, fn) {
+      // These tests don't exercise the health prober's AW probe; run the
+      // callback against a canned loopback endpoint so the surface is complete.
+      return fn({ host: "127.0.0.1", port: 5600 });
+    },
     disposeAll() {
       this.disposed += 1;
     },

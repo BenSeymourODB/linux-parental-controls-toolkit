@@ -13,15 +13,28 @@
  * `systemctl is-active <unit>` (a read-only query — no privilege required, so
  * the dashboard runs it as the unprivileged `pct-agent`). System services
  * (`timekpr.service`, `e2guardian.service`, and the Phase-8b
- * `pct-client-bridge.service`) are probed that way. The **per-user** components
- * — ActivityWatch's loopback `aw-server` and the per-user
- * `pct-client-agent` (`systemd --user`) — need a per-supervised-user probe
- * (XDG runtime context / loopback REST) whose shape lands with Phase 5 (#86)
- * and Phase 8b (#103); until then they are reported `unknown`, never guessed.
+ * `pct-client-bridge.service`) are probed that way.
  *
- * License boundary: none touched — this module only *names* the commands the
- * SSH facade execs as subprocesses; no GPL code is linked in-process.
+ * ActivityWatch's loopback `aw-server` is reached differently: it binds
+ * `127.0.0.1:5600` and is never network-exposed, so it is probed over an SSH
+ * port-forward with a REST-only `GET /api/0/info` (#323, the {@link
+ * ActivityWatchRestProbe} method — the same tunnel the Phase-5 telemetry pull
+ * uses). Reported per-client against the conventional 5600 bind; multi-user-
+ * per-client breakdown is deferred with the per-user `pct-client-agent` probe
+ * (Phase 8b #103), which shares that dimensionality — until it lands
+ * `pct-client-agent` is reported `unknown`, never guessed.
+ *
+ * License boundary: none collapsed — the system probes only *name* the
+ * commands the SSH facade execs as subprocesses, and `aw-server` is reached
+ * solely over its documented HTTP REST API through the loopback SSH tunnel
+ * (`CLAUDE.md` → rule 4). No GPL code is linked in-process.
  */
+import {
+  ActivityWatchParseError,
+  ActivityWatchRequestError,
+  ActivityWatchUnreachableError,
+} from "../activitywatch/errors.js";
+import type { AwServerInfo } from "../activitywatch/schemas.js";
 
 /** The components the dashboard reports per-client health for (the DTO enum). */
 export const clientComponentValues = [
@@ -49,6 +62,18 @@ export interface SystemServiceProbe {
 }
 
 /**
+ * Probe ActivityWatch's loopback `aw-server` over an SSH port-forward with a
+ * REST-only `GET /api/0/info` (#323). `aw-server` binds `127.0.0.1` and is
+ * never network-exposed, so the tunnel is the only path to it — the same
+ * loopback forward the Phase-5 telemetry pull opens.
+ */
+export interface ActivityWatchRestProbe {
+  readonly method: "activitywatch-rest";
+  /** Loopback `aw-server` port on the client (its documented bind, `5600`). */
+  readonly port: number;
+}
+
+/**
  * A component whose probe is not yet defined (per-user / loopback components
  * that land with a later phase). Always reported `unknown` with {@link detail}.
  */
@@ -59,7 +84,10 @@ export interface DeferredProbe {
 }
 
 /** How a single component's health is determined. */
-export type ComponentProbe = SystemServiceProbe | DeferredProbe;
+export type ComponentProbe = SystemServiceProbe | ActivityWatchRestProbe | DeferredProbe;
+
+/** The conventional loopback port `aw-server` binds on the client (#86). */
+export const AW_SERVER_PORT = 5600;
 
 /** A component paired with how to probe it. */
 export interface ComponentDescriptor {
@@ -75,7 +103,7 @@ export const CLIENT_COMPONENTS: readonly ComponentDescriptor[] = [
   { component: "timekpr-next", probe: { method: "systemd-system", unit: "timekpr.service" } },
   {
     component: "activitywatch",
-    probe: { method: "deferred", detail: "per-user aw-server probe lands with Phase 5 (#86)" },
+    probe: { method: "activitywatch-rest", port: AW_SERVER_PORT },
   },
   { component: "e2guardian", probe: { method: "systemd-system", unit: "e2guardian.service" } },
   {
@@ -117,4 +145,33 @@ export function classifyServiceState(stdout: string): ComponentClassification {
   if (state === "active") return { status: "ok", detail: "active" };
   if (state === "") return { status: "unknown", detail: "no state reported" };
   return { status: "unhealthy", detail: state };
+}
+
+/**
+ * `aw-server` answered `GET /api/0/info` → the component is `ok`. The reported
+ * server version rides in the detail so the admin can spot a client running a
+ * stale ActivityWatch.
+ */
+export function classifyActivityWatchInfo(info: AwServerInfo): ComponentClassification {
+  return { status: "ok", detail: `aw-server ${info.version}` };
+}
+
+/**
+ * Map an {@link ActivityWatchClient} failure to an `unhealthy` detail. Only
+ * called when the SSH tunnel itself opened (the SSH-layer taxonomy is handled
+ * one level up as client-offline → `unknown`, never as an AW verdict): here the
+ * host is reachable but `aw-server` didn't answer usefully. A non-AW error is a
+ * bug and must surface, not masquerade as `unhealthy` — the caller rethrows it.
+ */
+export function activityWatchFailureDetail(error: unknown): string | undefined {
+  if (error instanceof ActivityWatchUnreachableError) {
+    return error.timedOut ? "aw-server did not respond in time" : "aw-server not responding";
+  }
+  if (error instanceof ActivityWatchRequestError) {
+    return `aw-server returned HTTP ${error.statusCode}`;
+  }
+  if (error instanceof ActivityWatchParseError) {
+    return "aw-server sent an unrecognised response";
+  }
+  return undefined;
 }

@@ -134,6 +134,21 @@
 
     # --- per-user configuration + units (drift reconciled every run) --------
 
+    # SECURITY (#351): these tasks write into each supervised user's own home
+    # directory, which that (untrusted, child) user can fully control. Two
+    # defences, applied together, keep a root-run re-apply from being tricked
+    # into a child → root privilege escalation via a planted symlink:
+    #   1. `become_user: "{{ item }}"` — do the home writes AS the target user,
+    #      never as root. A hostile symlink can then only ever reach files the
+    #      child already owns, so there is nothing to escalate to. (Mirrors the
+    #      `systemd_service` tasks below, which already drop privileges.)
+    #   2. `follow: false` — neutralise `ansible.builtin.file`'s `follow: yes`
+    #      default, under which a leaf symlink (e.g. `~/.config/systemd/user`
+    #      → `/etc`) would have its *target* chowned/chmod'd. This is the
+    #      documented root cause; keep it pinned even though defence 1 already
+    #      contains it.
+    # The `owner`/`group` set to the same user are harmless no-ops under
+    # `become_user` and are kept to document intent.
     - name: Reconcile per-user ActivityWatch configuration and units
       when: aw_supervised_users | length > 0
       block:
@@ -144,6 +159,9 @@
             owner: "{{ item }}"
             group: "{{ item }}"
             mode: "0755"
+            follow: false
+          become: true
+          become_user: "{{ item }}"
           loop: "{{ aw_supervised_users }}"
 
         - name: Ensure the systemd --user unit directory exists
@@ -153,6 +171,9 @@
             owner: "{{ item }}"
             group: "{{ item }}"
             mode: "0755"
+            follow: false
+          become: true
+          become_user: "{{ item }}"
           loop: "{{ aw_supervised_users }}"
 
         - name: Render the loopback-only aw-server config
@@ -162,6 +183,9 @@
             owner: "{{ item }}"
             group: "{{ item }}"
             mode: "0644"
+            follow: false
+          become: true
+          become_user: "{{ item }}"
           loop: "{{ aw_supervised_users }}"
 
         - name: Render the per-user systemd --user units
@@ -171,6 +195,9 @@
             owner: "{{ item.0 }}"
             group: "{{ item.0 }}"
             mode: "0644"
+            follow: false
+          become: true
+          become_user: "{{ item.0 }}"
           vars:
             unit: "{{ item.1 }}"
           loop: "{{ aw_supervised_users | product(aw_units) | list }}"

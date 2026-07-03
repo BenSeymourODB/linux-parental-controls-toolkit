@@ -99,7 +99,14 @@ function previewResponse(overrides: Partial<PolicyPreviewResponse> = {}): Policy
       },
     ],
     affectedClients: [
-      { clientId: 3, hostname: "mint-livingroom", lastSeen: null, pendingQueueDepth: 2 },
+      {
+        clientId: 3,
+        hostname: "mint-livingroom",
+        lastSeen: null,
+        pendingQueueDepth: 2,
+        reachability: null,
+        probedAt: null,
+      },
     ],
     ...overrides,
   };
@@ -268,6 +275,44 @@ describe("PolicyPreviewView", () => {
     await fireEvent.click(screen.getByLabelText("Include Daily overall budget"));
 
     await waitFor(() => expect(lastProposed().budgets).toHaveLength(0));
+  });
+
+  it("keeps the auto-preview probe-free (no live SSH on every edit)", async () => {
+    render(PolicyPreviewView);
+    await selectUser();
+
+    await waitFor(() => expect(previewPolicyPush).toHaveBeenCalled());
+    // The cheap on-load / on-edit preview never opts into the probe.
+    expect(lastProposed().probe).toBeUndefined();
+    // …and with no probe, no reachability marker is rendered.
+    expect(screen.queryByTestId("reachability-3")).not.toBeInTheDocument();
+  });
+
+  it("probes live reachability on demand and renders per-client markers", async () => {
+    previewPolicyPush.mockResolvedValue(
+      previewResponse({
+        affectedClients: [
+          {
+            clientId: 3,
+            hostname: "mint-livingroom",
+            lastSeen: "2026-06-17T12:00:05.000Z",
+            pendingQueueDepth: 2,
+            reachability: "online",
+            probedAt: "2026-06-17T12:00:05.000Z",
+          },
+        ],
+      }),
+    );
+    render(PolicyPreviewView);
+    await selectUser();
+    await waitFor(() => expect(previewPolicyPush).toHaveBeenCalled());
+
+    await fireEvent.click(screen.getByRole("button", { name: "Check live status" }));
+
+    // The button re-requests with the opt-in probe flag …
+    await waitFor(() => expect(lastProposed().probe).toBe(true));
+    // … and the returned verdict renders as a per-client marker.
+    expect(await screen.findByTestId("reachability-3")).toHaveTextContent("online");
   });
 
   it("surfaces a preview failure in the push bar", async () => {

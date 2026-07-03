@@ -1,0 +1,14 @@
+{#
+  Banned-site list for a single recurring time-window (#216). One domain per
+  line; the window itself is applied by the `#time:` tag on the `.Include` that
+  pulls this file into the user's filter group (pct-filtergroup.conf.j2), so
+  e2guardian only blocks these domains during the window. `item.0` is the user,
+  `item.1` the window (from `subelements(users, 'windows')`). Managed by #216 —
+  do not hand-edit.
+-#}
+# Managed by pct e2guardian-filtering.yml (#216) for user '{{ item.0.osUsername }}'
+# (ref={{ item.0.osUserRef }}, filter group {{ item.0.filterGroup }}).
+# Active only during #time: {{ item.1.timeTag }}. Do not hand-edit.
+{% for site in item.1.sites %}
+{{ site }}
+{% endfor %}

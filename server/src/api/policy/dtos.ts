@@ -852,6 +852,34 @@ export function toGroupBudgetResponse(row: GroupBudgetRow): GroupBudgetResponse 
   };
 }
 
+// --- Resolved (inherited-vs-local) budgets (#363) --------------------------
+// A display-only projection of the user's effective budget baseline: each slot
+// tagged with whether it is the user's own budget or inherited from a group.
+// Mirrors `policy/group-resolution.ts`'s `RuleSource`/`GatheredBudget`;
+// resolution stays server-side, this only serialises its output. Defined here
+// (not in the route module) so the frontend can consume the inferred type
+// without dragging Fastify-augmented route code into its type program.
+
+/**
+ * Where a resolved budget slot comes from: the user's own budget, or a group
+ * they belong to (identified by `groupId`, which the frontend maps to a name).
+ */
+export const resolvedBudgetSourceSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("user") }),
+  z.object({ kind: z.literal("group"), groupId: z.number().int() }),
+]);
+
+/** One resolved budget slot with its provenance (the `gatherUserBudgets` shape). */
+export const resolvedBudgetResponseSchema = z.object({
+  scope: scopeSchema,
+  targetId: z.number().int().nullable(),
+  window: budgetWindowSchema,
+  secondsAllowed: z.number().int(),
+  source: resolvedBudgetSourceSchema,
+});
+
+export type ResolvedBudgetResponse = z.infer<typeof resolvedBudgetResponseSchema>;
+
 // --- "Add time today" same-day adjustment (#257) ---------------------------
 
 /**
