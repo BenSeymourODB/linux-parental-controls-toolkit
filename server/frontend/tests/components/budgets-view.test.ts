@@ -15,6 +15,8 @@ import type {
   ActivityGroupResponse,
   ActivityResponse,
   BudgetResponse,
+  ResolvedBudgetResponse,
+  UserGroupResponse,
   UserResponse,
 } from "../../src/lib/api/contract.js";
 
@@ -22,7 +24,9 @@ const listBudgets = vi.fn<() => Promise<BudgetResponse[]>>();
 const createBudget = vi.fn<(input: unknown) => Promise<BudgetResponse>>();
 const updateBudget = vi.fn<(id: number, input: unknown) => Promise<BudgetResponse>>();
 const deleteBudget = vi.fn<(id: number) => Promise<void>>();
+const listResolvedBudgets = vi.fn<(userId: number) => Promise<ResolvedBudgetResponse[]>>();
 const listUsers = vi.fn<() => Promise<UserResponse[]>>();
+const listUserGroups = vi.fn<() => Promise<UserGroupResponse[]>>();
 const listActivities = vi.fn<() => Promise<ActivityResponse[]>>();
 const listActivityGroups = vi.fn<() => Promise<ActivityGroupResponse[]>>();
 
@@ -31,8 +35,10 @@ vi.mock("$lib/api/budgets", () => ({
   createBudget: (input: unknown) => createBudget(input),
   updateBudget: (id: number, input: unknown) => updateBudget(id, input),
   deleteBudget: (id: number) => deleteBudget(id),
+  listResolvedBudgets: (userId: number) => listResolvedBudgets(userId),
 }));
 vi.mock("$lib/api/users", () => ({ listUsers: () => listUsers() }));
+vi.mock("$lib/api/user-groups", () => ({ listUserGroups: () => listUserGroups() }));
 vi.mock("$lib/api/activities", () => ({ listActivities: () => listActivities() }));
 vi.mock("$lib/api/activity-groups", () => ({ listActivityGroups: () => listActivityGroups() }));
 
@@ -73,7 +79,10 @@ beforeEach(() => {
   createBudget.mockReset();
   updateBudget.mockReset();
   deleteBudget.mockReset();
+  listResolvedBudgets.mockReset().mockResolvedValue([]);
   listUsers.mockReset().mockResolvedValue([user()]);
+  // Default: no groups → no inherited rows and `listResolvedBudgets` is skipped.
+  listUserGroups.mockReset().mockResolvedValue([]);
   listActivities.mockReset().mockResolvedValue([activity()]);
   listActivityGroups.mockReset().mockResolvedValue([group()]);
 });
@@ -256,5 +265,131 @@ describe("BudgetsView", () => {
     render(BudgetsView);
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Budget load failed.");
+  });
+
+  it("does not fetch resolved budgets when there are no user groups", async () => {
+    listBudgets.mockResolvedValue([budget({ id: 1 })]);
+
+    render(BudgetsView);
+    await screen.findByText("1h");
+
+    // No groups → nothing to inherit → the projection endpoint is never hit,
+    // and every row is marked local.
+    expect(listResolvedBudgets).not.toHaveBeenCalled();
+    expect(screen.getByText("Local")).toBeInTheDocument();
+    expect(screen.queryByText(/^Inherited/)).not.toBeInTheDocument();
+  });
+
+  it("marks own budgets local and appends inherited-from-group rows", async () => {
+    listUserGroups.mockResolvedValue([
+      { id: 3, name: "Kids", createdAt: "2026-01-01T00:00:00.000Z" },
+    ] as UserGroupResponse[]);
+    // Own overall/daily budget; group daily activity:10 budget the user inherits.
+    listBudgets.mockResolvedValue([
+      budget({ id: 1, scope: "overall", targetId: null, secondsAllowed: 7200 }),
+    ]);
+    listResolvedBudgets.mockResolvedValue([
+      {
+        scope: "overall",
+        targetId: null,
+        window: "daily",
+        secondsAllowed: 7200,
+        source: { kind: "user" },
+      },
+      {
+        scope: "activity",
+        targetId: 10,
+        window: "daily",
+        secondsAllowed: 1800,
+        source: { kind: "group", groupId: 3 },
+      },
+    ]);
+
+    render(BudgetsView);
+
+    // The own budget row is marked local…
+    expect(await screen.findByText("Local")).toBeInTheDocument();
+    expect(listResolvedBudgets).toHaveBeenCalledWith(1);
+    // …and the inherited group slot appears as a read-only row with its group.
+    const inheritedBadge = await screen.findByText("Inherited · Kids");
+    expect(inheritedBadge).toBeInTheDocument();
+    const inheritedRow = inheritedBadge.closest("tr");
+    expect(inheritedRow).not.toBeNull();
+    // Inherited rows are read-only here (no Edit/Delete).
+    expect(within(inheritedRow as HTMLElement).queryByRole("button")).toBeNull();
+    expect(within(inheritedRow as HTMLElement).getByText("30m")).toBeInTheDocument();
+  });
+
+  it("renders both rows when two group budgets share one slot (no key collision)", async () => {
+    listUserGroups.mockResolvedValue([
+      { id: 3, name: "Kids", createdAt: "2026-01-01T00:00:00.000Z" },
+    ] as UserGroupResponse[]);
+    listBudgets.mockResolvedValue([]);
+    // gatherUserBudgets preserves within-group duplicates for the same
+    // (scope, window, target) slot; the view must key them uniquely.
+    listResolvedBudgets.mockResolvedValue([
+      {
+        scope: "activity",
+        targetId: 10,
+        window: "daily",
+        secondsAllowed: 1800,
+        source: { kind: "group", groupId: 3 },
+      },
+      {
+        scope: "activity",
+        targetId: 10,
+        window: "daily",
+        secondsAllowed: 3600,
+        source: { kind: "group", groupId: 3 },
+      },
+    ]);
+
+    render(BudgetsView);
+
+    // Both inherited rows render (30m and 1h), keyed distinctly.
+    expect(await screen.findAllByText("Inherited · Kids")).toHaveLength(2);
+    expect(screen.getByText("30m")).toBeInTheDocument();
+    expect(screen.getByText("1h")).toBeInTheDocument();
+  });
+
+  it("re-checks inheritance for the user after deleting an own budget", async () => {
+    listUserGroups.mockResolvedValue([
+      { id: 3, name: "Kids", createdAt: "2026-01-01T00:00:00.000Z" },
+    ] as UserGroupResponse[]);
+    listBudgets.mockResolvedValue([
+      budget({ id: 100, scope: "overall", targetId: null, secondsAllowed: 7200 }),
+    ]);
+    // Initially the own budget overrides the group's overall slot (only `user`).
+    listResolvedBudgets.mockResolvedValueOnce([
+      {
+        scope: "overall",
+        targetId: null,
+        window: "daily",
+        secondsAllowed: 7200,
+        source: { kind: "user" },
+      },
+    ]);
+    deleteBudget.mockResolvedValue(undefined);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    render(BudgetsView);
+    await screen.findByText("Local");
+    expect(screen.queryByText(/^Inherited/)).not.toBeInTheDocument();
+
+    // After deletion the group's overall slot is no longer overridden, so the
+    // refresh surfaces it as inherited.
+    listResolvedBudgets.mockResolvedValueOnce([
+      {
+        scope: "overall",
+        targetId: null,
+        window: "daily",
+        secondsAllowed: 7200,
+        source: { kind: "group", groupId: 3 },
+      },
+    ]);
+    await fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    await waitFor(() => expect(deleteBudget).toHaveBeenCalledWith(100));
+    expect(await screen.findByText("Inherited · Kids")).toBeInTheDocument();
   });
 });

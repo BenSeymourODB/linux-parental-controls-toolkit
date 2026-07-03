@@ -23,6 +23,7 @@ describe("loadSettings", () => {
     expect(settings.sshPrivateKeyPath).toBe("/data/secrets/ssh/id_ed25519");
     expect(settings.adguard).toEqual({ mode: "disabled" });
     expect(settings.telemetry).toEqual({ pullCron: "*/5 * * * *", pullConcurrency: 4 });
+    expect(settings.enforcement).toEqual({ cooldownSeconds: 300, initialLookbackSeconds: 900 });
     expect(settings.retention).toEqual({ defaultDays: 365 });
     expect(settings.reapply).toEqual({ cron: "0 * * * *", playbooks: [] });
     expect(settings.clientHealth).toEqual({ probeConcurrency: 4, probeDeadlineMs: 15000 });
@@ -329,6 +330,33 @@ describe("loadSettings", () => {
       expect(() => loadSettings({ PCT_TELEMETRY_PULL_CONCURRENCY: "0" })).toThrow(SettingsError);
       expect(() => loadSettings({ PCT_TELEMETRY_PULL_CONCURRENCY: "-3" })).toThrow(SettingsError);
       expect(() => loadSettings({ PCT_TELEMETRY_PULL_CONCURRENCY: "many" })).toThrow(SettingsError);
+    });
+  });
+
+  describe("PCT_ENFORCEMENT_*", () => {
+    it("honours explicit cool-down and initial-lookback seconds", () => {
+      const settings = loadSettings({
+        PCT_ENFORCEMENT_COOLDOWN_SECONDS: "120",
+        PCT_ENFORCEMENT_INITIAL_LOOKBACK_SECONDS: "600",
+      });
+      expect(settings.enforcement).toEqual({ cooldownSeconds: 120, initialLookbackSeconds: 600 });
+    });
+
+    it("rejects a non-positive or non-numeric cool-down", () => {
+      expect(() => loadSettings({ PCT_ENFORCEMENT_COOLDOWN_SECONDS: "0" })).toThrow(SettingsError);
+      expect(() => loadSettings({ PCT_ENFORCEMENT_COOLDOWN_SECONDS: "-1" })).toThrow(SettingsError);
+      expect(() => loadSettings({ PCT_ENFORCEMENT_COOLDOWN_SECONDS: "soon" })).toThrow(
+        SettingsError,
+      );
+    });
+
+    it("rejects a non-positive or non-numeric initial lookback", () => {
+      expect(() => loadSettings({ PCT_ENFORCEMENT_INITIAL_LOOKBACK_SECONDS: "0" })).toThrow(
+        SettingsError,
+      );
+      expect(() => loadSettings({ PCT_ENFORCEMENT_INITIAL_LOOKBACK_SECONDS: "nope" })).toThrow(
+        SettingsError,
+      );
     });
   });
 
