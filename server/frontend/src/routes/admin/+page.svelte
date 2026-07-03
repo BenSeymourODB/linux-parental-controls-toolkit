@@ -31,7 +31,9 @@
   import SchedulesView from "$lib/views/SchedulesView.svelte";
   import PolicyPreviewView from "$lib/views/PolicyPreviewView.svelte";
   import GroupSchedulesView from "$lib/views/GroupSchedulesView.svelte";
+  import GroupBudgetsView from "$lib/views/GroupBudgetsView.svelte";
   import ExceptionsView from "$lib/views/ExceptionsView.svelte";
+  import GroupExceptionsView from "$lib/views/GroupExceptionsView.svelte";
   import NotificationsView from "$lib/views/NotificationsView.svelte";
   import LinksView from "$lib/views/LinksView.svelte";
   import IntegrationTokensView from "$lib/views/IntegrationTokensView.svelte";
@@ -105,7 +107,9 @@
     { id: "schedules", label: "Schedules" },
     { id: "policy-preview", label: "Policy preview" },
     { id: "group-schedules", label: "Group Schedules" },
+    { id: "group-budgets", label: "Group Budgets" },
     { id: "exceptions", label: "Exceptions" },
+    { id: "group-exceptions", label: "Group Exceptions" },
     { id: "notifications", label: "Notifications" },
     { id: "integrations", label: "Integrations" },
     { id: "audit", label: "Audit log" },
@@ -218,8 +222,12 @@
       <PolicyPreviewView />
     {:else if activeView === "group-schedules"}
       <GroupSchedulesView />
+    {:else if activeView === "group-budgets"}
+      <GroupBudgetsView />
     {:else if activeView === "exceptions"}
       <ExceptionsView />
+    {:else if activeView === "group-exceptions"}
+      <GroupExceptionsView />
     {:else if activeView === "notifications"}
       <NotificationsView />
     {:else if activeView === "integrations"}
