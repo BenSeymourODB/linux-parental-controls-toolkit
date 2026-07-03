@@ -18,6 +18,7 @@ import type { PolicyPushTransport } from "../../src/transport/policy-push/index.
 import {
   budgets,
   clients,
+  groupBudgets,
   groupSchedules,
   userGroupMemberships,
   userGroups,
@@ -208,11 +209,11 @@ describe("POST /api/users/:userId/policy-preview", () => {
     });
   });
 
-  it("diffs against the user's OWN rules, not inherited group schedules (#182 fidelity)", async () => {
+  it("includes inherited group schedule windows on both sides of the diff (#362)", async () => {
     const userId = await createUser("Alice"); // tz null → UTC
-    // A group deny the user inherits. The live push does NOT send group rules,
-    // so the preview must treat the *current* push as "no schedule" and show the
-    // proposed user rule as a fresh change — not diff against the group window.
+    // A group "bedtime" the child inherits: deny 22:00–24:00 every day. Since the
+    // push now sends inherited group rules (#362), the preview's *current* side
+    // must reflect it — allowed windows are 00:00–22:00, not the full day.
     const group = harness.db
       .insert(userGroups)
       .values({ name: "Kids" })
@@ -222,12 +223,18 @@ describe("POST /api/users/:userId/policy-preview", () => {
     harness.db.insert(userGroupMemberships).values({ userId, groupId: group.id }).run();
     harness.db
       .insert(groupSchedules)
-      .values({ userGroupId: group.id, targetKind: "overall", targetId: null, action: "deny" })
+      .values({
+        userGroupId: group.id,
+        targetKind: "overall",
+        targetId: null,
+        action: "deny",
+        recurrenceStartMinute: 1320, // 22:00
+        recurrenceEndMinute: 1440, // 24:00
+      })
       .run();
 
-    // Proposed: the user's own deny 22:00–24:00 (1320..1440) → allowed windows
-    // become 00:00–22:00. If the preview had diffed against the inherited group
-    // deny (fully denied), the "before" allowed windows would differ.
+    // Proposed: the child's own earlier bedtime deny 20:00–24:00 (1200..1440),
+    // which composes above the inherited group window (own rules win first).
     const res = await auth({
       method: "POST",
       url: `/api/users/${userId}/policy-preview`,
@@ -237,7 +244,7 @@ describe("POST /api/users/:userId/policy-preview", () => {
           proposedSchedule({
             userId,
             action: "deny",
-            recurrenceStartMinute: 1320,
+            recurrenceStartMinute: 1200,
             recurrenceEndMinute: 1440,
           }),
         ],
@@ -246,19 +253,63 @@ describe("POST /api/users/:userId/policy-preview", () => {
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    // The current push has no allowed-hours grid (no own rules → fully allowed
-    // is the resolver's no-schedule shape, which `resolvePolicyPush` renders as
-    // a full-week allow). The proposed deny carves out 22:00–24:00, so each day
-    // changes from full-day to 00:00–22:00.
     const allowedHoursRows = body.changes.filter(
       (c: { field: string }) => c.field === "allowed-hours",
     );
     expect(allowedHoursRows.length).toBeGreaterThan(0);
+    // before reflects the inherited group window (00:00–22:00); after tightens it
+    // to 00:00–20:00 via the proposed own rule — proving the group layer is held
+    // constant on both sides and only the own-rule change is diffed.
     expect(allowedHoursRows[0]).toMatchObject({
       field: "allowed-hours",
-      before: "00:00–24:00",
-      after: "00:00–22:00",
+      before: "00:00–22:00",
+      after: "00:00–20:00",
     });
+  });
+
+  it("uses an inherited group budget as the diff baseline a proposed own budget overrides (#362)", async () => {
+    const userId = await createUser("Alice"); // tz null → UTC
+    const group = harness.db
+      .insert(userGroups)
+      .values({ name: "Kids" })
+      .returning({ id: userGroups.id })
+      .get();
+    if (group === undefined) throw new Error("group insert returned no row");
+    harness.db.insert(userGroupMemberships).values({ userId, groupId: group.id }).run();
+    // The child has no own overall/daily budget — only the inherited group's 2h.
+    harness.db
+      .insert(groupBudgets)
+      .values({
+        userGroupId: group.id,
+        scope: "overall",
+        targetId: null,
+        window: "daily",
+        secondsAllowed: 7200,
+      })
+      .run();
+
+    // Proposed: the child's own 1h overall/daily budget fully replaces the slot.
+    const res = await auth({
+      method: "POST",
+      url: `/api/users/${userId}/policy-preview`,
+      payload: {
+        budgets: [proposedBudget({ userId, secondsAllowed: 3600 })],
+        schedules: [],
+        now: "2026-06-17T12:00:00Z",
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.hasChanges).toBe(true);
+    // before = inherited group 2h (not "none"), after = own 1h override.
+    expect(body.changes).toContainEqual(
+      expect.objectContaining({
+        field: "daily-overall",
+        kind: "changed",
+        before: "2h",
+        after: "1h",
+      }),
+    );
   });
 
   it("lists affected clients with hostname, lastSeen, and pending-queue depth", async () => {

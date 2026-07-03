@@ -9,13 +9,14 @@
  * pushes (`transport/policy-push/diff.ts`), and lists the user's linked clients
  * annotated with their last-seen time and current offline-queue depth.
  *
- * **Faithful to what is actually pushed.** Current policy is read with
- * `listUserSchedules` + `listUserBudgets` — the user's **own** rules, exactly
- * what the live executor (`transport/policy-push/executor.ts`) resolves and
- * pushes. It deliberately does *not* use the group-merged `gatherUserScheduleRules`
- * that the read-only `effective.ts` preview uses: group schedules are not pushed
- * over `timekpra` yet, so diffing against them would show windows the push never
- * sends.
+ * **Faithful to what is actually pushed.** Current policy is read with the
+ * group-aware `gatherUserScheduleRules` + `gatherUserBudgets` — exactly what the
+ * live executor (`transport/policy-push/executor.ts`) now resolves and pushes
+ * since group rules reach `timekpra` (#362). The *proposed* side merges the
+ * request body's own rules with the same persisted group layer
+ * (`mergeScheduleRulesWithGroups` / `mergeBudgetsWithGroups`): the admin editor
+ * only edits the user's own rules, so an accurate preview holds the group layer
+ * constant on both sides and diffs only the own-rule change the push will re-merge.
  *
  * **Side-effect-free by default.** Preview reads + computes only: no SSH probe,
  * no push, no queue write. The per-client push-vs-queue decision still happens
@@ -41,6 +42,12 @@ import { z } from "zod";
 import type { Settings } from "../../config.js";
 import { resolveEffectiveTz } from "../../policy/budget-window.js";
 import type { PolicyDb } from "../../policy/db.js";
+import {
+  gatherUserBudgets,
+  gatherUserScheduleRules,
+  mergeBudgetsWithGroups,
+  mergeScheduleRulesWithGroups,
+} from "../../policy/group-resolution.js";
 import * as repo from "../../policy/repository.js";
 import type { ClientRow } from "../../policy/repository.js";
 import type { BudgetInput } from "../../policy/resolve.js";
@@ -247,19 +254,25 @@ export function registerPreviewRoutes(
       const tz = resolveEffectiveTz(user.tz, settings.defaultTz);
       const now = request.body.now === undefined ? new Date() : new Date(request.body.now);
 
-      // Current policy mirrors the live executor: the user's OWN schedules +
-      // budgets (group schedules are not pushed over timekpra yet), resolved at
-      // the same reference instant.
+      // Current policy mirrors the live executor: the user's effective rules —
+      // own rules merged with inherited group schedules/budgets (#362), resolved
+      // at the same reference instant.
       const before = resolvePolicyPush({
         tz,
-        schedules: repo.listUserSchedules(scope.db, userId),
-        budgets: repo.listUserBudgets(scope.db, userId),
+        schedules: gatherUserScheduleRules(scope.db, userId),
+        budgets: gatherUserBudgets(scope.db, userId),
         now,
       });
+      // The proposed side merges the edited OWN rules with the same persisted
+      // group layer, so the diff isolates the own-rule change the push re-merges.
       const after = resolvePolicyPush({
         tz,
-        schedules: request.body.schedules.map(toScheduleRule),
-        budgets: request.body.budgets.map(toBudgetInput),
+        schedules: mergeScheduleRulesWithGroups(
+          scope.db,
+          userId,
+          request.body.schedules.map(toScheduleRule),
+        ),
+        budgets: mergeBudgetsWithGroups(scope.db, userId, request.body.budgets.map(toBudgetInput)),
         now,
       });
 
