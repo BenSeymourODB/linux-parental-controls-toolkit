@@ -40,3 +40,8 @@ export {
   type HealthProbeTransport,
   type SshClientProberOptions,
 } from "./prober.js";
+
+// The reachability-failure taxonomy (#353) lives with the SSH error it
+// annotates; re-exported here so the health DTO derives its enum from a single
+// source, the same discipline as the component / reachability enums above.
+export { sshUnreachableReasonValues, type SshUnreachableReason } from "../ssh/errors.js";

@@ -330,6 +330,32 @@
     return reachability === "offline" ? "warn" : "unknown";
   }
 
+  /**
+   * A one-line remediation hint for a classified SSH failure cause (#353) — the
+   * four+ root causes "host unreachable" used to collapse each want a different
+   * fix. `null` for `unknown` (nothing actionable to suggest beyond the detail).
+   */
+  const REACHABILITY_HINTS: Record<
+    NonNullable<ClientHealthResponse["reachabilityReason"]>,
+    string | null
+  > = {
+    dns: "The dashboard can't resolve this hostname — fix container DNS or enrol the client by IP.",
+    connection_refused:
+      "No SSH server is answering — re-run the installer on the client (`--skip-enrol`).",
+    timeout: "The host didn't answer — a firewall is blocking SSH, or the address is stale.",
+    auth: "The dashboard's SSH key isn't authorized on the client — re-enrol it.",
+    handshake: "The SSH handshake failed — an SSH version or configuration mismatch on the client.",
+    unknown: null,
+  };
+
+  /** The remediation hint to show for an offline client, or null when none applies. */
+  function reachabilityHint(health: ClientHealthResponse | null): string | null {
+    if (health === null || health.reachability !== "offline" || health.reachabilityReason === null) {
+      return null;
+    }
+    return REACHABILITY_HINTS[health.reachabilityReason];
+  }
+
   function componentClass(status: ComponentHealthDto["status"]): string {
     if (status === "ok") {
       return "ok";
@@ -374,6 +400,7 @@
         {@const client = entry.client}
         {@const h = entry.health}
         {@const vsm = versionStatusMeta(h?.versionStatus)}
+        {@const reachHint = reachabilityHint(h)}
         <article class="card">
           <div class="card-top">
             <div>
@@ -399,12 +426,19 @@
               </div>
             </div>
             <div class="status-pills">
-              <span class="pill {reachabilityClass(h?.reachability ?? 'unknown')}">
+              <span
+                class="pill {reachabilityClass(h?.reachability ?? 'unknown')}"
+                title={h?.reachabilityReason ? `SSH failure: ${h.reachabilityReason}` : undefined}
+              >
                 {h?.reachability ?? "unknown"}
               </span>
               <span class="pill {vsm.cls}" title={vsm.title}>{vsm.label}</span>
             </div>
           </div>
+
+          {#if reachHint !== null}
+            <p class="reach-hint" role="status">{reachHint}</p>
+          {/if}
 
           <dl class="kv">
             <div>
@@ -879,5 +913,14 @@
     background: #fffbeb;
     color: #92400e;
     font-size: 0.85rem;
+  }
+  .reach-hint {
+    margin: 0;
+    padding: 0.4rem 0.55rem;
+    border-radius: 0.4rem;
+    background: #fffbeb;
+    color: #92400e;
+    font-size: 0.8rem;
+    line-height: 1.35;
   }
 </style>

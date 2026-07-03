@@ -20,7 +20,12 @@
 import type { ClientRow } from "../../policy/repository.js";
 import { ActivityWatchClient } from "../activitywatch/client.js";
 import type { AwServerInfo } from "../activitywatch/schemas.js";
-import { SshError } from "../ssh/errors.js";
+import {
+  SshError,
+  SshExecTimeoutError,
+  SshUnreachableError,
+  type SshUnreachableReason,
+} from "../ssh/errors.js";
 import {
   targetFromClient,
   type ExecOptions,
@@ -62,6 +67,12 @@ export interface ClientProbeResult {
   /** When the probe ran (drives the `last_seen` bump on a reachable client). */
   readonly at: Date;
   readonly components: readonly ComponentHealthResult[];
+  /**
+   * When `reachability === "offline"`, the classified SSH failure cause (#353)
+   * so the admin sees DNS vs refused vs timeout vs auth rather than one
+   * catch-all string. `null` when the client is online or was never probed.
+   */
+  readonly reachabilityReason: SshUnreachableReason | null;
 }
 
 /**
@@ -70,7 +81,14 @@ export interface ClientProbeResult {
  * be supplied (or withheld, pre-#39) at bootstrap.
  */
 export interface ClientProber {
-  probe(client: Pick<ClientRow, "hostname" | "sshUser">): Promise<ClientProbeResult>;
+  /**
+   * `id` is optional so a caller can probe by address alone, but when supplied
+   * it is included in the per-failure log line (#353) — the health service
+   * passes the full client row so `clientId` is logged in production.
+   */
+  probe(
+    client: Pick<ClientRow, "hostname" | "sshUser"> & { readonly id?: number },
+  ): Promise<ClientProbeResult>;
 }
 
 /**
@@ -94,6 +112,15 @@ export interface HealthProbeTransport {
 /** Reach a tunnelled `aw-server` at `baseUrl` and return its `/api/0/info`. */
 export type ActivityWatchInfoProbe = (baseUrl: string) => Promise<AwServerInfo>;
 
+/**
+ * The slice of a structured logger the prober uses: a single `warn` per failed
+ * probe. Structural (not `pino`/Fastify-typed) so any compatible logger — or a
+ * test spy — satisfies it without an import or an `as` cast.
+ */
+export interface ProbeLogger {
+  warn(obj: Record<string, unknown>, msg?: string): void;
+}
+
 /** Construction options for {@link SshClientProber}. */
 export interface SshClientProberOptions {
   /** Per-exec overrides (e.g. a tighter `timeoutMs`) forwarded to the transport. */
@@ -106,6 +133,12 @@ export interface SshClientProberOptions {
    * tests exercise the verdict mapping without a live `fetch`.
    */
   readonly probeActivityWatch?: ActivityWatchInfoProbe;
+  /**
+   * Optional structured logger. When set, one `warn` is emitted per failed probe
+   * with `{ clientId?, host, reason, cause }` (#353) so an unreachable client's
+   * root cause is captured in the server logs, not just the health card.
+   */
+  readonly log?: ProbeLogger;
 }
 
 /** Every component reported `unknown` with one shared detail (used when offline). */
@@ -118,6 +151,43 @@ function allUnknown(detail: string): ComponentHealthResult[] {
 }
 
 /**
+ * The human message behind a thrown error, for a probe-failure detail/log line.
+ * For an {@link SshUnreachableError} that carries a `cause` we surface the
+ * underlying `ssh2`/socket message (the discriminating text); with no cause
+ * there is nothing more informative than the reason itself, so this is empty.
+ */
+function causeText(error: unknown): string {
+  if (error instanceof SshUnreachableError) {
+    if (error.cause === undefined || error.cause === null) return "";
+    return error.cause instanceof Error ? error.cause.message : String(error.cause);
+  }
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Classify a probe failure into its reason + a human detail (#353). An
+ * {@link SshUnreachableError} carries its own classified {@link SshUnreachableError.reason};
+ * an {@link SshExecTimeoutError} (the box answered but a probe command hung) is a
+ * `timeout`; any other {@link SshError} that surfaced here degrades to `unknown`.
+ */
+function describeProbeFailure(error: SshError): {
+  reason: SshUnreachableReason;
+  detail: string;
+  cause: string;
+} {
+  const reason: SshUnreachableReason =
+    error instanceof SshUnreachableError
+      ? error.reason
+      : error instanceof SshExecTimeoutError
+        ? "timeout"
+        : "unknown";
+  const cause = causeText(error);
+  const detail =
+    cause === "" ? `host unreachable (${reason})` : `host unreachable (${reason}: ${cause})`;
+  return { reason, detail, cause };
+}
+
+/**
  * Probes enrolled clients over the SSH facade. One instance is shared across
  * the dashboard (it reuses the transport's connection pool).
  */
@@ -127,11 +197,13 @@ export class SshClientProber implements ClientProber {
   readonly #execOptions: ExecOptions | undefined;
   readonly #now: () => Date;
   readonly #probeActivityWatch: ActivityWatchInfoProbe;
+  readonly #log: ProbeLogger | undefined;
 
   /**
    * @param transport the SSH transport (or a structural stand-in) to probe over.
    * @param credentials the dashboard's SSH key material (from #39's bootstrap).
-   * @param options per-exec overrides, an injectable clock, and the AW probe.
+   * @param options per-exec overrides, an injectable clock, the AW probe, and an
+   *   optional logger.
    */
   constructor(
     transport: HealthProbeTransport,
@@ -156,9 +228,12 @@ export class SshClientProber implements ClientProber {
           baseUrl,
           ...(awTimeoutMs !== undefined && awTimeoutMs > 0 ? { timeoutMs: awTimeoutMs } : {}),
         }).getInfo());
+    this.#log = options.log;
   }
 
-  async probe(client: Pick<ClientRow, "hostname" | "sshUser">): Promise<ClientProbeResult> {
+  async probe(
+    client: Pick<ClientRow, "hostname" | "sshUser"> & { readonly id?: number },
+  ): Promise<ClientProbeResult> {
     const target = targetFromClient(client, this.#credentials);
     const at = this.#now();
     const components: ComponentHealthResult[] = [];
@@ -191,13 +266,29 @@ export class SshClientProber implements ClientProber {
         // (An `aw-server`-level failure over a *working* tunnel never reaches
         // here — it is classified `unhealthy` in `#probeAwComponent`.)
         if (error instanceof SshError) {
-          return { reachability: "offline", at, components: allUnknown("host unreachable") };
+          const { reason, detail, cause } = describeProbeFailure(error);
+          this.#log?.warn(
+            {
+              ...(client.id === undefined ? {} : { clientId: client.id }),
+              host: target.host,
+              port: target.port ?? 22,
+              reason,
+              ...(cause === "" ? {} : { cause }),
+            },
+            "client health probe failed",
+          );
+          return {
+            reachability: "offline",
+            at,
+            components: allUnknown(detail),
+            reachabilityReason: reason,
+          };
         }
         throw error;
       }
     }
 
-    return { reachability: "online", at, components };
+    return { reachability: "online", at, components, reachabilityReason: null };
   }
 
   /**
