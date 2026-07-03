@@ -81,7 +81,14 @@ export interface ClientProbeResult {
  * be supplied (or withheld, pre-#39) at bootstrap.
  */
 export interface ClientProber {
-  probe(client: Pick<ClientRow, "hostname" | "sshUser">): Promise<ClientProbeResult>;
+  /**
+   * `id` is optional so a caller can probe by address alone, but when supplied
+   * it is included in the per-failure log line (#353) — the health service
+   * passes the full client row so `clientId` is logged in production.
+   */
+  probe(
+    client: Pick<ClientRow, "hostname" | "sshUser"> & { readonly id?: number },
+  ): Promise<ClientProbeResult>;
 }
 
 /**
@@ -166,6 +173,7 @@ function causeText(error: unknown): string {
 function describeProbeFailure(error: SshError): {
   reason: SshUnreachableReason;
   detail: string;
+  cause: string;
 } {
   const reason: SshUnreachableReason =
     error instanceof SshUnreachableError
@@ -173,10 +181,10 @@ function describeProbeFailure(error: SshError): {
       : error instanceof SshExecTimeoutError
         ? "timeout"
         : "unknown";
-  const text = causeText(error);
+  const cause = causeText(error);
   const detail =
-    text === "" ? `host unreachable (${reason})` : `host unreachable (${reason}: ${text})`;
-  return { reason, detail };
+    cause === "" ? `host unreachable (${reason})` : `host unreachable (${reason}: ${cause})`;
+  return { reason, detail, cause };
 }
 
 /**
@@ -258,14 +266,14 @@ export class SshClientProber implements ClientProber {
         // (An `aw-server`-level failure over a *working* tunnel never reaches
         // here — it is classified `unhealthy` in `#probeAwComponent`.)
         if (error instanceof SshError) {
-          const { reason, detail } = describeProbeFailure(error);
+          const { reason, detail, cause } = describeProbeFailure(error);
           this.#log?.warn(
             {
               ...(client.id === undefined ? {} : { clientId: client.id }),
               host: target.host,
               port: target.port ?? 22,
               reason,
-              cause: causeText(error),
+              ...(cause === "" ? {} : { cause }),
             },
             "client health probe failed",
           );

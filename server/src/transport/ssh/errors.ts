@@ -115,11 +115,16 @@ export function classifySshUnreachableReason(cause: unknown): SshUnreachableReas
   const sig = errorSignature(cause);
   if (/enotfound|eai_again|getaddrinfo/.test(sig)) return "dns";
   if (/econnrefused/.test(sig)) return "connection_refused";
-  if (/etimedout|client-timeout|timed out/.test(sig)) return "timeout";
+  // `EHOSTUNREACH`/`ENETUNREACH` (no route to host / network down) are the same
+  // "the box didn't answer" class as a connect timeout for the admin's purposes.
+  if (/etimedout|ehostunreach|enetunreach|client-timeout|timed out/.test(sig)) return "timeout";
   if (/client-authentication|authentication methods failed|authentication failed/.test(sig)) {
     return "auth";
   }
-  if (/handshake|key exchange|\bkex\b|protocol/.test(sig)) return "handshake";
+  // Match ssh2's handshake/protocol phrasing. `kex` alone is too short a token to
+  // match against free-text (it can appear inside a hostname), so require the
+  // fuller "key exchange".
+  if (/handshake|key exchange|protocol/.test(sig)) return "handshake";
   return "unknown";
 }
 

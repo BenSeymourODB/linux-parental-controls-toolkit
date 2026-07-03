@@ -63,6 +63,26 @@ describe("classifySshUnreachableReason", () => {
     expect(classifySshUnreachableReason(err)).toBe("timeout");
   });
 
+  it("classifies no-route / network-unreachable as timeout", () => {
+    expect(
+      classifySshUnreachableReason(
+        ssh2Error({ message: "connect EHOSTUNREACH 10.0.0.4:22", code: "EHOSTUNREACH" }),
+      ),
+    ).toBe("timeout");
+    expect(
+      classifySshUnreachableReason(
+        ssh2Error({ message: "connect ENETUNREACH", code: "ENETUNREACH" }),
+      ),
+    ).toBe("timeout");
+  });
+
+  it("does not misclassify a hostname containing 'kex' as a handshake failure", () => {
+    // Only the message carries "kex" (as part of the host); no handshake signal.
+    expect(
+      classifySshUnreachableReason(ssh2Error({ message: "connect to kex-gateway failed" })),
+    ).toBe("unknown");
+  });
+
   it("classifies ssh2's handshake-wait timeout as timeout, not handshake", () => {
     // ssh2's readyTimeout path reads "Timed out while waiting for handshake" —
     // the word "handshake" appears but the cause is a timeout.
