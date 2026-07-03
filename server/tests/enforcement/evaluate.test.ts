@@ -8,6 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { evaluateUserEnforcement } from "../../src/enforcement/evaluate.js";
+import { addUserToGroup, createGroupBudget, createUserGroup } from "../../src/policy/repository.js";
 import {
   activities,
   activitiesToGroups,
@@ -257,6 +258,65 @@ describe("evaluateUserEnforcement", () => {
       `activity:${codeId}`,
       `group:${groupId}`,
     ]);
+  });
+
+  it("fires on a group-inherited per-activity budget the user has not overridden (#362)", () => {
+    const group = createUserGroup(db, { name: "Kids" });
+    addUserToGroup(db, group.id, userId);
+    // The activity budget lives on the group only — the user has none of their own.
+    createGroupBudget(db, {
+      userGroupId: group.id,
+      scope: "activity",
+      targetId: firefoxId,
+      window: "daily",
+      secondsAllowed: 1800,
+    });
+    seedFirefoxUsage("2024-02-15T10:00:00.000Z", "2024-02-15T11:00:00.000Z"); // 3600s > 1800
+
+    const out = evaluateUserEnforcement(
+      db,
+      { userId, now: NOW, tz: "UTC", cooldownSeconds: 300 },
+      new Map(),
+    );
+
+    expect(out.decisions).toHaveLength(1);
+    expect(out.decisions[0]).toMatchObject({
+      scope: "activity",
+      targetId: firefoxId,
+      allowedSeconds: 1800,
+      consumedSeconds: 3600,
+    });
+  });
+
+  it("lets the user's own activity budget override the inherited group budget in enforcement (#362)", () => {
+    const group = createUserGroup(db, { name: "Kids" });
+    addUserToGroup(db, group.id, userId);
+    // The group would fire at 3600 used, but the user's own higher budget wins the slot.
+    createGroupBudget(db, {
+      userGroupId: group.id,
+      scope: "activity",
+      targetId: firefoxId,
+      window: "daily",
+      secondsAllowed: 600,
+    });
+    db.insert(budgets)
+      .values({
+        userId,
+        scope: "activity",
+        targetId: firefoxId,
+        window: "daily",
+        secondsAllowed: 7200,
+      })
+      .run();
+    seedFirefoxUsage("2024-02-15T10:00:00.000Z", "2024-02-15T11:00:00.000Z"); // 3600s < 7200
+
+    const out = evaluateUserEnforcement(
+      db,
+      { userId, now: NOW, tz: "UTC", cooldownSeconds: 300 },
+      new Map(),
+    );
+    // Own budget fully replaces the group's for the slot → under budget → no fire.
+    expect(out.decisions).toHaveLength(0);
   });
 
   it("threads cool-down state through so a recent fire is suppressed", () => {
