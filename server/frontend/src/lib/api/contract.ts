@@ -117,4 +117,5 @@ export type { ErrorEnvelope, ErrorDetail } from "../../../../src/api/errors.js";
 export type {
   AnsibleVenvStatusResponse,
   AdGuardManagedStatusResponse,
+  QueueSummaryResponse,
 } from "../../../../src/api/system/dtos.js";

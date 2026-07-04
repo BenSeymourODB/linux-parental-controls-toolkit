@@ -24,6 +24,25 @@ export interface PendingCount {
 }
 
 /**
+ * Fleet-wide rollup of the queue's state (#322): outstanding vs dead-lettered
+ * counts, and the age anchor of the oldest still-`pending` action. Feeds the
+ * admin Dashboard's at-a-glance queue widget so a push stuck across the fleet is
+ * visible without opening each client row.
+ */
+export interface QueueSummary {
+  /** Total `pending` (awaiting a reachable client) actions across all clients. */
+  readonly pending: number;
+  /** Total dead-lettered `failed` actions across all clients. */
+  readonly failed: number;
+  /**
+   * `enqueued_at` of the oldest still-`pending` action, or `null` when nothing
+   * is pending — lets the UI distinguish a fresh backlog from a stuck one. A
+   * dead-lettered (`failed`) row never sets this; only outstanding work does.
+   */
+  readonly oldestPendingAt: Date | null;
+}
+
+/**
  * Enqueue an action, coalescing onto any existing row for the same
  * `(clientId, coalesceKey)`: the newer `kind`/`payload` wins and the row is
  * reset to `pending` with `attempts` cleared, so a fresh desired state isn't
@@ -126,6 +145,36 @@ export function countPendingByClient(db: PolicyDb): PendingCount[] {
     .groupBy(transportQueue.clientId)
     .orderBy(asc(transportQueue.clientId))
     .all();
+}
+
+/**
+ * Fleet-wide queue summary (#322): total `pending` + `failed` counts and the
+ * `enqueued_at` of the oldest still-`pending` action. A cheap two-read
+ * aggregation — a grouped `COUNT(*)` by `status` plus one ordered lookup for
+ * the oldest pending row (Drizzle returns the timestamp column as a `Date`, so
+ * no raw epoch handling). The status domain is just two values, so the counts
+ * scan is trivial at household-fleet scale. `oldestPendingAt` is `null` when
+ * nothing is pending.
+ */
+export function queueSummary(db: PolicyDb): QueueSummary {
+  const counts = db
+    .select({ status: transportQueue.status, count: sql<number>`count(*)` })
+    .from(transportQueue)
+    .groupBy(transportQueue.status)
+    .all();
+
+  const pending = counts.find((row) => row.status === "pending")?.count ?? 0;
+  const failed = counts.find((row) => row.status === "failed")?.count ?? 0;
+
+  const oldest = db
+    .select({ enqueuedAt: transportQueue.enqueuedAt })
+    .from(transportQueue)
+    .where(eq(transportQueue.status, "pending"))
+    .orderBy(asc(transportQueue.enqueuedAt), asc(transportQueue.id))
+    .limit(1)
+    .get();
+
+  return { pending, failed, oldestPendingAt: oldest?.enqueuedAt ?? null };
 }
 
 /**

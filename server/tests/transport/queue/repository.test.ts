@@ -133,4 +133,51 @@ describe("offline-queue repository", () => {
     expect(queue.listForClient(db, clientId)).toHaveLength(0);
     expect(queue.markDrained(db, row.id)).toBe(false);
   });
+
+  describe("queueSummary (#322)", () => {
+    it("is empty when the queue has no rows", () => {
+      expect(queue.queueSummary(db)).toEqual({ pending: 0, failed: 0, oldestPendingAt: null });
+    });
+
+    it("counts pending and failed across all clients", () => {
+      queue.enqueue(db, action({ clientId, coalesceKey: "user:1" }));
+      queue.enqueue(db, action({ clientId, coalesceKey: "user:2" }));
+      queue.enqueue(db, action({ clientId: otherClientId, coalesceKey: "user:3" }));
+      const doomed = queue.enqueue(db, action({ clientId: otherClientId, coalesceKey: "user:4" }));
+      queue.markFailed(db, doomed.id, "exit code 1");
+
+      const summary = queue.queueSummary(db);
+      expect(summary.pending).toBe(3);
+      expect(summary.failed).toBe(1);
+    });
+
+    it("anchors oldestPendingAt to the earliest pending row", () => {
+      const first = queue.enqueue(db, action({ clientId, coalesceKey: "user:1" }));
+      queue.enqueue(db, action({ clientId, coalesceKey: "user:2" }));
+
+      const summary = queue.queueSummary(db);
+      expect(summary.oldestPendingAt).toBeInstanceOf(Date);
+      expect(summary.oldestPendingAt?.getTime()).toBe(first.enqueuedAt.getTime());
+    });
+
+    it("ignores failed rows when anchoring oldestPendingAt", () => {
+      // The first (oldest) row is dead-lettered; the later pending row must win.
+      const doomed = queue.enqueue(db, action({ clientId, coalesceKey: "user:1" }));
+      queue.markFailed(db, doomed.id, "exit code 1");
+      const pending = queue.enqueue(db, action({ clientId, coalesceKey: "user:2" }));
+
+      const summary = queue.queueSummary(db);
+      expect(summary.pending).toBe(1);
+      expect(summary.failed).toBe(1);
+      expect(summary.oldestPendingAt?.getTime()).toBe(pending.enqueuedAt.getTime());
+    });
+
+    it("reports oldestPendingAt null when only failed rows remain", () => {
+      const doomed = queue.enqueue(db, action({ clientId }));
+      queue.markFailed(db, doomed.id, "exit code 1");
+
+      const summary = queue.queueSummary(db);
+      expect(summary).toEqual({ pending: 0, failed: 1, oldestPendingAt: null });
+    });
+  });
 });
