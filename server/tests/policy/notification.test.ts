@@ -14,9 +14,17 @@ import {
   budgetCadenceOverrideSchema,
   cadenceOverridesSchema,
   CADENCE_OVERRIDE_KEYS_MAX,
+  DEFAULT_WARNING_MINUTES,
   WARNING_MINUTE_MAX,
   WARNING_MINUTES_MAX_COUNT,
 } from "../../src/policy/notification.js";
+
+describe("DEFAULT_WARNING_MINUTES", () => {
+  it("matches the documented built-in low-threshold set, descending", () => {
+    // `docs/client-notifications.md` -> "Notification cadence — exact rules".
+    expect([...DEFAULT_WARNING_MINUTES]).toEqual([15, 10, 5, 4, 3, 2, 1]);
+  });
+});
 
 describe("budgetCadenceKey", () => {
   it("renders 'overall' with no target id, '<scope>:<id>' otherwise", () => {

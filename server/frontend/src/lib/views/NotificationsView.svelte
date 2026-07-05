@@ -193,6 +193,11 @@
       .filter((p) => p.length > 0);
     const nums: number[] = [];
     for (const part of parts) {
+      // Plain base-10 digits only — reject hex/scientific/whitespace forms that
+      // `Number()` would otherwise silently accept.
+      if (!/^[0-9]+$/.test(part)) {
+        return null;
+      }
       const n = Number(part);
       if (!Number.isInteger(n) || n < WARNING_MINUTE_MIN || n > WARNING_MINUTE_MAX) {
         return null;
@@ -502,9 +507,8 @@
                   {#if row.scope !== "overall"}
                     <input
                       class="target-id"
-                      type="number"
-                      min="1"
-                      step="1"
+                      type="text"
+                      inputmode="numeric"
                       placeholder="ID"
                       bind:value={row.targetId}
                       aria-label="Target ID"

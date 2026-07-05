@@ -247,6 +247,27 @@ describe("NotificationsView", () => {
     expect(upsertNotificationPolicy).not.toHaveBeenCalled();
   });
 
+  it("blocks saving two overrides for the same budget", async () => {
+    getNotificationPolicy.mockResolvedValue(
+      policy({
+        cadenceOverrides: {
+          "activity:1": { warningMinutes: [10] },
+          "activity:2": { warningMinutes: [5] },
+        },
+      }),
+    );
+
+    render(NotificationsView);
+    await selectUser();
+
+    // Point the second row at the same budget as the first.
+    const ids = await screen.findAllByLabelText("Target ID");
+    await fireEvent.input(ids[1] as HTMLInputElement, { target: { value: "1" } });
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Duplicate override");
+    expect(screen.getByRole("button", { name: "Save cadence" })).toBeDisabled();
+  });
+
   it("blocks saving an activity override with no id", async () => {
     render(NotificationsView);
     await selectUser();
