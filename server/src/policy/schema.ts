@@ -49,6 +49,7 @@ import {
   DEFAULT_SOUND_PROFILE,
   GRACE_SECONDS_MAX,
   GRACE_SECONDS_MIN,
+  type CadenceOverrides,
 } from "./notification.js";
 import {
   MINUTE_OF_DAY_MAX,
@@ -743,8 +744,9 @@ export const adminCredentials = sqliteTable(
  * - `sound_profile` — `off` / `subtle` / `prominent` ({@link soundProfileValues}),
  *   default `subtle`; a `CHECK` pins it to the enum the DTO validates against.
  * - `grace_seconds` — 0–60, default 15 (0 disables the grace countdown).
- * - `cadence_overrides_json` — optional JSON blob of warning-cadence overrides;
- *   NULL means "use the built-in 15/5/1-minute cadence".
+ * - `cadence_overrides_json` — optional JSON map of per-budget warning-cadence
+ *   overrides ({@link ./notification.ts} `cadenceOverridesSchema`, #302); NULL
+ *   means "use the built-in 15/5/1-minute cadence".
  */
 export const notificationPolicies = sqliteTable(
   "notification_policies",
@@ -759,9 +761,9 @@ export const notificationPolicies = sqliteTable(
       .notNull()
       .default(DEFAULT_SOUND_PROFILE),
     graceSeconds: integer("grace_seconds").notNull().default(DEFAULT_GRACE_SECONDS),
-    cadenceOverridesJson: text("cadence_overrides_json", { mode: "json" }).$type<
-      Record<string, unknown>
-    >(),
+    cadenceOverridesJson: text("cadence_overrides_json", {
+      mode: "json",
+    }).$type<CadenceOverrides>(),
   },
   (table) => [
     check(

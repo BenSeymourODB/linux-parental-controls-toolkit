@@ -30,6 +30,7 @@ import {
   type MatchType,
 } from "../../policy/enums.js";
 import {
+  cadenceOverridesSchema,
   defaultNotificationPolicy,
   notificationGraceSecondsSchema,
 } from "../../policy/notification.js";
@@ -607,11 +608,11 @@ export function toExceptionResponse(row: ExceptionRow): ExceptionResponse {
  * single source (`policy/notification.ts`, `policy/enums.ts`) so the wire
  * contract, the storage `CHECK`, and the synthesized defaults can't drift.
  *
- * `cadenceOverrides` is an optional object of per-budget warning-cadence
- * overrides (the override grammar itself is the agent's concern, #103); `null`
- * means "use the built-in 15/5/1-minute cadence".
+ * `cadenceOverrides` is an optional map of per-budget warning-cadence overrides
+ * (grammar pinned in `policy/notification.ts`, #302 — the single source the
+ * storage `$type` and this DTO both read); `null` means "use the built-in
+ * 15/5/1-minute cadence".
  */
-const cadenceOverridesSchema = z.record(z.string(), z.unknown());
 
 /**
  * Notification-policy upsert body (`PUT`). Every field is optional: an omitted

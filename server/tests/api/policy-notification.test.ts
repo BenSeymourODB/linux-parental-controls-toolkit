@@ -103,7 +103,10 @@ describe("notification-policy routes (#104)", () => {
     await auth({
       method: "PUT",
       url: `/api/users/${userId}/notification-policy`,
-      payload: { soundProfile: "off", cadenceOverrides: { homework: { suppressSub5: true } } },
+      payload: {
+        soundProfile: "off",
+        cadenceOverrides: { "activity:1": { warningMinutes: [15, 10, 5] } },
+      },
     });
     const second = await auth({
       method: "PUT",
@@ -115,8 +118,55 @@ describe("notification-policy routes (#104)", () => {
       enabled: true,
       soundProfile: "off",
       graceSeconds: 45,
-      cadenceOverrides: { homework: { suppressSub5: true } },
+      cadenceOverrides: { "activity:1": { warningMinutes: [15, 10, 5] } },
     });
+  });
+
+  it("pins the cadence-override grammar and normalises warn-at marks (#302)", async () => {
+    const userId = await makeUser();
+    // Duplicate + out-of-order marks are de-duplicated and sorted descending;
+    // keys span overall / activity / group.
+    const put = await auth({
+      method: "PUT",
+      url: `/api/users/${userId}/notification-policy`,
+      payload: {
+        cadenceOverrides: {
+          overall: { warningMinutes: [5, 10, 10, 15] },
+          "group:2": { warningMinutes: [] },
+        },
+      },
+    });
+    expect(put.statusCode).toBe(200);
+    expect(put.json().cadenceOverrides).toEqual({
+      overall: { warningMinutes: [15, 10, 5] },
+      "group:2": { warningMinutes: [] },
+    });
+  });
+
+  it("rejects a malformed cadence override (bad key, bad mark, extra field)", async () => {
+    const userId = await makeUser();
+    const badKey = await auth({
+      method: "PUT",
+      url: `/api/users/${userId}/notification-policy`,
+      payload: { cadenceOverrides: { homework: { warningMinutes: [5] } } },
+    });
+    expect(badKey.statusCode).toBe(400);
+
+    const badMark = await auth({
+      method: "PUT",
+      url: `/api/users/${userId}/notification-policy`,
+      payload: { cadenceOverrides: { "activity:1": { warningMinutes: [0] } } },
+    });
+    expect(badMark.statusCode).toBe(400);
+
+    const extraField = await auth({
+      method: "PUT",
+      url: `/api/users/${userId}/notification-policy`,
+      payload: {
+        cadenceOverrides: { "activity:1": { warningMinutes: [5], suppressSub5: true } },
+      },
+    });
+    expect(extraField.statusCode).toBe(400);
   });
 
   it("reverts to defaults on DELETE, then 404s when already at defaults", async () => {
