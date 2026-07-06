@@ -1,6 +1,6 @@
 # ADR 0011 — Server-hosted mirror for upstream (GPL) client packages
 
-- **Status:** Proposed (2026-07-06)
+- **Status:** Accepted (2026-07-06)
 - **Issue:** [#389](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/389)
 - **Phase:** 14 (Fleet updates & lifecycle management, epic [#163](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/163))
 - **Relates to:** ADR issue [#167](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/167)
@@ -73,6 +73,26 @@ Add a **managed mirror mode** for `timekpr-next`, modelled on the AdGuard Home
   dashboard instead of Launchpad.
 - **`external` (optional).** Point clients at an apt repository the homelab
   already hosts.
+
+The **mirrored package/channel is configurable**: managed mode serves either
+the stable `timekpr-next` or a beta variant (e.g. `timekpr-next-beta`) if the
+operator opts into it — chosen on the server, so a client never has to know or
+care which channel it's getting.
+
+### Confirmed direction (2026-07-06, #389)
+
+The maintainer confirmed the two open questions:
+
+- **Ship the MVP first** (mode B below — serve the cached `.deb` over the LAN,
+  advertised at enrol), then graduate to the signed apt repo.
+- **Default to the documented upstream source pointer** for the GPL
+  source-availability obligation (source-package mirroring stays an optional
+  enhancement).
+
+Both are bounded by one **guiding requirement**: clients must be able to get an
+up-to-date `timekpr-next` (or `timekpr-next-beta`) **without any dependence on
+a `launchpad.net` PPA-add at install time** — i.e. Launchpad must not sit on
+the client's critical path. That is the whole point of the mirror.
 
 This keeps the boundary intact by construction:
 
