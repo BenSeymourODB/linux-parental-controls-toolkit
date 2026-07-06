@@ -11,15 +11,21 @@
   until the admin customises it — so this view never shows an empty policy, and
   "Reset to defaults" (DELETE) reverts a user to that baseline.
 
-  Per-budget `cadenceOverrides` are a deliberately loose, unpinned structure;
-  this view surfaces whether a user has any and lets the admin clear them, but a
-  structured cadence editor is a separate piece of work (see the PR for #105).
+  Per-budget `cadenceOverrides` (#302) have a pinned grammar
+  (`server/src/policy/notification.ts`): a map of budget key
+  (`overall` | `activity:<id>` | `group:<id>`) → `{ warningMinutes }`, the
+  "minutes remaining" marks that replace the built-in 15/5/1-minute set for that
+  budget. This view edits them as rows (scope + optional target id + a
+  comma-separated minute list), plus a "Clear all" that reverts to the built-in
+  cadence. Rows carry the budget's numeric id directly; a friendly budget picker
+  sourced from the user's budgets is a follow-up (fits #343's combined editor).
 -->
 <script lang="ts">
   import { onMount } from "svelte";
   import { ApiError } from "$lib/api/client.js";
   import type {
     NotificationPolicyResponse,
+    Scope,
     SoundProfile,
     UserResponse,
   } from "$lib/api/contract.js";
@@ -36,6 +42,20 @@
   // bundle boundary — and kept in step with that source.
   const GRACE_SECONDS_MIN = 0;
   const GRACE_SECONDS_MAX = 60;
+
+  // Per-budget warning-cadence bounds (mirrors `server/src/policy/notification.ts`
+  // #302; hardcoded because the contract is type-only). A cadence override
+  // replaces the built-in 15/5/1-minute warning set for one budget.
+  const WARNING_MINUTE_MIN = 1;
+  const WARNING_MINUTE_MAX = 1440;
+  const WARNING_MINUTES_MAX_COUNT = 32;
+  const CADENCE_OVERRIDE_KEYS_MAX = 64;
+
+  const SCOPE_OPTIONS: ReadonlyArray<{ value: Scope; label: string }> = [
+    { value: "overall", label: "Overall screen time" },
+    { value: "activity", label: "Activity" },
+    { value: "group", label: "Activity group" },
+  ];
 
   const SOUND_PROFILE_OPTIONS: ReadonlyArray<{ value: SoundProfile; label: string }> = [
     { value: "off", label: "Off — no sounds" },
@@ -60,6 +80,20 @@
   let saving = $state(false);
   let resetting = $state(false);
   let clearingCadence = $state(false);
+  let savingCadence = $state(false);
+
+  // One editable per-budget cadence override. `targetId` is unused for the
+  // `overall` scope; `minutes` is a comma-separated list of "minutes remaining"
+  // warn-at marks. `id` is a stable key for the {#each} so removing a middle
+  // row doesn't reshuffle input focus.
+  interface CadenceRow {
+    id: number;
+    scope: Scope;
+    targetId: string;
+    minutes: string;
+  }
+  let cadenceRows = $state<CadenceRow[]>([]);
+  let nextRowId = 0;
 
   onMount(loadUsers);
 
@@ -87,6 +121,7 @@
       formEnabled = loaded.enabled;
       formSoundProfile = loaded.soundProfile;
       formGraceSeconds = loaded.graceSeconds;
+      cadenceRows = rowsFromOverrides(loaded.cadenceOverrides);
     } catch (err) {
       policy = null;
       error = messageOf(err);
@@ -125,6 +160,152 @@
   );
 
   let hasCustomCadence = $derived(policy !== null && policy.cadenceOverrides !== null);
+
+  // --- Per-budget cadence editor (#302) ---
+
+  type CadenceOverrideMap = NonNullable<NotificationPolicyResponse["cadenceOverrides"]>;
+
+  // Hydrate editor rows from the stored map: `overall` → scope with no id,
+  // `<scope>:<id>` → scope + id; warn-at marks join to a comma list.
+  function rowsFromOverrides(
+    overrides: NotificationPolicyResponse["cadenceOverrides"],
+  ): CadenceRow[] {
+    if (overrides === null) {
+      return [];
+    }
+    return Object.entries(overrides).map(([key, override]) => {
+      const minutes = override.warningMinutes.join(", ");
+      if (key === "overall") {
+        return { id: nextRowId++, scope: "overall", targetId: "", minutes };
+      }
+      const [scope, id] = key.split(":");
+      return { id: nextRowId++, scope: scope as Scope, targetId: id ?? "", minutes };
+    });
+  }
+
+  // Parse a comma-separated warn-at list into a normalised (deduped, descending)
+  // minute array, or `null` if any entry is out of bounds / not a whole number /
+  // too many entries — mirroring the server bound so the admin sees the error here.
+  function parseMinutes(raw: string): number[] | null {
+    const parts = raw
+      .split(",")
+      .map((p) => p.trim())
+      .filter((p) => p.length > 0);
+    const nums: number[] = [];
+    for (const part of parts) {
+      // Plain base-10 digits only — reject hex/scientific/whitespace forms that
+      // `Number()` would otherwise silently accept.
+      if (!/^[0-9]+$/.test(part)) {
+        return null;
+      }
+      const n = Number(part);
+      if (!Number.isInteger(n) || n < WARNING_MINUTE_MIN || n > WARNING_MINUTE_MAX) {
+        return null;
+      }
+      nums.push(n);
+    }
+    if (nums.length > WARNING_MINUTES_MAX_COUNT) {
+      return null;
+    }
+    return Array.from(new Set(nums)).sort((a, b) => b - a);
+  }
+
+  // Build the storage key for a row, or `null` when an activity/group row lacks a
+  // positive numeric id.
+  function rowKey(row: CadenceRow): string | null {
+    if (row.scope === "overall") {
+      return "overall";
+    }
+    const id = Number(row.targetId);
+    if (!Number.isInteger(id) || id < 1) {
+      return null;
+    }
+    return `${row.scope}:${id}`;
+  }
+
+  // Assemble the current rows into a cadence-override payload (or `null` to revert
+  // to the built-in cadence when there are no rows), or an error message.
+  function buildCadence():
+    | { ok: true; value: CadenceOverrideMap | null }
+    | { ok: false; message: string } {
+    if (cadenceRows.length === 0) {
+      return { ok: true, value: null };
+    }
+    if (cadenceRows.length > CADENCE_OVERRIDE_KEYS_MAX) {
+      return { ok: false, message: `At most ${CADENCE_OVERRIDE_KEYS_MAX} per-budget overrides.` };
+    }
+    const map: CadenceOverrideMap = {};
+    for (const row of cadenceRows) {
+      const key = rowKey(row);
+      if (key === null) {
+        return { ok: false, message: "Each activity/group override needs a positive numeric ID." };
+      }
+      if (key in map) {
+        return { ok: false, message: `Duplicate override for “${key}”.` };
+      }
+      const minutes = parseMinutes(row.minutes);
+      if (minutes === null) {
+        return {
+          ok: false,
+          message: `Warning minutes must be whole numbers ${WARNING_MINUTE_MIN}–${WARNING_MINUTE_MAX} (max ${WARNING_MINUTES_MAX_COUNT} per budget).`,
+        };
+      }
+      map[key] = { warningMinutes: minutes };
+    }
+    return { ok: true, value: map };
+  }
+
+  // Order-insensitive canonical form for comparing the edited rows against the
+  // loaded policy, so an unchanged cadence doesn't enable Save.
+  function canonCadence(value: CadenceOverrideMap | null): string {
+    if (value === null) {
+      return "null";
+    }
+    return JSON.stringify(
+      Object.keys(value)
+        .sort()
+        .map((k) => [k, value[k]?.warningMinutes ?? []]),
+    );
+  }
+
+  let cadenceResult = $derived(buildCadence());
+  let cadenceError = $derived(cadenceResult.ok ? null : cadenceResult.message);
+  let cadenceDirty = $derived(
+    policy !== null &&
+      cadenceResult.ok &&
+      canonCadence(cadenceResult.value) !== canonCadence(policy.cadenceOverrides),
+  );
+
+  function addCadenceRow(): void {
+    cadenceRows = [...cadenceRows, { id: nextRowId++, scope: "overall", targetId: "", minutes: "" }];
+  }
+
+  function removeCadenceRow(id: number): void {
+    cadenceRows = cadenceRows.filter((row) => row.id !== id);
+  }
+
+  async function handleSaveCadence(): Promise<void> {
+    if (selectedUserId === null) {
+      return;
+    }
+    const built = buildCadence();
+    if (!built.ok) {
+      error = built.message;
+      return;
+    }
+    savingCadence = true;
+    error = null;
+    notice = null;
+    try {
+      policy = await upsertNotificationPolicy(selectedUserId, { cadenceOverrides: built.value });
+      cadenceRows = rowsFromOverrides(policy.cadenceOverrides);
+      notice = `Saved the warning cadence for ${userName(selectedUserId)}.`;
+    } catch (err) {
+      error = messageOf(err);
+    } finally {
+      savingCadence = false;
+    }
+  }
 
   async function handleSave(event: SubmitEvent): Promise<void> {
     event.preventDefault();
@@ -192,6 +373,7 @@
     notice = null;
     try {
       policy = await upsertNotificationPolicy(selectedUserId, { cadenceOverrides: null });
+      cadenceRows = [];
       notice = `Cleared the custom warning cadence for ${userName(selectedUserId)}.`;
     } catch (err) {
       error = messageOf(err);
@@ -288,22 +470,92 @@
         {/if}
 
         <div class="cadence">
-          {#if hasCustomCadence}
+          <div class="cadence-head">
+            <span class="label">Per-budget warning cadence</span>
+            {#if hasCustomCadence}
+              <button
+                type="button"
+                class="ghost small"
+                onclick={handleClearCadence}
+                disabled={clearingCadence || savingCadence}
+              >
+                {clearingCadence ? "Clearing…" : "Clear all"}
+              </button>
+            {/if}
+          </div>
+          <p class="sublabel cadence-hint">
+            Override the built-in 15/5/1-minute warnings for a specific budget.
+            Each row sets the “minutes remaining” marks at which to warn (a
+            comma-separated list, e.g. <code>15, 10, 5</code>); leave the list
+            empty to warn only when time is up. Budgets with no row keep the
+            built-in cadence.
+          </p>
+
+          {#if cadenceRows.length === 0}
             <p class="muted">
-              This user has a custom per-budget warning cadence. Clear it to fall
-              back to the built-in 15/5/1-minute warnings.
+              Using the built-in 15/5/1-minute warning cadence for every budget.
             </p>
+          {:else}
+            <ul class="cadence-rows">
+              {#each cadenceRows as row (row.id)}
+                <li class="cadence-row">
+                  <select bind:value={row.scope} aria-label="Budget scope">
+                    {#each SCOPE_OPTIONS as option (option.value)}
+                      <option value={option.value}>{option.label}</option>
+                    {/each}
+                  </select>
+                  {#if row.scope !== "overall"}
+                    <input
+                      class="target-id"
+                      type="text"
+                      inputmode="numeric"
+                      placeholder="ID"
+                      bind:value={row.targetId}
+                      aria-label="Target ID"
+                    />
+                  {/if}
+                  <input
+                    class="minutes"
+                    type="text"
+                    inputmode="numeric"
+                    placeholder="e.g. 15, 10, 5"
+                    bind:value={row.minutes}
+                    aria-label="Warning minutes"
+                  />
+                  <button
+                    type="button"
+                    class="ghost small"
+                    onclick={() => removeCadenceRow(row.id)}
+                    aria-label="Remove override"
+                  >
+                    Remove
+                  </button>
+                </li>
+              {/each}
+            </ul>
+          {/if}
+
+          {#if cadenceError}
+            <p class="warn" role="alert">{cadenceError}</p>
+          {/if}
+
+          <div class="cadence-actions">
             <button
               type="button"
               class="ghost"
-              onclick={handleClearCadence}
-              disabled={clearingCadence}
+              onclick={addCadenceRow}
+              disabled={cadenceRows.length >= CADENCE_OVERRIDE_KEYS_MAX}
             >
-              {clearingCadence ? "Clearing…" : "Clear custom cadence"}
+              Add override
             </button>
-          {:else}
-            <p class="muted">Using the built-in 15/5/1-minute warning cadence.</p>
-          {/if}
+            <button
+              type="button"
+              onclick={handleSaveCadence}
+              disabled={savingCadence || clearingCadence || !cadenceDirty || cadenceError !== null}
+            >
+              {savingCadence ? "Saving…" : "Save cadence"}
+            </button>
+          </div>
         </div>
 
         <div class="actions">
@@ -400,6 +652,62 @@
   }
   .cadence .muted {
     margin: 0;
+  }
+  .cadence-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+  .cadence-head .label {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #374151;
+  }
+  .cadence-hint {
+    margin: 0;
+  }
+  .cadence-hint code {
+    background: #f3f4f6;
+    padding: 0.05rem 0.3rem;
+    border-radius: 0.25rem;
+    font-size: 0.78rem;
+  }
+  .cadence-rows {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .cadence-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .cadence-row .target-id {
+    width: 5rem;
+  }
+  .cadence-row .minutes {
+    flex: 1 1 10rem;
+    min-width: 8rem;
+  }
+  .cadence-row input[type="text"] {
+    padding: 0.5rem 0.6rem;
+    border: 1px solid #d1d5db;
+    border-radius: 0.4rem;
+    background: #fff;
+    font-size: 0.9rem;
+  }
+  .cadence-actions {
+    display: flex;
+    gap: 0.5rem;
+  }
+  button.small {
+    padding: 0.35rem 0.6rem;
+    font-size: 0.8rem;
   }
   .actions {
     display: flex;

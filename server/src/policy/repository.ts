@@ -29,6 +29,7 @@ import type {
   Scope,
   SoundProfile,
 } from "./enums.js";
+import type { CadenceOverrides } from "./notification.js";
 import type { ResolvedRetention } from "./retention.js";
 import { reorder } from "./schedule-precedence.js";
 import {
@@ -943,7 +944,7 @@ export interface NotificationPolicyUpsert {
   enabled?: boolean | undefined;
   soundProfile?: SoundProfile | undefined;
   graceSeconds?: number | undefined;
-  cadenceOverrides?: Record<string, unknown> | null | undefined;
+  cadenceOverrides?: CadenceOverrides | null | undefined;
 }
 
 /** The persisted notification policy for a user, or `undefined` if unset. */
