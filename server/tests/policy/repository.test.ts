@@ -707,19 +707,21 @@ describe("policy repository — notification policies (#104)", () => {
     repo.upsertNotificationPolicy(db, userId, {
       soundProfile: "prominent",
       graceSeconds: 30,
-      cadenceOverrides: { homework: { suppressSub5: true } },
+      cadenceOverrides: { "activity:1": { warningMinutes: [15, 10, 5] } },
     });
     // A second upsert changes only graceSeconds; the rest stay put.
     const updated = repo.upsertNotificationPolicy(db, userId, { graceSeconds: 0 });
     expect(updated.graceSeconds).toBe(0);
     expect(updated.soundProfile).toBe("prominent");
-    expect(updated.cadenceOverridesJson).toEqual({ homework: { suppressSub5: true } });
+    expect(updated.cadenceOverridesJson).toEqual({ "activity:1": { warningMinutes: [15, 10, 5] } });
     // Still exactly one row for the user.
     expect(repo.getNotificationPolicy(db, userId)).toEqual(updated);
   });
 
   it("clears cadence overrides back to null when passed null", () => {
-    repo.upsertNotificationPolicy(db, userId, { cadenceOverrides: { a: 1 } });
+    repo.upsertNotificationPolicy(db, userId, {
+      cadenceOverrides: { overall: { warningMinutes: [10] } },
+    });
     const cleared = repo.upsertNotificationPolicy(db, userId, { cadenceOverrides: null });
     expect(cleared.cadenceOverridesJson).toBeNull();
   });

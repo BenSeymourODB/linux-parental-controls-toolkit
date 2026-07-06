@@ -3,7 +3,9 @@
  * elsewhere; this suite targets the logic this view adds: pick-a-user →
  * load-and-hydrate the effective policy, the dirty-gating on Save, the
  * grace-bound validation, Save sending the three knobs, Reset → DELETE +
- * reload, and the custom-cadence surface (indicator + clear). The
+ * reload, and the structured per-budget cadence editor (#302): hydrate rows,
+ * add/edit/remove, key + normalise the PUT payload, client-side validation
+ * gating, and Clear all → explicit null. The
  * `$lib/api/notifications` + `$lib/api/users` wrappers are mocked; the real
  * `ApiError` is used so the "already at defaults" 404 path is exercised.
  */
@@ -175,21 +177,137 @@ describe("NotificationsView", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
-  it("surfaces a custom cadence and clears it with an explicit null", async () => {
+  it("hydrates existing per-budget overrides into editable rows", async () => {
     getNotificationPolicy.mockResolvedValue(
-      policy({ cadenceOverrides: { "budget:1": { warnAt: [10] } } }),
+      policy({ cadenceOverrides: { "activity:7": { warningMinutes: [15, 10, 5] } } }),
+    );
+
+    render(NotificationsView);
+    await selectUser();
+
+    // The stored activity override hydrates a row: scope, target id, and marks.
+    const scope = (await screen.findByLabelText("Budget scope")) as HTMLSelectElement;
+    expect(scope.value).toBe("activity");
+    expect((screen.getByLabelText("Target ID") as HTMLInputElement).value).toBe("7");
+    expect((screen.getByLabelText("Warning minutes") as HTMLInputElement).value).toBe("15, 10, 5");
+  });
+
+  it("adds a structured override and PUTs the normalised map", async () => {
+    upsertNotificationPolicy.mockResolvedValue(
+      policy({ cadenceOverrides: { overall: { warningMinutes: [15, 10, 5] } } }),
+    );
+
+    render(NotificationsView);
+    await selectUser();
+
+    // Save is gated until the cadence actually changes.
+    const save = await screen.findByRole("button", { name: "Save cadence" });
+    expect(save).toBeDisabled();
+
+    await fireEvent.click(screen.getByRole("button", { name: "Add override" }));
+    // New rows default to the overall scope (no target-id field).
+    await fireEvent.input(screen.getByLabelText("Warning minutes"), {
+      target: { value: "5, 15, 10, 10" },
+    });
+    expect(save).toBeEnabled();
+    await fireEvent.click(save);
+
+    expect(upsertNotificationPolicy).toHaveBeenCalledWith(1, {
+      cadenceOverrides: { overall: { warningMinutes: [15, 10, 5] } },
+    });
+    expect(await screen.findByText("Saved the warning cadence for Alice.")).toBeInTheDocument();
+  });
+
+  it("keys an activity override as '<scope>:<id>'", async () => {
+    upsertNotificationPolicy.mockResolvedValue(
+      policy({ cadenceOverrides: { "activity:3": { warningMinutes: [5] } } }),
+    );
+
+    render(NotificationsView);
+    await selectUser();
+    await fireEvent.click(await screen.findByRole("button", { name: "Add override" }));
+    await fireEvent.change(screen.getByLabelText("Budget scope"), { target: { value: "activity" } });
+    await fireEvent.input(screen.getByLabelText("Target ID"), { target: { value: "3" } });
+    await fireEvent.input(screen.getByLabelText("Warning minutes"), { target: { value: "5" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Save cadence" }));
+
+    expect(upsertNotificationPolicy).toHaveBeenCalledWith(1, {
+      cadenceOverrides: { "activity:3": { warningMinutes: [5] } },
+    });
+  });
+
+  it("blocks saving an out-of-bounds warn-at mark and surfaces why", async () => {
+    render(NotificationsView);
+    await selectUser();
+    await fireEvent.click(await screen.findByRole("button", { name: "Add override" }));
+    await fireEvent.input(screen.getByLabelText("Warning minutes"), { target: { value: "0" } });
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Warning minutes must be whole numbers");
+    expect(screen.getByRole("button", { name: "Save cadence" })).toBeDisabled();
+    expect(upsertNotificationPolicy).not.toHaveBeenCalled();
+  });
+
+  it("blocks saving two overrides for the same budget", async () => {
+    getNotificationPolicy.mockResolvedValue(
+      policy({
+        cadenceOverrides: {
+          "activity:1": { warningMinutes: [10] },
+          "activity:2": { warningMinutes: [5] },
+        },
+      }),
+    );
+
+    render(NotificationsView);
+    await selectUser();
+
+    // Point the second row at the same budget as the first.
+    const ids = await screen.findAllByLabelText("Target ID");
+    await fireEvent.input(ids[1] as HTMLInputElement, { target: { value: "1" } });
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Duplicate override");
+    expect(screen.getByRole("button", { name: "Save cadence" })).toBeDisabled();
+  });
+
+  it("blocks saving an activity override with no id", async () => {
+    render(NotificationsView);
+    await selectUser();
+    await fireEvent.click(await screen.findByRole("button", { name: "Add override" }));
+    await fireEvent.change(screen.getByLabelText("Budget scope"), { target: { value: "group" } });
+    await fireEvent.input(screen.getByLabelText("Warning minutes"), { target: { value: "5" } });
+
+    expect(screen.getByRole("alert")).toHaveTextContent("positive numeric ID");
+    expect(screen.getByRole("button", { name: "Save cadence" })).toBeDisabled();
+  });
+
+  it("removes a hydrated row and saving reverts to the built-in cadence (null)", async () => {
+    getNotificationPolicy.mockResolvedValue(
+      policy({ cadenceOverrides: { overall: { warningMinutes: [10] } } }),
     );
     upsertNotificationPolicy.mockResolvedValue(policy({ cadenceOverrides: null }));
 
     render(NotificationsView);
     await selectUser();
 
-    const clear = await screen.findByRole("button", { name: "Clear custom cadence" });
-    await fireEvent.click(clear);
+    await fireEvent.click(await screen.findByRole("button", { name: "Remove override" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Save cadence" }));
+
+    expect(upsertNotificationPolicy).toHaveBeenCalledWith(1, { cadenceOverrides: null });
+  });
+
+  it("clears all overrides with an explicit null via Clear all", async () => {
+    getNotificationPolicy.mockResolvedValue(
+      policy({ cadenceOverrides: { "activity:1": { warningMinutes: [10] } } }),
+    );
+    upsertNotificationPolicy.mockResolvedValue(policy({ cadenceOverrides: null }));
+
+    render(NotificationsView);
+    await selectUser();
+
+    await fireEvent.click(await screen.findByRole("button", { name: "Clear all" }));
 
     expect(upsertNotificationPolicy).toHaveBeenCalledWith(1, { cadenceOverrides: null });
     expect(
-      await screen.findByText("Using the built-in 15/5/1-minute warning cadence."),
+      await screen.findByText("Using the built-in 15/5/1-minute warning cadence for every budget."),
     ).toBeInTheDocument();
   });
 });

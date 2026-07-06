@@ -364,7 +364,7 @@ describe("stub transport push on policy change (#54)", () => {
         enabled: false,
         soundProfile: "prominent",
         graceSeconds: 0,
-        cadenceOverrides: { homework: { suppressSub5: true } },
+        cadenceOverrides: { "activity:1": { warningMinutes: [15, 10, 5] } },
       },
     });
 
@@ -380,7 +380,7 @@ describe("stub transport push on policy change (#54)", () => {
         enabled: false,
         soundProfile: "prominent",
         graceSeconds: 0,
-        cadenceOverrides: { homework: { suppressSub5: true } },
+        cadenceOverrides: { "activity:1": { warningMinutes: [15, 10, 5] } },
       },
     });
   });

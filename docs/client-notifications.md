@@ -170,6 +170,35 @@ If multiple budgets cross a boundary inside the same 5-second
 window, the agent **coalesces** them into one toast ("YouTube and
 Discord both have 5 minutes left") to avoid notification spam.
 
+### Cadence override grammar
+
+The `notifications.cadence_overrides` knob customises the warning cadence
+**per budget**. Its shape is pinned (`server/src/policy/notification.ts`,
+single-sourced by the storage column and the `/api` DTOs) so the storage
+constraint and request validation can't drift:
+
+- `null` — the whole map is absent: every budget uses the built-in cadence
+  above.
+- otherwise a JSON map of **budget key → override**:
+  - **key**: the budget's `(scope, target)` — `overall` for the overall
+    screen-time budget, or `activity:<id>` / `group:<id>` for a per-activity
+    or per-activity-group budget. Keyed by scope and target, **not** rollover
+    window: a cadence preference is per-activity, not per daily/weekly/monthly
+    budget.
+  - **value**: `{ "warningMinutes": [<int>, …] }` — the "minutes remaining"
+    marks at which to warn, **replacing** the built-in low-threshold set
+    `{15, 10, 5, 4, 3, 2, 1}` for that budget only. Normalised to a
+    de-duplicated, descending list. An empty list means "no pre-expiry
+    warnings for this budget" (only the 0:00 time's-up toast). So
+    "no sub-5-minute warnings for the homework activity" is
+    `{ "activity:7": { "warningMinutes": [15, 10, 5] } }`.
+
+Bounds: whole minutes in `[1, 1440]`, at most 32 marks per budget and 64
+overridden budgets per user. The >15-minute quarter-hour cadence is derived by
+the agent and is not part of the overridable low-threshold set. An override for
+a budget the user does not have is inert. Overrides are authored in
+`/admin/notifications`.
+
 ## Sound design
 
 Sounds are optional and configurable per policy at three levels:
@@ -252,7 +281,7 @@ of normal policy distribution:
 |---|---|---|
 | `notifications.enabled` | `true` | Master switch per user. |
 | `notifications.sound_profile` | `subtle` | One of `off` / `subtle` / `prominent`. |
-| `notifications.cadence_overrides` | none | Optional per-budget cadence override (e.g. "no sub-5-minute warnings for the homework activity"). |
+| `notifications.cadence_overrides` | none | Optional per-budget cadence override (e.g. "no sub-5-minute warnings for the homework activity"). Grammar: "Cadence override grammar" above. |
 | `policy.grace_seconds` | `15` | 0 disables the grace period; max 60. |
 | `policy.force_close.signal` | `SIGTERM`, then `SIGKILL` after 5 s | Could be tuned per app if an app needs longer to save. |
 
