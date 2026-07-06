@@ -1,6 +1,7 @@
 /**
- * Read-only system-status routes (#39): `GET /api/system/ansible` and
- * `GET /api/system/adguard-managed` (#96).
+ * Read-only system-status routes (#39): `GET /api/system/ansible`,
+ * `GET /api/system/adguard-managed` (#96), and `GET /api/system/queue-summary`
+ * (#322).
  *
  * Registered inside the `/api` plugin scope (after `registerAuth`) so they
  * inherit the zod validator + shared error envelope and sit behind
@@ -17,12 +18,15 @@
  */
 import type { FastifyInstance } from "fastify";
 
+import { queueSummary } from "../../transport/queue/index.js";
 import type { ZodTypeProvider } from "../validation.js";
 import {
   toAdGuardManagedStatusResponse,
   toAnsibleVenvStatusResponse,
+  toQueueSummaryResponse,
   type AdGuardManagedStatusResponse,
   type AnsibleVenvStatusResponse,
+  type QueueSummaryResponse,
 } from "./dtos.js";
 
 /**
@@ -45,5 +49,11 @@ export function registerSystemRoutes(scope: FastifyInstance): void {
     { preHandler: scope.requireAdmin },
     async (): Promise<AdGuardManagedStatusResponse> =>
       toAdGuardManagedStatusResponse(scope.adguardManaged?.status ?? null),
+  );
+
+  typed.get(
+    "/system/queue-summary",
+    { preHandler: scope.requireAdmin },
+    async (): Promise<QueueSummaryResponse> => toQueueSummaryResponse(queueSummary(scope.db)),
   );
 }

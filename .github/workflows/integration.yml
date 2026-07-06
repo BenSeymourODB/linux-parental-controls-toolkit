@@ -254,3 +254,69 @@ jobs:
           else
             echo "client/install-client.sh not yet present — skipping"
           fi
+
+  molecule:
+    name: Ansible playbooks — Molecule
+    runs-on: ubuntu-22.04
+    # Converges the client playbooks in a systemd-enabled Docker container and
+    # verifies the resulting state — the authoritative Ansible integration test
+    # (docs/testing.md → "Ansible playbooks — Molecule"). Static ansible-lint in
+    # ci.yml stays the fast gate; this catches a playbook that lints clean but
+    # fails to converge (#219).
+    #
+    # Molecule + its Docker driver are installed with pip into the runner's
+    # throwaway env — never the dashboard dependency tree. The scenario's own
+    # molecule.yml declares the geerlingguy systemd image with privileged /
+    # cgroupns:host / the /sys/fs/cgroup mount, so no runner-side privilege
+    # setup is needed here; molecule drives the pre-installed Docker daemon.
+    #
+    # Converging containers is expensive, so on a pull_request this only runs
+    # when client/ansible/** — or this workflow file itself — changed; it
+    # always runs on the nightly schedule and on manual dispatch. (Gating on
+    # the workflow file means a change to this job is exercised by its own PR.)
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Decide whether to converge
+        id: decide
+        run: |
+          if [ ! -d client/ansible/molecule ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "No client/ansible/molecule scenarios present — skipping."
+          elif [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Event '${{ github.event_name }}' — running Molecule."
+          else
+            # checkout used fetch-depth: 0, so origin/<base> carries full
+            # history — exactly what the three-dot (merge-base) diff needs.
+            # A shallow re-fetch here would truncate it and break the diff.
+            if git diff --name-only "origin/${{ github.base_ref }}"...HEAD \
+                 | grep -qE '^(client/ansible/|\.github/workflows/integration\.yml$)'; then
+              echo "run=true" >> "$GITHUB_OUTPUT"
+              echo "client/ansible/ or this workflow changed on this PR — running Molecule."
+            else
+              echo "run=false" >> "$GITHUB_OUTPUT"
+              echo "No client/ansible/ or workflow changes on this PR — skipping Molecule."
+            fi
+          fi
+
+      - uses: actions/setup-python@v5
+        if: steps.decide.outputs.run == 'true'
+        with:
+          python-version: "3.11"
+
+      - name: Install Molecule + Docker driver
+        if: steps.decide.outputs.run == 'true'
+        # Throwaway env only — see docs/testing.md. All playbook modules are
+        # ansible.builtin.*, so no Galaxy collections are required.
+        run: pip install molecule "molecule-plugins[docker]" ansible-core
+
+      - name: molecule test (all scenarios)
+        if: steps.decide.outputs.run == 'true'
+        working-directory: client/ansible
+        run: molecule test --all
+        env:
+          PY_COLORS: "1"
+          ANSIBLE_FORCE_COLOR: "1"

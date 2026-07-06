@@ -58,12 +58,19 @@ export type {
   GroupScheduleResponse,
   CreateGroupScheduleRequest,
   GroupScheduleOrderView,
+  GroupBudgetResponse,
+  CreateGroupBudgetRequest,
+  GroupExceptionResponse,
+  CreateGroupExceptionRequest,
   ExceptionResponse,
   CreateExceptionRequest,
   UpdateExceptionRequest,
+  ResolvedBudgetResponse,
   AdjustTimeTodayRequest,
   TimeTodayResponse,
   ClientAdjustmentResultDto,
+  PushPolicyResponse,
+  ClientPushResultDto,
   NotificationPolicyResponse,
   UpsertNotificationPolicyRequest,
 } from "../../../../src/api/policy/dtos.js";
@@ -108,4 +115,8 @@ export type {
 } from "../../../../src/policy/enums.js";
 export type { BudgetCadenceOverride } from "../../../../src/policy/notification.js";
 export type { ErrorEnvelope, ErrorDetail } from "../../../../src/api/errors.js";
-export type { AnsibleVenvStatusResponse } from "../../../../src/api/system/dtos.js";
+export type {
+  AnsibleVenvStatusResponse,
+  AdGuardManagedStatusResponse,
+  QueueSummaryResponse,
+} from "../../../../src/api/system/dtos.js";

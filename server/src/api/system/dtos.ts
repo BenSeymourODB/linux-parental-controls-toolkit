@@ -12,6 +12,7 @@ import { z } from "zod";
 
 import type { AnsibleVenvStatus } from "../../setup/ansible-venv.js";
 import type { AdGuardManagedStatus } from "../../transport/adguard/index.js";
+import type { QueueSummary } from "../../transport/queue/index.js";
 
 /** Lifecycle state of the first-run Ansible venv bootstrap. */
 export const ansibleVenvStateSchema = z.enum(["idle", "bootstrapping", "ready", "unavailable"]);
@@ -102,5 +103,32 @@ export function toAdGuardManagedStatusResponse(
     restarts: status.restarts,
     checkedAt: status.checkedAt,
     detail: status.detail,
+  };
+}
+
+/**
+ * Response shape of `GET /api/system/queue-summary` (#322): fleet-wide offline
+ * transport-queue rollup. `oldestPendingAt` is the ISO timestamp of the oldest
+ * still-`pending` action, or `null` when nothing is pending. Read-only runtime
+ * facts, so there is no write DTO.
+ */
+export const queueSummaryResponseSchema = z.object({
+  pending: z.number().int().nonnegative(),
+  failed: z.number().int().nonnegative(),
+  oldestPendingAt: z.string().nullable(),
+});
+
+/** The inferred `GET /api/system/queue-summary` response type, shared with the frontend. */
+export type QueueSummaryResponse = z.infer<typeof queueSummaryResponseSchema>;
+
+/**
+ * Map the queue-layer {@link QueueSummary} snapshot onto the wire contract —
+ * the single conversion point, serialising the `Date` anchor to an ISO string.
+ */
+export function toQueueSummaryResponse(summary: QueueSummary): QueueSummaryResponse {
+  return {
+    pending: summary.pending,
+    failed: summary.failed,
+    oldestPendingAt: summary.oldestPendingAt?.toISOString() ?? null,
   };
 }

@@ -3,12 +3,14 @@
  *
  * A thin typed wrapper over {@link apiFetch}, mirroring `$lib/api/budgets`:
  * the request/response types are imported from the shared `/api` contract so
- * the frontend never re-declares a DTO. The endpoint is **side-effect-free** —
- * it resolves the user's *current* persisted overall policy and the *proposed*
- * policy in the body through the Phase-4 resolver, diffs the two, and returns
- * the human-readable change set plus the clients the push would reach (each
- * annotated with last-seen + pending-queue depth). It never probes, pushes, or
- * writes the queue.
+ * the frontend never re-declares a DTO. The endpoint is **side-effect-free by
+ * default** — it resolves the user's *current* persisted overall policy and the
+ * *proposed* policy in the body through the Phase-4 resolver, diffs the two, and
+ * returns the human-readable change set plus the clients the push would reach
+ * (each annotated with last-seen + pending-queue depth). Passing `probe: true`
+ * (#281) opts into a live-reachability check: the endpoint then also probes each
+ * affected client over the SSH facade, annotating `reachability`/`probedAt` and
+ * bumping the client's last-seen — the only side effect, and only on that path.
  *
  * The body reuses the same `BudgetResponse` / `ScheduleResponse` rows the editor
  * already holds (the contract's note: "no parallel wire shape"), so a caller
@@ -17,7 +19,11 @@
  * License boundary: none — JSON API only.
  */
 import { apiFetch } from "./client.js";
-import type { PolicyPreviewRequest, PolicyPreviewResponse } from "./contract.js";
+import type {
+  PolicyPreviewRequest,
+  PolicyPreviewResponse,
+  PushPolicyResponse,
+} from "./contract.js";
 
 /**
  * Preview the save-and-push diff for `userId` against a `proposed` policy.
@@ -32,5 +38,25 @@ export function previewPolicyPush(
   return apiFetch<PolicyPreviewResponse>(`/users/${userId}/policy-preview`, {
     method: "POST",
     body: proposed,
+  });
+}
+
+/**
+ * Re-push `userId`'s **currently saved** effective policy to their linked
+ * client(s) — the on-demand companion to {@link previewPolicyPush} (#304).
+ * Unlike the preview, this **has side effects**: it drives the live Phase-4
+ * transport (or durably queues an unreachable client's idempotent push) and
+ * returns a per-client `pushed | queued | failed` result. It does **not** save
+ * the what-if edits in the preview sandbox — it pushes the saved policy.
+ *
+ * `clientId`, when given, restricts the push to that one linked client; omitted,
+ * it pushes to every client the user is linked to. Throws {@link ApiError} on a
+ * non-2xx response (`404` unknown user / unlinked client, `409` no linked
+ * clients, `503` when the transport is not configured).
+ */
+export function pushPolicyNow(userId: number, clientId?: number): Promise<PushPolicyResponse> {
+  return apiFetch<PushPolicyResponse>(`/users/${userId}/policy-push`, {
+    method: "POST",
+    body: clientId === undefined ? {} : { clientId },
   });
 }

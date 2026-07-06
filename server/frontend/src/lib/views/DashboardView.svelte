@@ -11,6 +11,8 @@
 -->
 <script lang="ts">
   import AddTimeToday from "$lib/components/AddTimeToday.svelte";
+  import QueueSummaryWidget from "$lib/components/QueueSummaryWidget.svelte";
+  import SystemStatusStrip from "$lib/components/SystemStatusStrip.svelte";
 
   interface Props {
     username: string;
@@ -21,6 +23,7 @@
 </script>
 
 <section>
+  <SystemStatusStrip />
   <h1>Welcome, {username}</h1>
   <p class="lead">
     This is the admin dashboard for the parental-controls toolkit. Manage supervised users below;
@@ -28,6 +31,8 @@
     milestones.
   </p>
   <button onclick={() => onnavigate("users")}>Manage users →</button>
+
+  <QueueSummaryWidget {onnavigate} />
 
   <AddTimeToday />
 </section>
@@ -52,7 +57,11 @@
     font-size: 0.95rem;
     cursor: pointer;
   }
-  /* The "Add time today" card stands apart from the welcome blurb. */
+  /* The queue-summary widget and "Add time today" card stand apart from the
+     welcome blurb (and each other). */
+  section :global(.queue-summary) {
+    margin-top: 2rem;
+  }
   section :global(.add-time) {
     margin-top: 2rem;
   }

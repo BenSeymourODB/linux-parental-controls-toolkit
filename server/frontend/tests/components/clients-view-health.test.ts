@@ -67,6 +67,7 @@ function health(overrides: Partial<ClientHealthResponse> = {}): ClientHealthResp
     clientId: 5,
     hostname: "mint-box",
     reachability: "online",
+    reachabilityReason: null,
     lastSeen: "2026-06-20T10:00:00.000Z",
     enrolledAt: "2026-06-01T00:00:00.000Z",
     probedAt: "2026-06-20T10:00:00.000Z",
@@ -190,6 +191,38 @@ describe("ClientsView health list + queue", () => {
     await screen.findByText("mint-box");
 
     expect(screen.getByText("update required")).toBeInTheDocument();
+  });
+
+  it("shows a remediation hint for an offline client's classified SSH cause (#353)", async () => {
+    listClients.mockResolvedValue([client()]);
+    listClientHealth.mockResolvedValue([
+      health({
+        reachability: "offline",
+        reachabilityReason: "dns",
+        components: [{ component: "timekpr-next", status: "unknown", detail: "host unreachable (dns)" }],
+      }),
+    ]);
+
+    render(ClientsView);
+    await screen.findByText("mint-box");
+
+    expect(screen.getByText("offline")).toBeInTheDocument();
+    expect(screen.getByText(/enrol the client by IP/i)).toBeInTheDocument();
+  });
+
+  it("shows no remediation hint when an offline cause is unknown (#353)", async () => {
+    listClients.mockResolvedValue([client()]);
+    listClientHealth.mockResolvedValue([
+      health({ reachability: "offline", reachabilityReason: "unknown" }),
+    ]);
+
+    render(ClientsView);
+    await screen.findByText("mint-box");
+
+    expect(screen.getByText("offline")).toBeInTheDocument();
+    // `unknown` maps to no actionable hint — the detail line still carries context.
+    expect(screen.queryByText(/enrol the client by IP/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/re-run the installer/i)).not.toBeInTheDocument();
   });
 
   it("shows 'version unknown' for a client that never reported one (#352)", async () => {

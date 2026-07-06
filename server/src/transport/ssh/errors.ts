@@ -43,15 +43,109 @@ export abstract class SshError extends Error {
 }
 
 /**
+ * Why an {@link SshUnreachableError} happened — a *diagnostic* classification of
+ * the four+ root causes the single "host unreachable" string used to collapse
+ * (#353), each with a different operator fix:
+ *
+ * - `dns` — the hostname doesn't resolve (`getaddrinfo ENOTFOUND` / `EAI_AGAIN`):
+ *   fix container DNS or enrol by IP.
+ * - `connection_refused` — nothing is listening on the SSH port (`ECONNREFUSED`):
+ *   sshd is down — re-run the installer.
+ * - `timeout` — the host never answered (`ETIMEDOUT` / ssh2 `client-timeout`):
+ *   a firewall or a stale/changed address.
+ * - `auth` — the box answered but rejected our key (ssh2 `client-authentication`,
+ *   "All configured authentication methods failed"): the dashboard key isn't
+ *   authorized on the client.
+ * - `handshake` — the transport connected but the SSH handshake/key-exchange
+ *   failed (ssh2 `protocol`): an SSH version/config mismatch.
+ * - `unknown` — no `ssh2` error was available to classify (e.g. a mid-session
+ *   channel drop) or it matched none of the above.
+ *
+ * This is metadata only: it does **not** change the retriable/queue taxonomy —
+ * an `SshUnreachableError` stays retriable regardless of reason.
+ */
+export const sshUnreachableReasonValues = [
+  "dns",
+  "connection_refused",
+  "timeout",
+  "auth",
+  "handshake",
+  "unknown",
+] as const;
+
+/** One classified root cause for an {@link SshUnreachableError}. */
+export type SshUnreachableReason = (typeof sshUnreachableReasonValues)[number];
+
+/**
+ * Flatten an error's `cause` chain into one lowercased signature string built
+ * from each link's `code`, `level`, `syscall`, and `message`. `ssh2` surfaces
+ * the discriminating detail across these fields (and sometimes on a wrapped
+ * `cause`), so matching against the whole chain is more robust than reading a
+ * single property. Bounded depth guards against a self-referential chain.
+ */
+function errorSignature(cause: unknown): string {
+  const parts: string[] = [];
+  let current: unknown = cause;
+  for (let depth = 0; current !== null && current !== undefined && depth < 8; depth += 1) {
+    if (typeof current !== "object") {
+      parts.push(String(current));
+      break;
+    }
+    const record = current as Record<string, unknown>;
+    for (const key of ["code", "level", "syscall", "message"] as const) {
+      const value = record[key];
+      if (typeof value === "string") parts.push(value);
+    }
+    current = record["cause"];
+  }
+  return parts.join(" | ").toLowerCase();
+}
+
+/**
+ * Classify the `ssh2`/socket error behind a connection failure into an
+ * {@link SshUnreachableReason}. Pure and side-effect-free so it is unit-testable
+ * against representative error fixtures without a live socket.
+ *
+ * Order matters: `timeout` is matched before `handshake` because ssh2's connect
+ * timeout reads "Timed out while waiting for handshake" — that is a timeout, not
+ * a handshake failure. `undefined`/`null` (no captured cause) → `"unknown"`.
+ */
+export function classifySshUnreachableReason(cause: unknown): SshUnreachableReason {
+  if (cause === undefined || cause === null) return "unknown";
+  const sig = errorSignature(cause);
+  if (/enotfound|eai_again|getaddrinfo/.test(sig)) return "dns";
+  if (/econnrefused/.test(sig)) return "connection_refused";
+  // `EHOSTUNREACH`/`ENETUNREACH` (no route to host / network down) are the same
+  // "the box didn't answer" class as a connect timeout for the admin's purposes.
+  if (/etimedout|ehostunreach|enetunreach|client-timeout|timed out/.test(sig)) return "timeout";
+  if (/client-authentication|authentication methods failed|authentication failed/.test(sig)) {
+    return "auth";
+  }
+  // Match ssh2's handshake/protocol phrasing. `kex` alone is too short a token to
+  // match against free-text (it can appear inside a hostname), so require the
+  // fuller "key exchange".
+  if (/handshake|key exchange|protocol/.test(sig)) return "handshake";
+  return "unknown";
+}
+
+/**
  * The host could not be reached or the SSH session never became ready
  * (connection refused, DNS failure, handshake/auth failure, or connect
  * timeout). Retriable — feeds the offline-queue.
+ *
+ * Carries a classified {@link reason} (#353) derived from the underlying `ssh2`
+ * error so the health probe, the audit log, and the offline-queue drainer can
+ * report *which* failure it was instead of one catch-all string. The reason is
+ * diagnostic only — it does not affect {@link retriable}.
  */
 export class SshUnreachableError extends SshError {
   readonly retriable = true;
+  /** The classified root cause, from the `ssh2` error passed as `options.cause`. */
+  readonly reason: SshUnreachableReason;
 
   constructor(target: SshTargetRef, options?: { cause?: unknown }) {
     super(`SSH host unreachable: ${formatTarget(target)}`, target, options);
+    this.reason = classifySshUnreachableReason(options?.cause);
   }
 }
 

@@ -13,9 +13,10 @@
     moves the recurring allowed-hours grid.
 
   Authoring budgets/schedules themselves stays in the Budgets/Schedules editors
-  (#189) and #63/#140; this surface is preview-only. There is intentionally no
-  "Save & push now" button: preview is side-effect-free and there is no UI-facing
-  push endpoint yet (a tracked follow-up). The diff covers the SSH + `timekpra`
+  (#189) and #63/#140; the what-if sandbox is preview-only. A "Push saved policy
+  now" action (#304) re-pushes the user's *saved* policy — NOT the sandbox edits —
+  and reports a per-client result; persisting the sandbox edits and hosting the
+  bar inline in a combined editor are #343. The diff covers the SSH + `timekpra`
   session limits the resolver models on `main`; the Ansible-side filter diff
   (e2guardian / iptables) is Phase 6.
 
@@ -27,7 +28,9 @@
   import type {
     BudgetResponse,
     BudgetWindow,
+    ClientPushResultDto,
     PolicyPreviewResponse,
+    PushPolicyResponse,
     ScheduleAction,
     ScheduleResponse,
     UserResponse,
@@ -35,7 +38,7 @@
   import { listUsers } from "$lib/api/users.js";
   import { listBudgets } from "$lib/api/budgets.js";
   import { listSchedules } from "$lib/api/schedules.js";
-  import { previewPolicyPush } from "$lib/api/policy-preview.js";
+  import { previewPolicyPush, pushPolicyNow } from "$lib/api/policy-preview.js";
 
   // ISO weekday order, bit 0 = Monday … bit 6 = Sunday (ADR 0005 §1).
   const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
@@ -74,11 +77,28 @@
   let preview = $state<PolicyPreviewResponse | null>(null);
   let previewing = $state(false);
   let previewError = $state<string | null>(null);
+  // The opt-in live-reachability probe (#281): its own busy flag so the
+  // "Check live status" button shows progress without touching the cheap
+  // auto-preview's `previewing` state.
+  let probing = $state(false);
 
   // Guard against out-of-order preview responses (each edit supersedes the
   // last); only the newest request's result is applied.
   let previewSeq = 0;
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // "Push saved policy now" (#304): the on-demand re-push of the *saved* policy
+  // (not the what-if edits) + its per-client result. Kept apart from the preview
+  // state so a push outcome never blanks the diff.
+  let pushing = $state(false);
+  let pushResult = $state<PushPolicyResponse | null>(null);
+  let pushError = $state<string | null>(null);
+
+  const PUSH_STATUS_LABEL: Readonly<Record<ClientPushResultDto["status"], string>> = {
+    pushed: "pushed",
+    queued: "queued (offline)",
+    failed: "failed",
+  };
 
   const overallBudgets = $derived(budgets.filter((b) => b.scope === "overall"));
   const activityBudgets = $derived(budgets.filter((b) => b.scope !== "overall"));
@@ -109,6 +129,8 @@
     error = null;
     preview = null;
     previewError = null;
+    pushResult = null;
+    pushError = null;
     try {
       const [loadedBudgets, loadedSchedules] = await Promise.all([
         listBudgets(selectedUserId),
@@ -174,15 +196,23 @@
     }, 200);
   }
 
-  async function runPreview(): Promise<void> {
+  /**
+   * Preview the push. `probe` opts into the live-reachability check — a one-shot
+   * SSH probe of each affected client. The debounced auto-preview leaves it
+   * `false` (cheap, side-effect-free); only the explicit "Check live status"
+   * button passes `true`.
+   */
+  async function runPreview(probe = false): Promise<void> {
     if (selectedUserId === null) return;
     const seq = ++previewSeq;
     previewing = true;
+    if (probe) probing = true;
     previewError = null;
     try {
       const result = await previewPolicyPush(selectedUserId, {
         budgets: proposedBudgets(),
         schedules: proposedSchedules(),
+        ...(probe ? { probe: true } : {}),
       });
       if (seq === previewSeq) preview = result;
     } catch (err) {
@@ -192,6 +222,34 @@
       }
     } finally {
       if (seq === previewSeq) previewing = false;
+      // Always clear the probe spinner: a superseding auto-preview never sets
+      // it, so leaving it to the seq guard could strand it on `true`.
+      probing = false;
+    }
+  }
+
+  /** Re-run the current preview with the live-reachability probe requested. */
+  function checkLiveStatus(): void {
+    void runPreview(true);
+  }
+
+  /**
+   * Push the user's **saved** policy now (#304). This is *not* a save of the
+   * what-if edits above — it re-pushes the persisted policy to every linked
+   * client and reports what happened on each. Idempotent (absolute limits), so
+   * an unreachable client is durably queued for replay rather than dropped.
+   */
+  async function runPush(): Promise<void> {
+    if (selectedUserId === null || pushing) return;
+    pushing = true;
+    pushError = null;
+    pushResult = null;
+    try {
+      pushResult = await pushPolicyNow(selectedUserId);
+    } catch (err) {
+      pushError = messageOf(err);
+    } finally {
+      pushing = false;
     }
   }
 
@@ -401,11 +459,23 @@
             </div>
 
             <div class="push-clients">
-              <h3>
-                {preview.affectedClients.length} client{preview.affectedClients.length === 1
-                  ? ""
-                  : "s"} affected
-              </h3>
+              <div class="clients-head">
+                <h3>
+                  {preview.affectedClients.length} client{preview.affectedClients.length === 1
+                    ? ""
+                    : "s"} affected
+                </h3>
+                {#if preview.affectedClients.length > 0}
+                  <button
+                    type="button"
+                    class="probe-btn"
+                    onclick={checkLiveStatus}
+                    disabled={probing}
+                  >
+                    {probing ? "Checking…" : "Check live status"}
+                  </button>
+                {/if}
+              </div>
               {#if preview.affectedClients.length === 0}
                 <p class="push-muted">No clients linked — nothing to push to yet.</p>
               {:else}
@@ -413,6 +483,13 @@
                   {#each preview.affectedClients as client (client.clientId)}
                     <li class="client">
                       <span class="host">{client.hostname}</span>
+                      {#if client.reachability !== null}
+                        <span
+                          class="reach reach-{client.reachability}"
+                          data-testid="reachability-{client.clientId}"
+                          >{client.reachability}</span
+                        >
+                      {/if}
                       <span class="meta">{lastSeenLabel(client.lastSeen)}</span>
                       <span class="queue"
                         >{client.pendingQueueDepth} queued action{client.pendingQueueDepth === 1
@@ -427,6 +504,45 @@
                 Session limits push via SSH + timekpra. Filter / group changes push
                 via Ansible (Phase 6) and aren't previewed here.
               </p>
+            </div>
+
+            <!-- Push saved policy now (#304): re-pushes the SAVED policy, not the
+                 what-if edits above. Inline placement in a combined editor + a
+                 persist-then-push flow are #343. -->
+            <div class="push-actions">
+              <button
+                type="button"
+                class="push-btn"
+                onclick={runPush}
+                disabled={pushing || preview.affectedClients.length === 0}
+              >
+                {pushing ? "Pushing…" : "Push saved policy now"}
+              </button>
+              <p class="push-hint">
+                Re-pushes {selectedUserName ?? "this user"}'s <strong>saved</strong> policy to their
+                clients. The what-if edits above aren't saved — edit and save in the Budgets /
+                Schedules editors first.
+              </p>
+
+              {#if pushError}
+                <p class="push-error" role="alert">{pushError}</p>
+              {:else if pushResult !== null}
+                {#if pushResult.results.length === 0}
+                  <p class="push-muted" data-testid="push-empty">No clients were pushed to.</p>
+                {:else}
+                  <ul class="push-results" data-testid="push-results">
+                    {#each pushResult.results as result (result.clientId)}
+                      <li class="push-result">
+                        <span class="pstatus pstatus-{result.status}"
+                          >{PUSH_STATUS_LABEL[result.status]}</span
+                        >
+                        <span class="host">{result.hostname}</span>
+                        {#if result.error}<span class="perr">{result.error}</span>{/if}
+                      </li>
+                    {/each}
+                  </ul>
+                {/if}
+              {/if}
             </div>
           {/if}
         </div>
@@ -634,6 +750,49 @@
     color: #9aa3c0;
     font-size: 0.8rem;
   }
+  .clients-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+  .probe-btn {
+    background: transparent;
+    color: #cdd2e6;
+    border: 1px solid #3a3f5c;
+    border-radius: 0.4rem;
+    padding: 0.25rem 0.55rem;
+    font-size: 0.75rem;
+    cursor: pointer;
+  }
+  .probe-btn:hover:not(:disabled) {
+    background: #21263f;
+  }
+  .probe-btn:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
+  .reach {
+    text-transform: uppercase;
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    padding: 0.1rem 0.35rem;
+    border-radius: 0.3rem;
+    flex: 0 0 auto;
+  }
+  .reach-online {
+    background: #14532d;
+    color: #bbf7d0;
+  }
+  .reach-offline {
+    background: #7f1d1d;
+    color: #fecaca;
+  }
+  .reach-unknown {
+    background: #374151;
+    color: #d1d5db;
+  }
   .note {
     margin: 0.6rem 0 0;
     color: #9aa3c0;
@@ -663,5 +822,80 @@
     background: #fef2f2;
     color: #b91c1c;
     font-size: 0.85rem;
+  }
+  .push-actions {
+    grid-column: 1 / -1;
+    border-top: 1px solid #2a2f48;
+    padding-top: 0.9rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .push-btn {
+    align-self: flex-start;
+    padding: 0.5rem 0.9rem;
+    border: 0;
+    border-radius: 0.4rem;
+    background: #2563eb;
+    color: #fff;
+    font-weight: 600;
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+  .push-btn:hover:not(:disabled) {
+    background: #1d4ed8;
+  }
+  .push-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .push-hint {
+    margin: 0;
+    color: #9aa3c0;
+    font-size: 0.78rem;
+    max-width: 44rem;
+  }
+  .push-hint strong {
+    color: #cdd2e6;
+  }
+  .push-results {
+    list-style: none;
+    margin: 0.2rem 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+  .push-result {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+  }
+  .pstatus {
+    text-transform: uppercase;
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    padding: 0.1rem 0.35rem;
+    border-radius: 0.3rem;
+    flex: 0 0 auto;
+  }
+  .pstatus-pushed {
+    background: #14532d;
+    color: #bbf7d0;
+  }
+  .pstatus-queued {
+    background: #78350f;
+    color: #fde68a;
+  }
+  .pstatus-failed {
+    background: #7f1d1d;
+    color: #fecaca;
+  }
+  .perr {
+    color: #9aa3c0;
+    font-size: 0.8rem;
   }
 </style>

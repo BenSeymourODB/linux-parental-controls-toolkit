@@ -30,9 +30,11 @@ export {
   listPendingForClient,
   markDrained,
   markFailed,
+  queueSummary,
   recordAttempt,
   updateActionPayload,
   type PendingCount,
+  type QueueSummary,
 } from "./repository.js";
 
 export { drainClient } from "./drainer.js";

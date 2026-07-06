@@ -11,7 +11,12 @@
  * License boundary: none — JSON API only.
  */
 import { apiFetch } from "./client.js";
-import type { BudgetResponse, CreateBudgetRequest, UpdateBudgetRequest } from "./contract.js";
+import type {
+  BudgetResponse,
+  CreateBudgetRequest,
+  ResolvedBudgetResponse,
+  UpdateBudgetRequest,
+} from "./contract.js";
 
 /**
  * List budgets. With `userId` the server restricts to that user; without it,
@@ -35,4 +40,14 @@ export function updateBudget(id: number, input: UpdateBudgetRequest): Promise<Bu
 /** Delete a budget. Resolves on the server's `204`. */
 export function deleteBudget(id: number): Promise<void> {
   return apiFetch<void>(`/budgets/${id}`, { method: "DELETE" });
+}
+
+/**
+ * The user's effective budget baseline per slot, each tagged with whether it is
+ * the user's own budget or inherited from a group (#363). Display-only: the
+ * server resolves own-wins / lowest-group-id precedence (`gatherUserBudgets`),
+ * this just reads the result so the editor can mark local vs inherited slots.
+ */
+export function listResolvedBudgets(userId: number): Promise<ResolvedBudgetResponse[]> {
+  return apiFetch<ResolvedBudgetResponse[]>(`/users/${userId}/budgets/resolved`);
 }

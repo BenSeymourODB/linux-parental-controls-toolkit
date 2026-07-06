@@ -361,5 +361,20 @@ describe("enforcement sweep", () => {
       const handle = start({ pattern: "0 * * * *", timezone: "America/New_York" });
       expect(() => handle.stop()).not.toThrow();
     });
+
+    it("runs caller-driven with no internal cron when pattern is null (#327)", () => {
+      const load = vi.fn((): SupervisedUser[] => []);
+      // `null` is not a valid cron pattern — if it reached croner, construction
+      // would throw. Constructing without throwing proves the null branch built
+      // no schedule, so nothing runs until the caller drives `tick()`.
+      const handle = start({ pattern: null, loadSupervisedUsers: load });
+      expect(load).not.toHaveBeenCalled();
+      // `stop()` is a no-op (no schedule to cancel) and safe to call.
+      expect(() => handle.stop()).not.toThrow();
+      // `tick()` still performs a pass — this is the seam the boot wiring calls
+      // right after each telemetry rollup.
+      expect(handle.tick()).toEqual({ evaluated: 0, enforced: 0, decisions: 0, failed: 0 });
+      expect(load).toHaveBeenCalledTimes(1);
+    });
   });
 });

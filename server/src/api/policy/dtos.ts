@@ -853,6 +853,34 @@ export function toGroupBudgetResponse(row: GroupBudgetRow): GroupBudgetResponse 
   };
 }
 
+// --- Resolved (inherited-vs-local) budgets (#363) --------------------------
+// A display-only projection of the user's effective budget baseline: each slot
+// tagged with whether it is the user's own budget or inherited from a group.
+// Mirrors `policy/group-resolution.ts`'s `RuleSource`/`GatheredBudget`;
+// resolution stays server-side, this only serialises its output. Defined here
+// (not in the route module) so the frontend can consume the inferred type
+// without dragging Fastify-augmented route code into its type program.
+
+/**
+ * Where a resolved budget slot comes from: the user's own budget, or a group
+ * they belong to (identified by `groupId`, which the frontend maps to a name).
+ */
+export const resolvedBudgetSourceSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("user") }),
+  z.object({ kind: z.literal("group"), groupId: z.number().int() }),
+]);
+
+/** One resolved budget slot with its provenance (the `gatherUserBudgets` shape). */
+export const resolvedBudgetResponseSchema = z.object({
+  scope: scopeSchema,
+  targetId: z.number().int().nullable(),
+  window: budgetWindowSchema,
+  secondsAllowed: z.number().int(),
+  source: resolvedBudgetSourceSchema,
+});
+
+export type ResolvedBudgetResponse = z.infer<typeof resolvedBudgetResponseSchema>;
+
 // --- "Add time today" same-day adjustment (#257) ---------------------------
 
 /**
@@ -935,3 +963,41 @@ export function toTimeLeftCommand(body: AdjustTimeTodayRequest): {
   // The refine guarantees setSeconds is present when deltaSeconds is not.
   return { operation: "=", seconds: body.setSeconds ?? 0 };
 }
+
+// --- Manual "push saved policy now" lever (#304) ---------------------------
+
+/**
+ * Body of `POST /users/:userId/policy-push`: re-push the user's **currently
+ * saved** effective policy to their linked client(s) — the on-demand companion
+ * to the side-effect-free preview (#281). `clientId`, when given, restricts the
+ * push to that one linked client; omitted, it pushes to every client the user is
+ * linked to. There is nothing else to send: the push resolves the user's saved
+ * budgets/schedules server-side, so the body carries no policy.
+ */
+export const pushPolicyRequestSchema = z.object({
+  clientId: z.number().int().positive().optional(),
+});
+
+/**
+ * Per-client outcome of a manual push (mirrors the transport service result).
+ * `pushed` — delivered now; `queued` — the client was unreachable, so the
+ * idempotent absolute push was durably queued for replay on reconnect (#84);
+ * `failed` — a non-retriable error.
+ */
+export const clientPushResultSchema = z.object({
+  clientId: z.number().int(),
+  hostname: z.string(),
+  osUsername: z.string(),
+  status: z.enum(["pushed", "queued", "failed"]),
+  error: z.string().optional(),
+});
+
+/** Response of `POST /users/:userId/policy-push`: the per-client push results. */
+export const pushPolicyResponseSchema = z.object({
+  userId: z.number().int(),
+  results: z.array(clientPushResultSchema),
+});
+
+export type PushPolicyRequest = z.infer<typeof pushPolicyRequestSchema>;
+export type ClientPushResultDto = z.infer<typeof clientPushResultSchema>;
+export type PushPolicyResponse = z.infer<typeof pushPolicyResponseSchema>;

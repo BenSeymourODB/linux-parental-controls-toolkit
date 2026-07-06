@@ -61,3 +61,12 @@ export {
   type PolicyPushTransport,
   type TimeTodayAdjuster,
 } from "./bootstrap.js";
+export {
+  pushUserPolicyNow,
+  PushNowTargetError,
+  type PolicyPushNow,
+  type PolicyPushNowStatus,
+  type ClientPushResult,
+  type PushUserPolicyRequest,
+  type PushUserPolicyResult,
+} from "./push-now.js";
