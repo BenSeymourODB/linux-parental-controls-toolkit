@@ -455,13 +455,22 @@ Phase 14 itself:
 - Fleet version dashboard: per-client version drift, "N behind",
   `update_required`, one-click update
   ([#174](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/174)).
+- Server-hosted mirror for upstream client packages (managed `timekpr-next`
+  mirror): the dashboard maintains a `/data`-resident apt repo, refreshed in
+  the background and served over the LAN, so clients stop round-tripping to
+  Launchpad at install time and get a fresher version than the distro ships.
+  Design in
+  [`docs/adr/0011-server-hosted-upstream-package-mirror.md`](adr/0011-server-hosted-upstream-package-mirror.md)
+  ([#389](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/389)).
 
 Constraints carried from elsewhere in the project: the license boundary is
-unchanged (our agent `.deb` is permissive and ours to distribute; GPL
-client tools keep coming from the distro/PPA/upstream — `CLAUDE.md`,
-`docs/licensing-analysis.md`), and the tamper-resistance ceiling is
-unchanged (these are *operations* features, not hardening —
-`docs/client-install.md`).
+unchanged — our agent `.deb` is permissive and ours to distribute, and GPL
+client tools keep coming from the distro/PPA/upstream **except** where a
+`/data`-resident runtime mirror is a deliberate, boundary-preserving choice
+(the image stays GPL-free; ADR 0011 / #389, same precedent as managed-mode
+AdGuard Home in ADR 0009 — `CLAUDE.md`, `docs/licensing-analysis.md`). The
+tamper-resistance ceiling is unchanged (these are *operations* features, not
+hardening — `docs/client-install.md`).
 
 ## Alpha rollout — testing gates
 
