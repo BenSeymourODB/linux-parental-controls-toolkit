@@ -1,0 +1,1 @@
+ALTER TABLE `clients` ADD `last_telemetry_pull_at` integer;

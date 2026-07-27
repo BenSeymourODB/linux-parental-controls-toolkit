@@ -11,13 +11,17 @@
  * — the rollups the Phase-8 enforcement sweep then reads.
  *
  * **Pull window / cursor.** `usage_samples` is a plain append with no
- * uniqueness constraint and there is no durable pull cursor yet (#162 deferred
- * it). To keep overlapping passes from double-counting, this consumer holds an
+ * uniqueness constraint (#162 made cross-pull de-dup the pull layer's job). To
+ * keep overlapping passes from double-counting, this consumer holds an
  * in-memory per-client cursor of the last successfully-pulled window `end`:
  * each pass queries `[cursor ?? (passEnd − initialLookback), passEnd]` and, only
- * after a successful insert, advances the cursor to `passEnd`. The cursor does
- * not survive a restart — a durable cursor is tracked as a follow-up — so a
- * restart re-pulls at most `initialLookback`. Missing telemetry credits no
+ * after a successful insert, advances the cursor to `passEnd`. That cursor is
+ * now also **durable** (#382): the pipeline seeds it from
+ * `clients.last_telemetry_pull_at` on boot and this consumer persists each
+ * advance via {@link saveTelemetryCursor}, so a restart resumes exactly where
+ * the last successful pull ended rather than re-pulling `initialLookback` and
+ * overlapping already-persisted samples. A client with no persisted cursor yet
+ * still falls back to `initialLookback`. Missing telemetry credits no
  * consumption (#88), so any gap is non-punitive.
  *
  * **Single supervised user per client (Alpha-1).** `aw-server` binds one OS
@@ -35,6 +39,7 @@ import { eq } from "drizzle-orm";
 
 import type { PolicyDb } from "../policy/db.js";
 import { activities, usersOnClients } from "../policy/schema.js";
+import { saveTelemetryCursor } from "../policy/telemetry-cursor.js";
 import { insertUsageSamples } from "../policy/usage.js";
 import type {
   ActivityMatcher,
@@ -216,8 +221,11 @@ export function createUsageTelemetryConsumer(
     // Advance the cursor after a successful pull (regardless of row count, so a
     // clean pull that matched nothing still moves forward). A mid-pull failure
     // throws and is isolated by runTelemetryPull, leaving the cursor unmoved so
-    // the same window is re-pulled next pass rather than skipped.
+    // the same window is re-pulled next pass rather than skipped. The in-memory
+    // and durable (#382) cursors advance together at this one success point, so
+    // that throw leaves both unmoved.
     cursor.set(client.id, end);
+    saveTelemetryCursor(db, client.id, end);
 
     logger.info(
       {

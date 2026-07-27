@@ -3,6 +3,7 @@
  * #162 pull, turned on by #327). Drives `createUsageTelemetryConsumer` against a
  * seeded in-memory DB and a fake `aw-server` event source — no live tunnel.
  */
+import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -91,6 +92,17 @@ describe("createUsageTelemetryConsumer", () => {
       baseUrl: "http://127.0.0.1:54321",
       logger,
     };
+  }
+
+  /** The durable cursor persisted on the client row (#382), or `null`. */
+  function persistedCursor(clientId: number): Date | null {
+    const row = db
+      .select({ lastTelemetryPullAt: clients.lastTelemetryPullAt })
+      .from(clients)
+      .where(eq(clients.id, clientId))
+      .get();
+    if (row === undefined) throw new Error(`no client ${clientId}`);
+    return row.lastTelemetryPullAt;
   }
 
   it("normalises a single-user client's window events into usage samples and advances the cursor", async () => {
@@ -263,5 +275,42 @@ describe("createUsageTelemetryConsumer", () => {
     await expect(consume(context(clientId, fakeLogger()))).rejects.toThrow("aw-server exploded");
     expect(cursor.has(clientId)).toBe(false);
     expect(db.select().from(usageSamples).all()).toHaveLength(0);
+    // The durable cursor stays unmoved too (#382): the same window re-pulls.
+    expect(persistedCursor(clientId)).toBeNull();
+  });
+
+  it("persists the cursor durably on a successful pull (#382)", async () => {
+    const { clientId } = seedClient(["Alice"]);
+    db.insert(activities).values({ kind: "app", matcher: "firefox" }).run();
+    const consume = createUsageTelemetryConsumer({
+      db,
+      cursor: new Map(),
+      passEnd: () => PASS_END,
+      initialLookbackMs: LOOKBACK_MS,
+      createSource: () => fakeSource([windowEvent("firefox", "2024-02-15T11:55:00.000Z", 120)]),
+    });
+
+    await consume(context(clientId, fakeLogger()));
+
+    // Advanced to this pass's end, so a restart resumes here rather than
+    // re-pulling `initialLookback`.
+    expect(persistedCursor(clientId)).toEqual(PASS_END);
+  });
+
+  it("persists the cursor even when a clean pull matched nothing (#382)", async () => {
+    const { clientId } = seedClient(["Alice"]);
+    db.insert(activities).values({ kind: "app", matcher: "firefox" }).run();
+    const consume = createUsageTelemetryConsumer({
+      db,
+      cursor: new Map(),
+      passEnd: () => PASS_END,
+      initialLookbackMs: LOOKBACK_MS,
+      createSource: () => fakeSource([]), // no events this pass
+    });
+
+    await consume(context(clientId, fakeLogger()));
+
+    expect(db.select().from(usageSamples).all()).toHaveLength(0);
+    expect(persistedCursor(clientId)).toEqual(PASS_END);
   });
 });
