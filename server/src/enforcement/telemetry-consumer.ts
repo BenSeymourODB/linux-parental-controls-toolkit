@@ -18,11 +18,14 @@
  * after a successful insert, advances the cursor to `passEnd`. That cursor is
  * now also **durable** (#382): the pipeline seeds it from
  * `clients.last_telemetry_pull_at` on boot and this consumer persists each
- * advance via {@link saveTelemetryCursor}, so a restart resumes exactly where
- * the last successful pull ended rather than re-pulling `initialLookback` and
- * overlapping already-persisted samples. A client with no persisted cursor yet
- * still falls back to `initialLookback`. Missing telemetry credits no
- * consumption (#88), so any gap is non-punitive.
+ * advance via {@link saveTelemetryCursor} in the **same transaction** as the
+ * sample insert, so the cursor can never commit ahead of (or behind) the rows
+ * it accounts for. A restart therefore resumes exactly where the last
+ * successful pull ended rather than re-pulling `initialLookback` and
+ * overlapping already-persisted samples — even if the process is killed
+ * mid-pass. A client with no persisted cursor yet still falls back to
+ * `initialLookback`. Missing telemetry credits no consumption (#88), so any gap
+ * is non-punitive.
  *
  * **Single supervised user per client (Alpha-1).** `aw-server` binds one OS
  * account's activity on `:5600`; the loopback tunnel can't disambiguate several
@@ -216,16 +219,26 @@ export function createUsageTelemetryConsumer(
     // hinge on an unverified aw-server semantic. (Under a stricter start-time
     // filter this can only under-credit an event's out-of-window tail — bounded
     // and non-punitive per #88 — never over-credit.)
-    const inserted = insertUsageSamples(db, clipToWindow(candidates, start, end));
+    // Persist the samples and advance the durable cursor (#382) in one
+    // transaction so the two commit or roll back together. Without it, a crash
+    // in the window *between* the two writes (SIGKILL / OOM / power loss) after
+    // the insert commits but before the cursor advance would, on the next boot,
+    // leave the cursor behind the already-persisted samples → that window is
+    // re-pulled and its rows appended a second time (`usage_samples` has no
+    // uniqueness constraint, by design), a punitive over-count. Wrapping both
+    // closes that window. An empty-but-clean pull inserts nothing yet still
+    // advances the cursor — intended.
+    const inserted = db.transaction((tx) => {
+      const rows = insertUsageSamples(tx, clipToWindow(candidates, start, end));
+      saveTelemetryCursor(tx, client.id, end);
+      return rows;
+    });
 
-    // Advance the cursor after a successful pull (regardless of row count, so a
-    // clean pull that matched nothing still moves forward). A mid-pull failure
-    // throws and is isolated by runTelemetryPull, leaving the cursor unmoved so
-    // the same window is re-pulled next pass rather than skipped. The in-memory
-    // and durable (#382) cursors advance together at this one success point, so
-    // that throw leaves both unmoved.
+    // Advance the in-memory cursor only after the transaction commits, so it can
+    // never outrun the durable one. A mid-pull failure throws before this (and
+    // rolls the transaction back), leaving both cursors unmoved so the same
+    // window is re-pulled next pass rather than skipped.
     cursor.set(client.id, end);
-    saveTelemetryCursor(db, client.id, end);
 
     logger.info(
       {

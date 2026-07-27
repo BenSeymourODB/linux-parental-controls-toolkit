@@ -23,6 +23,7 @@ import type {
   TelemetryConsumeContext,
   TelemetryLogger,
 } from "../../src/transport/activitywatch/telemetry.js";
+import { saveTelemetryCursor } from "../../src/policy/telemetry-cursor.js";
 import { testDb, type TestDb } from "../helpers/db.js";
 
 /** A logger whose calls are inspectable. */
@@ -277,6 +278,31 @@ describe("createUsageTelemetryConsumer", () => {
     expect(db.select().from(usageSamples).all()).toHaveLength(0);
     // The durable cursor stays unmoved too (#382): the same window re-pulls.
     expect(persistedCursor(clientId)).toBeNull();
+  });
+
+  it("leaves a pre-existing durable cursor unchanged when the pull fails (#382)", async () => {
+    const { clientId } = seedClient(["Alice"]);
+    db.insert(activities).values({ kind: "app", matcher: "firefox" }).run();
+    // A cursor an earlier successful pass already advanced.
+    const earlier = new Date("2024-02-15T11:50:00.000Z");
+    saveTelemetryCursor(db, clientId, earlier);
+    const cursor = new Map<number, Date>([[clientId, earlier]]);
+    const boom: AwEventSource = {
+      getWindowEvents: () => Promise.reject(new Error("aw-server exploded")),
+      getAfkEvents: () => Promise.resolve([]),
+    };
+    const consume = createUsageTelemetryConsumer({
+      db,
+      cursor,
+      passEnd: () => PASS_END,
+      initialLookbackMs: LOOKBACK_MS,
+      createSource: () => boom,
+    });
+
+    await expect(consume(context(clientId, fakeLogger()))).rejects.toThrow("aw-server exploded");
+    // The failed pass must not rewind or clobber the already-advanced cursor.
+    expect(persistedCursor(clientId)).toEqual(earlier);
+    expect(cursor.get(clientId)).toEqual(earlier);
   });
 
   it("persists the cursor durably on a successful pull (#382)", async () => {

@@ -21,7 +21,7 @@
  */
 import { eq, isNotNull } from "drizzle-orm";
 
-import type { PolicyDb } from "./db.js";
+import type { PolicyDb, PolicyTx } from "./db.js";
 import { clients } from "./schema.js";
 
 /**
@@ -51,6 +51,6 @@ export function loadTelemetryCursors(db: PolicyDb): Map<number, Date> {
  * in lock-step and a mid-pull failure (which throws before this runs) leaves
  * both unmoved, re-pulling the same window next pass.
  */
-export function saveTelemetryCursor(db: PolicyDb, clientId: number, end: Date): void {
+export function saveTelemetryCursor(db: PolicyDb | PolicyTx, clientId: number, end: Date): void {
   db.update(clients).set({ lastTelemetryPullAt: end }).where(eq(clients.id, clientId)).run();
 }
