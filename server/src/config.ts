@@ -131,6 +131,69 @@ const adguardSchema = z.discriminatedUnion("mode", [
   }),
 ]);
 
+/**
+ * The `timekpr-next` upstream packages the mirror can serve (`managed` mode).
+ * The channel is chosen on the *server* so a client never has to know which one
+ * it gets (ADR 0011 → "Confirmed direction"): the stable package, or the beta
+ * variant if the operator opts into it.
+ */
+const TIMEKPR_MIRROR_PACKAGES = ["timekpr-next", "timekpr-next-beta"] as const;
+
+/**
+ * Server-hosted mirror for the upstream (GPL) `timekpr-next` client package,
+ * keyed on `PCT_TIMEKPR_MIRROR` (#391, epic #389).
+ *
+ * Modelled on {@link adguardSchema}'s `disabled | external | managed`
+ * trichotomy (ADR 0009), per ADR 0011: the managed mirror lives in the `/data`
+ * volume, fetched at runtime and **never baked into the image** — the same
+ * boundary-preserving precedent as managed-mode AdGuard Home, so the published
+ * image stays GPL-free (`docs/licensing-analysis.md`, `license-guard.yml`).
+ *
+ * This is the **config seam only** — no fetch/serve behaviour yet. The
+ * background refresh job (#392), the signed apt index + serving + enrol
+ * advertisement (#393), and the client baseline repo path (#394) build against
+ * it. As with `adguardSchema`, the loader assembles a nested object from the
+ * flat `PCT_TIMEKPR_MIRROR_*` env vars before parsing, so each branch narrows
+ * to exactly the fields that mode uses (`docs/server-deployment.md` →
+ * "Timekpr-nExT package mirror deployment modes").
+ */
+const timekprMirrorSchema = z.discriminatedUnion("mode", [
+  z.object({ mode: z.literal("disabled") }),
+  z.object({
+    mode: z.literal("external"),
+    /**
+     * The apt repository URL the homelab already hosts (`PCT_TIMEKPR_MIRROR_URL`).
+     * Required in `external` mode — a missing/invalid value fails fast at startup
+     * naming the field, exactly like `adguardSchema`'s external `url`. The mirror
+     * carries no credentials (unlike AdGuard), so this is its only field.
+     */
+    url: z.url(),
+  }),
+  z.object({
+    mode: z.literal("managed"),
+    /**
+     * Data-volume directory the mirror's apt repo lives under
+     * (`PCT_TIMEKPR_MIRROR_DIR`). Defaults to the documented `/data/apt/timekpr`
+     * layout (`docs/server-deployment.md` → "Volume layout"), mirroring the
+     * AdGuard `dataDir` pattern.
+     */
+    dataDir: z.string().min(1).default("/data/apt/timekpr"),
+    /**
+     * Which upstream package/channel the mirror serves
+     * (`PCT_TIMEKPR_MIRROR_PACKAGE`): the stable `timekpr-next` (default) or the
+     * `timekpr-next-beta` variant. Server-chosen so a client never has to know
+     * which channel it gets (ADR 0011).
+     */
+    package: z.enum(TIMEKPR_MIRROR_PACKAGES).default("timekpr-next"),
+    /**
+     * Optional pinned upstream version to mirror (`PCT_TIMEKPR_MIRROR_VERSION`).
+     * When unset, the (later) refresh job (#392) tracks the newest upstream
+     * release. Mirrors the AdGuard `version` pin.
+     */
+    version: z.string().min(1).optional(),
+  }),
+]);
+
 const settingsSchema = z
   .object({
     /**
@@ -442,6 +505,13 @@ const settingsSchema = z
       probeDeadlineMs: z.coerce.number().int().nonnegative().default(15_000),
     }),
     adguard: adguardSchema,
+    /**
+     * Server-hosted `timekpr-next` package mirror (#391, epic #389). Keyed on
+     * `PCT_TIMEKPR_MIRROR`; parsed-and-ready ahead of the fetch/serve wiring
+     * (#392/#393), like the `telemetry`/`reapply`/`adguard` blocks above. See
+     * {@link timekprMirrorSchema}.
+     */
+    timekprMirror: timekprMirrorSchema,
   })
   .superRefine((settings, ctx) => {
     if (settings.adguard.mode !== "external") return;
@@ -540,6 +610,13 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
       adminPort: env.PCT_ADGUARD_ADMIN_PORT,
       dataDir: env.PCT_ADGUARD_DATA_DIR,
       version: env.PCT_ADGUARD_VERSION,
+    },
+    timekprMirror: {
+      mode: env.PCT_TIMEKPR_MIRROR ?? "disabled",
+      url: env.PCT_TIMEKPR_MIRROR_URL,
+      dataDir: env.PCT_TIMEKPR_MIRROR_DIR,
+      package: env.PCT_TIMEKPR_MIRROR_PACKAGE,
+      version: env.PCT_TIMEKPR_MIRROR_VERSION,
     },
   });
 

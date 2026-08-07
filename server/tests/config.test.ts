@@ -22,6 +22,7 @@ describe("loadSettings", () => {
     expect(settings.sshPublicKeyPath).toBe("/data/secrets/ssh/id_ed25519.pub");
     expect(settings.sshPrivateKeyPath).toBe("/data/secrets/ssh/id_ed25519");
     expect(settings.adguard).toEqual({ mode: "disabled" });
+    expect(settings.timekprMirror).toEqual({ mode: "disabled" });
     expect(settings.telemetry).toEqual({ pullCron: "*/5 * * * *", pullConcurrency: 4 });
     expect(settings.enforcement).toEqual({ cooldownSeconds: 300, initialLookbackSeconds: 900 });
     expect(settings.retention).toEqual({ defaultDays: 365 });
@@ -306,6 +307,83 @@ describe("loadSettings", () => {
           PCT_ADGUARD_ADMIN_PORT: "not-a-port",
         }),
       ).toThrow(SettingsError);
+    });
+  });
+
+  describe("PCT_TIMEKPR_MIRROR (#391)", () => {
+    it("rejects an unknown mirror mode with a readable error", () => {
+      try {
+        loadSettings({ PCT_TIMEKPR_MIRROR: "on" });
+        expect.unreachable("should have thrown");
+      } catch (err) {
+        expect(err).toBeInstanceOf(SettingsError);
+        expect((err as SettingsError).message).toContain("Invalid configuration");
+        expect((err as SettingsError).message).toContain("mode");
+      }
+    });
+
+    describe("external mode", () => {
+      it("parses the apt repo url", () => {
+        const settings = loadSettings({
+          PCT_TIMEKPR_MIRROR: "external",
+          PCT_TIMEKPR_MIRROR_URL: "https://apt.lan/timekpr",
+        });
+
+        expect(settings.timekprMirror).toEqual({
+          mode: "external",
+          url: "https://apt.lan/timekpr",
+        });
+      });
+
+      it("requires a url", () => {
+        expect(() => loadSettings({ PCT_TIMEKPR_MIRROR: "external" })).toThrow(SettingsError);
+      });
+
+      it("requires a valid url", () => {
+        expect(() =>
+          loadSettings({
+            PCT_TIMEKPR_MIRROR: "external",
+            PCT_TIMEKPR_MIRROR_URL: "not-a-url",
+          }),
+        ).toThrow(SettingsError);
+      });
+    });
+
+    describe("managed mode", () => {
+      it("defaults the data dir and package (version unset)", () => {
+        const settings = loadSettings({ PCT_TIMEKPR_MIRROR: "managed" });
+
+        expect(settings.timekprMirror).toEqual({
+          mode: "managed",
+          dataDir: "/data/apt/timekpr",
+          package: "timekpr-next",
+        });
+      });
+
+      it("honours an explicit dir, pinned version, and beta channel", () => {
+        const settings = loadSettings({
+          PCT_TIMEKPR_MIRROR: "managed",
+          PCT_TIMEKPR_MIRROR_DIR: "/srv/apt/timekpr",
+          PCT_TIMEKPR_MIRROR_PACKAGE: "timekpr-next-beta",
+          PCT_TIMEKPR_MIRROR_VERSION: "0.5.5",
+        });
+
+        expect(settings.timekprMirror).toEqual({
+          mode: "managed",
+          dataDir: "/srv/apt/timekpr",
+          package: "timekpr-next-beta",
+          version: "0.5.5",
+        });
+      });
+
+      it("rejects an unknown package/channel", () => {
+        expect(() =>
+          loadSettings({
+            PCT_TIMEKPR_MIRROR: "managed",
+            PCT_TIMEKPR_MIRROR_PACKAGE: "timekpr-nope",
+          }),
+        ).toThrow(SettingsError);
+      });
     });
   });
 
