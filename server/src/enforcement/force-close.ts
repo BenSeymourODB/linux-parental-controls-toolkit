@@ -6,7 +6,7 @@
  * over-budget app. The preferred path is the event stream — emit
  * `enforce.force_close` (#100) and let the per-user `pct-client-agent` do the
  * kill, avoiding an SSH round-trip and a privileged client helper
- * (`docs/roadmap.md` → Phase 8). When the bridge isn't reachable, fall back to
+ * (`docs/roadmap.md` → Phase 8). When no agent receives that frame, fall back to
  * an ad-hoc, user-scoped `pkill` over the Phase-4 SSH facade. Both paths are
  * recorded in the #85 audit log.
  *
@@ -19,10 +19,16 @@
  * calls {@link ForceCloseTrigger.enforce} after each telemetry rollup is the
  * scheduler (#117), wired separately.
  *
- * **Reachability is the delivery count, not a separate probe.** `publishToClient`
- * returns how many live sockets the frame reached; `0` means the bridge is gone,
- * so we fall back. Reading delivery rather than a prior `isClientLive()` closes
- * the check-then-close race (a socket dropping between the two) for free.
+ * **The delivery count is the dispatch signal, not a separate probe.**
+ * `publishToClient` returns how many live sockets actually received the frame;
+ * `> 0` means an agent has it and will do the kill. `0` means none did — the
+ * client is offline, **or** it is connected but did not advertise the
+ * `per_app_close` capability, so the hub withheld the frame it couldn't honour
+ * (ADR 0007 §4). Both cases resolve to the same correct fallback: the
+ * capability-independent, server-side SSH `pkill` (which is how such a client is
+ * enforced at all), audited as the SSH path it actually took. Reading delivery
+ * rather than a prior `isClientLive()` also closes the check-then-close race (a
+ * socket dropping between the two) for free.
  *
  * License boundary: none touched — plain TypeScript over injected seams.
  */
@@ -67,7 +73,8 @@ export interface ForceCloseDeps {
   /** Expand a decision's `(scope, targetId)` into the concrete apps to close. */
   resolveActivities(scope: EnforcementScope, targetId: number): readonly ForceCloseActivity[];
   /**
-   * Run the user-scoped `pkill` fallback for one app on one offline client and
+   * Run the user-scoped `pkill` fallback for one app on a client whose agent
+   * did not receive the event frame (offline, or lacking `per_app_close`) and
    * record its audit entry. Contract: **never throws** — it audits every
    * outcome (including failures) so a wedged client can't break the fan-out.
    */
@@ -153,7 +160,7 @@ export class ForceCloseTrigger {
     }
   }
 
-  /** Emit the event to one client, or `pkill`-fall-back if it isn't reachable. */
+  /** Emit the event to one client, or `pkill`-fall-back if no agent received it. */
   async #closeOnClient(
     userId: number,
     client: ForceCloseClient,
@@ -169,9 +176,11 @@ export class ForceCloseTrigger {
       this.#deps.recordEventAudit({ client, userId, activityId: activity.activityId });
       return;
     }
-    // Bridge not reachable on this client — fall back to the SSH pkill. Defensive
-    // catch only: forceCloseOverSsh's contract is to audit + swallow, but a bug
-    // there must not abort the rest of the fan-out.
+    // No agent received the frame on this client (offline, or it lacks the
+    // per_app_close capability so the hub withheld it) — fall back to the SSH
+    // pkill, the capability-independent enforcement path. Defensive catch only:
+    // forceCloseOverSsh's contract is to audit + swallow, but a bug there must
+    // not abort the rest of the fan-out.
     try {
       await this.#deps.forceCloseOverSsh({ client, activity, userId });
     } catch (err: unknown) {

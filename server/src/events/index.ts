@@ -11,6 +11,7 @@
 export const moduleName = "events";
 
 export { EventHub, SOCKET_OPEN, type EventSocket } from "./hub.js";
+export { CLIENT_CAPABILITIES, capabilityForEvent, type ClientCapability } from "./capabilities.js";
 export { registerEventStream, type EventStreamOptions } from "./stream.js";
 export {
   startHeartbeat,

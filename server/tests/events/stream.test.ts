@@ -95,12 +95,15 @@ function awaitOpen(ws: WebSocket): Promise<void> {
 }
 
 /** A well-formed client hello at the given protocol (defaults to the server's). */
-function helloFrame(eventProtocol: number = EVENT_PROTOCOL): string {
+function helloFrame(
+  eventProtocol: number = EVENT_PROTOCOL,
+  capabilities: string[] = ["session_budget"],
+): string {
   return JSON.stringify({
     type: "hello",
     agentVersion: "1.4.2",
     eventProtocol,
-    capabilities: ["session_budget"],
+    capabilities,
   });
 }
 
@@ -285,5 +288,44 @@ describe("GET /api/events/stream — version handshake (#165)", () => {
     expect(accept.type).toBe("accept");
     // A compatible connect clears the stale flag.
     await vi.waitFor(() => expect(repo.getClient(db, clientId)?.updateRequired).toBe(false));
+  });
+});
+
+describe("GET /api/events/stream — capability gating (#288, ADR 0007 §4)", () => {
+  it("delivers only the frames whose capability the hello advertised", async () => {
+    harness = buildTestApp();
+    const { app } = harness;
+    const token = generateToken();
+    const clientId = enrolClientWithToken(harness, token);
+    await app.listen({ port: 0, host: "127.0.0.1" });
+
+    const ws = connect(app, { authorization: `Bearer ${token}` });
+    const nextMessage = messageReader(ws);
+    await awaitOpen(ws);
+    // Advertise session_budget only — not per_app_close.
+    ws.send(helloFrame(EVENT_PROTOCOL, ["session_budget"]));
+
+    const accept = JSON.parse(await nextMessage()) as { type: string };
+    expect(accept.type).toBe("accept");
+    await vi.waitFor(() => expect(app.eventHub.isClientLive(clientId)).toBe(true));
+
+    // enforce.force_close is gated on per_app_close (not advertised) → withheld.
+    expect(
+      app.eventHub.publishToClient(clientId, {
+        type: "enforce.force_close",
+        userId: 1,
+        activityId: 7,
+      }),
+    ).toBe(0);
+
+    // enforce.session_lock is gated on session_budget (advertised) → delivered.
+    expect(
+      app.eventHub.publishToClient(clientId, { type: "enforce.session_lock", userId: 1 }),
+    ).toBe(1);
+
+    // The next frame the client actually receives is the session_lock — proving
+    // the withheld force_close never crossed the wire.
+    const frame = JSON.parse(await nextMessage()) as EventFrame;
+    expect(frame.event.type).toBe("enforce.session_lock");
   });
 });
