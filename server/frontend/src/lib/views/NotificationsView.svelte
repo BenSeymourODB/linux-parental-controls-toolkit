@@ -15,17 +15,25 @@
   (`server/src/policy/notification.ts`): a map of budget key
   (`overall` | `activity:<id>` | `group:<id>`) → `{ warningMinutes }`, the
   "minutes remaining" marks that replace the built-in 15/5/1-minute set for that
-  budget. This view edits them as rows (scope + optional target id + a
-  comma-separated minute list), plus a "Clear all" that reverts to the built-in
-  cadence. Rows carry the budget's numeric id directly; a friendly budget picker
-  sourced from the user's budgets is a follow-up (fits #343's combined editor).
+  budget. This view edits them as rows (a budget picker + a comma-separated
+  minute list), plus a "Clear all" that reverts to the built-in cadence.
+
+  The budget picker (#388) is sourced from the user's own budgets and labelled
+  with the activity/activity-group names (`Activity — firefox`, `Group — Games`)
+  rather than asking the admin to type a numeric target id. Options are keyed by
+  `(scope, target)` — the same key the grammar stores — and de-duplicated across
+  a target's daily / weekly / monthly rollover windows into a single entry. A
+  stored override whose budget no longer exists stays pickable (its key is added
+  to the option list) so hydrate→save is a faithful round-trip.
 -->
 <script lang="ts">
   import { onMount } from "svelte";
   import { ApiError } from "$lib/api/client.js";
   import type {
+    ActivityGroupResponse,
+    ActivityResponse,
+    BudgetResponse,
     NotificationPolicyResponse,
-    Scope,
     SoundProfile,
     UserResponse,
   } from "$lib/api/contract.js";
@@ -35,6 +43,9 @@
     deleteNotificationPolicy,
   } from "$lib/api/notifications.js";
   import { listUsers } from "$lib/api/users.js";
+  import { listBudgets } from "$lib/api/budgets.js";
+  import { listActivities } from "$lib/api/activities.js";
+  import { listActivityGroups } from "$lib/api/activity-groups.js";
 
   // Documented bounds + vocabulary (`docs/client-notifications.md`, mirrored by
   // `server/src/policy/notification.ts`'s single-source constants). Hardcoded
@@ -51,12 +62,6 @@
   const WARNING_MINUTES_MAX_COUNT = 32;
   const CADENCE_OVERRIDE_KEYS_MAX = 64;
 
-  const SCOPE_OPTIONS: ReadonlyArray<{ value: Scope; label: string }> = [
-    { value: "overall", label: "Overall screen time" },
-    { value: "activity", label: "Activity" },
-    { value: "group", label: "Activity group" },
-  ];
-
   const SOUND_PROFILE_OPTIONS: ReadonlyArray<{ value: SoundProfile; label: string }> = [
     { value: "off", label: "Off — no sounds" },
     { value: "subtle", label: "Subtle (default)" },
@@ -68,10 +73,18 @@
   let error = $state<string | null>(null);
   let notice = $state<string | null>(null);
 
+  // Global catalogues used only to label the budget picker with human-readable
+  // activity/group names (#388). Loaded once on mount; name resolution is
+  // best-effort — a missing catalogue just falls back to an id label.
+  let activities = $state<ActivityResponse[]>([]);
+  let activityGroups = $state<ActivityGroupResponse[]>([]);
+
   // The user whose policy is being edited, and that policy's loaded state.
   let selectedUserId = $state<number | null>(null);
   let policy = $state<NotificationPolicyResponse | null>(null);
   let loadingPolicy = $state(false);
+  // The selected user's budgets — the source of the cadence picker options.
+  let budgets = $state<BudgetResponse[]>([]);
 
   // Editable form fields, hydrated from the loaded policy.
   let formEnabled = $state(true);
@@ -82,20 +95,27 @@
   let clearingCadence = $state(false);
   let savingCadence = $state(false);
 
-  // One editable per-budget cadence override. `targetId` is unused for the
-  // `overall` scope; `minutes` is a comma-separated list of "minutes remaining"
-  // warn-at marks. `id` is a stable key for the {#each} so removing a middle
-  // row doesn't reshuffle input focus.
+  // One editable per-budget cadence override. `key` is the pinned storage key
+  // (`overall` | `activity:<id>` | `group:<id>`) chosen from the budget picker;
+  // `minutes` is a comma-separated list of "minutes remaining" warn-at marks.
+  // `id` is a stable key for the {#each} so removing a middle row doesn't
+  // reshuffle input focus.
   interface CadenceRow {
     id: number;
-    scope: Scope;
-    targetId: string;
+    key: string;
     minutes: string;
   }
   let cadenceRows = $state<CadenceRow[]>([]);
   let nextRowId = 0;
 
-  onMount(loadUsers);
+  onMount(loadInitial);
+
+  // Load the user list and the label catalogues together on mount. The user
+  // list gates the whole view; the catalogues only decorate the picker, so a
+  // catalogue failure never blocks editing (keys fall back to id labels).
+  async function loadInitial(): Promise<void> {
+    await Promise.all([loadUsers(), loadCatalogues()]);
+  }
 
   async function loadUsers(): Promise<void> {
     loadingUsers = true;
@@ -106,6 +126,18 @@
       error = messageOf(err);
     } finally {
       loadingUsers = false;
+    }
+  }
+
+  async function loadCatalogues(): Promise<void> {
+    try {
+      const [acts, groups] = await Promise.all([listActivities(), listActivityGroups()]);
+      activities = acts;
+      activityGroups = groups;
+    } catch (err) {
+      // Name resolution is best-effort: keep the view usable and let the picker
+      // fall back to id labels rather than blocking on a catalogue read.
+      error ??= messageOf(err);
     }
   }
 
@@ -130,12 +162,26 @@
     }
   }
 
+  // Load the selected user's budgets to source the cadence picker options.
+  // Best-effort: a failure leaves the picker with the always-present "Overall"
+  // entry plus any keys the stored overrides already carry.
+  async function loadBudgets(userId: number): Promise<void> {
+    try {
+      budgets = await listBudgets(userId);
+    } catch (err) {
+      budgets = [];
+      error ??= messageOf(err);
+    }
+  }
+
   function onSelectUser(): void {
     if (selectedUserId === null) {
       policy = null;
+      budgets = [];
       return;
     }
     void loadPolicy(selectedUserId);
+    void loadBudgets(selectedUserId);
   }
 
   function userName(id: number): string {
@@ -161,26 +207,78 @@
 
   let hasCustomCadence = $derived(policy !== null && policy.cadenceOverrides !== null);
 
-  // --- Per-budget cadence editor (#302) ---
+  // --- Per-budget cadence editor (#302, picker #388) ---
 
   type CadenceOverrideMap = NonNullable<NotificationPolicyResponse["cadenceOverrides"]>;
 
-  // Hydrate editor rows from the stored map: `overall` → scope with no id,
-  // `<scope>:<id>` → scope + id; warn-at marks join to a comma list.
+  interface BudgetOption {
+    key: string;
+    label: string;
+  }
+
+  // Human-readable label for a cadence key. `overall` is fixed; an
+  // activity/group key resolves the name from the loaded catalogues, falling
+  // back to an id label when the referent is missing (deleted, or a catalogue
+  // that failed to load).
+  function labelForKey(key: string): string {
+    if (key === "overall") {
+      return "Overall screen time";
+    }
+    const match = /^(activity|group):([0-9]+)$/.exec(key);
+    if (match === null) {
+      return key;
+    }
+    const id = Number(match[2]);
+    if (match[1] === "activity") {
+      const activity = activities.find((a) => a.id === id);
+      return activity ? `Activity — ${activity.matcher}` : `Activity ${id}`;
+    }
+    const group = activityGroups.find((g) => g.id === id);
+    return group ? `Group — ${group.name}` : `Group ${id}`;
+  }
+
+  // The picker options: always "Overall", plus one entry per distinct
+  // non-overall `(scope, target)` in the user's budgets — de-duplicated across
+  // the target's daily/weekly/monthly windows (the cadence key is keyed by
+  // target, not window). Keys already used by a row are folded in too, so a
+  // stored override for a since-deleted budget stays pickable (a faithful
+  // hydrate→save round-trip). Ordered overall → activities → groups, then by
+  // label.
+  let budgetOptions = $derived.by<BudgetOption[]>(() => {
+    const keys = new Set<string>(["overall"]);
+    for (const budget of budgets) {
+      if (budget.targetId === null) {
+        continue;
+      }
+      if (budget.scope === "activity") {
+        keys.add(`activity:${budget.targetId}`);
+      } else if (budget.scope === "group") {
+        keys.add(`group:${budget.targetId}`);
+      }
+    }
+    for (const row of cadenceRows) {
+      keys.add(row.key);
+    }
+    const rank = (key: string): number =>
+      key === "overall" ? 0 : key.startsWith("activity:") ? 1 : 2;
+    return [...keys]
+      .map((key) => ({ key, label: labelForKey(key) }))
+      .sort((a, b) => rank(a.key) - rank(b.key) || a.label.localeCompare(b.label));
+  });
+
+  // Hydrate editor rows from the stored map: each `<key>` becomes a row whose
+  // picker is set to that key; warn-at marks join to a comma list.
   function rowsFromOverrides(
     overrides: NotificationPolicyResponse["cadenceOverrides"],
   ): CadenceRow[] {
     if (overrides === null) {
       return [];
     }
-    return Object.entries(overrides).map(([key, override]) => {
-      const minutes = override.warningMinutes.join(", ");
-      if (key === "overall") {
-        return { id: nextRowId++, scope: "overall", targetId: "", minutes };
-      }
-      const [scope, id] = key.split(":");
-      return { id: nextRowId++, scope: scope as Scope, targetId: id ?? "", minutes };
-    });
+    return Object.entries(overrides).map(([key, override]) => ({
+      id: nextRowId++,
+      key,
+      minutes: override.warningMinutes.join(", "),
+    }));
   }
 
   // Parse a comma-separated warn-at list into a normalised (deduped, descending)
@@ -210,17 +308,22 @@
     return Array.from(new Set(nums)).sort((a, b) => b - a);
   }
 
-  // Build the storage key for a row, or `null` when an activity/group row lacks a
-  // positive numeric id.
+  // Validate/normalise a row's picked key against the pinned grammar. The picker
+  // only ever offers valid keys, but the guard keeps the storage contract the
+  // single source of truth and rejects any malformed value defensively.
   function rowKey(row: CadenceRow): string | null {
-    if (row.scope === "overall") {
+    if (row.key === "overall") {
       return "overall";
     }
-    const id = Number(row.targetId);
+    const match = /^(activity|group):([0-9]+)$/.exec(row.key);
+    if (match === null) {
+      return null;
+    }
+    const id = Number(match[2]);
     if (!Number.isInteger(id) || id < 1) {
       return null;
     }
-    return `${row.scope}:${id}`;
+    return `${match[1]}:${id}`;
   }
 
   // Assemble the current rows into a cadence-override payload (or `null` to revert
@@ -238,10 +341,10 @@
     for (const row of cadenceRows) {
       const key = rowKey(row);
       if (key === null) {
-        return { ok: false, message: "Each activity/group override needs a positive numeric ID." };
+        return { ok: false, message: "Each override must target a budget." };
       }
       if (key in map) {
-        return { ok: false, message: `Duplicate override for “${key}”.` };
+        return { ok: false, message: `Duplicate override for “${labelForKey(key)}”.` };
       }
       const minutes = parseMinutes(row.minutes);
       if (minutes === null) {
@@ -277,7 +380,7 @@
   );
 
   function addCadenceRow(): void {
-    cadenceRows = [...cadenceRows, { id: nextRowId++, scope: "overall", targetId: "", minutes: "" }];
+    cadenceRows = [...cadenceRows, { id: nextRowId++, key: "overall", minutes: "" }];
   }
 
   function removeCadenceRow(id: number): void {
@@ -485,9 +588,9 @@
           </div>
           <p class="sublabel cadence-hint">
             Override the built-in 15/5/1-minute warnings for a specific budget.
-            Each row sets the “minutes remaining” marks at which to warn (a
-            comma-separated list, e.g. <code>15, 10, 5</code>); leave the list
-            empty to warn only when time is up. Budgets with no row keep the
+            Pick the budget, then set the “minutes remaining” marks at which to
+            warn (a comma-separated list, e.g. <code>15, 10, 5</code>); leave the
+            list empty to warn only when time is up. Budgets with no row keep the
             built-in cadence.
           </p>
 
@@ -499,21 +602,11 @@
             <ul class="cadence-rows">
               {#each cadenceRows as row (row.id)}
                 <li class="cadence-row">
-                  <select bind:value={row.scope} aria-label="Budget scope">
-                    {#each SCOPE_OPTIONS as option (option.value)}
-                      <option value={option.value}>{option.label}</option>
+                  <select class="budget-pick" bind:value={row.key} aria-label="Budget">
+                    {#each budgetOptions as option (option.key)}
+                      <option value={option.key}>{option.label}</option>
                     {/each}
                   </select>
-                  {#if row.scope !== "overall"}
-                    <input
-                      class="target-id"
-                      type="text"
-                      inputmode="numeric"
-                      placeholder="ID"
-                      bind:value={row.targetId}
-                      aria-label="Target ID"
-                    />
-                  {/if}
                   <input
                     class="minutes"
                     type="text"
@@ -687,8 +780,9 @@
     align-items: center;
     gap: 0.4rem;
   }
-  .cadence-row .target-id {
-    width: 5rem;
+  .cadence-row .budget-pick {
+    flex: 1 1 12rem;
+    min-width: 10rem;
   }
   .cadence-row .minutes {
     flex: 1 1 10rem;
