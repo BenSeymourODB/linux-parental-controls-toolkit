@@ -255,6 +255,43 @@ describe("effectivePolicy — allowed windows", () => {
     expect(result.allowedWindows).toEqual([{ start: 960, end: 1080 }]);
   });
 
+  it("unions multiple `extend` windows over a deny, merging abutting ones", () => {
+    const result = effectivePolicy(
+      mkInput({
+        schedules: [
+          mkRule({ id: 1, ordinal: 0, action: "deny" }),
+          mkRule({
+            id: 2,
+            ordinal: 1,
+            action: "extend",
+            recurrenceStartMinute: 480,
+            recurrenceEndMinute: 600,
+          }),
+          mkRule({
+            id: 3,
+            ordinal: 2,
+            action: "extend",
+            recurrenceStartMinute: 600,
+            recurrenceEndMinute: 720,
+          }),
+          mkRule({
+            id: 4,
+            ordinal: 3,
+            action: "extend",
+            recurrenceStartMinute: 900,
+            recurrenceEndMinute: 960,
+          }),
+        ],
+      }),
+    );
+    // The two abutting extends (480–600, 600–720) merge into one; the disjoint
+    // 900–960 stays separate. Everything else remains denied.
+    expect(result.allowedWindows).toEqual([
+      { start: 480, end: 720 },
+      { start: 900, end: 960 },
+    ]);
+  });
+
   it("merges adjacent allowed segments split by a rule boundary into one window", () => {
     // A mid-day allow rule on a baseline-allow day splits the timeline into
     // three abutting allowed segments; they must collapse back to a single
@@ -448,7 +485,7 @@ describe("effectivePolicy — date-specific exceptions (#142)", () => {
     expect(result.allowedWindows).toEqual([{ start: 0, end: 1440 }]);
   });
 
-  it("resolves overrides in precedence order — index 0 wins", () => {
+  it("resolves overrides in precedence order — index 0 allow wins", () => {
     // Two active overall overrides; the first in the array (highest precedence)
     // decides, mirroring gatherUserExceptions' own-before-group / newest-first.
     const result = effectivePolicy(
@@ -460,6 +497,52 @@ describe("effectivePolicy — date-specific exceptions (#142)", () => {
       }),
     );
     expect(result.allowedWindows).toEqual([{ start: 0, end: 1440 }]);
+  });
+
+  it("resolves overrides in precedence order — index 0 deny wins → no access", () => {
+    const result = effectivePolicy(
+      mkInput({
+        exceptions: [
+          mkException({ id: 2, action: "deny" }),
+          mkException({ id: 1, action: "allow" }),
+        ],
+      }),
+    );
+    expect(result.allowedWindows).toEqual([]);
+  });
+
+  it("honours a mid-day expiry: an `allow` override until 21:00 over a recurring deny", () => {
+    // "allow games until 9pm tonight" — a precise-instant expiry, not a day
+    // boundary — carves the [0, 1260) window out of an otherwise all-day deny.
+    const result = effectivePolicy(
+      mkInput({
+        schedules: [mkRule({ id: 1, ordinal: 0, action: "deny" })],
+        exceptions: [
+          mkException({
+            action: "allow",
+            effectiveFrom: new Date("2024-06-03T00:00:00Z"),
+            expiresAt: new Date("2024-06-03T21:00:00Z"),
+          }),
+        ],
+      }),
+    );
+    expect(result.allowedWindows).toEqual([{ start: 0, end: 1260 }]);
+  });
+
+  it("honours a mid-day expiry: a `deny` override until 21:00 on a baseline-allow day", () => {
+    const result = effectivePolicy(
+      mkInput({
+        exceptions: [
+          mkException({
+            action: "deny",
+            effectiveFrom: new Date("2024-06-03T00:00:00Z"),
+            expiresAt: new Date("2024-06-03T21:00:00Z"),
+          }),
+        ],
+      }),
+    );
+    // Denied until 21:00, then the baseline-allow resumes.
+    expect(result.allowedWindows).toEqual([{ start: 1260, end: 1440 }]);
   });
 
   it("an `extend` override widens past a recurring deny", () => {

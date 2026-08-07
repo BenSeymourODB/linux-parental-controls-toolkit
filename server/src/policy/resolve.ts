@@ -46,6 +46,9 @@ import type { BudgetWindow, Scope, ScheduleAction } from "./enums.js";
 import { MINUTES_PER_DAY } from "./recurrence.js";
 import { byOrdinal, type RuleActivePredicate, type ScheduleRule } from "./schedule-precedence.js";
 
+/** Milliseconds in one minute — for projecting a UTC instant onto local minutes-of-day. */
+const MS_PER_MINUTE = 60_000;
+
 /**
  * The subset of a {@link import("./schema.js").budgets} row the resolver reads.
  * Structural so callers pass either a Drizzle row or a test fixture.
@@ -146,9 +149,11 @@ export interface EffectivePolicy {
   /** Effective per-activity / per-group daily allowances, ascending by target. */
   readonly perActivitySeconds: ActivityQuota[];
   /**
-   * Every schedule rule in play on the day (all scopes), in precedence order
+   * Every **schedule** rule in play on the day (all scopes), in precedence order
    * (`ordinal`, then `id`). Lets a preview surface render inherited/competing
-   * rules, not just the resolved `overall` windows.
+   * rules, not just the resolved `overall` windows. Date-specific exceptions are
+   * composed into {@link allowedWindows} but deliberately not listed here yet —
+   * surfacing their provenance in this list is #343.
    */
   readonly activeRules: ActiveRule[];
 }
@@ -330,14 +335,32 @@ function resolveAllowedWindows(overallRules: readonly ActiveRule[]): AllowedWind
 
 /**
  * Is `exc` active on the local day whose UTC bounds are `[dayStart, dayEnd)`?
- * Its active window is `[effective_from ?? created_at, expires_at)` (ADR 0005
- * §2); this is the exception analogue of {@link appliesOnDay}, applied at day
- * granularity (ADR 0005 anchors the bounds at local-day boundaries, exact for
- * every in-contract input).
+ * The exception's local-minute `[start, end)` window on the day whose UTC bounds
+ * are `[dayStart, dayEnd)`, or `null` when its active window
+ * `[effective_from ?? created_at, expires_at)` (ADR 0005 §2) does not overlap
+ * the day at all.
+ *
+ * The active window is a precise instant range (an exception `expires_at` is an
+ * exact instant — "allow games until 9pm tonight", ADR 0012 §1), so it is
+ * **intersected** with the day and projected onto local minutes: an interior day
+ * of a multi-day override yields the full `[0, 1440)`, while the first/last day
+ * yields the partial window the instants carve out. Minutes-since-local-midnight
+ * are the elapsed real minutes from `dayStart` (the UTC instant of local
+ * midnight), matching the resolver's existing minute model.
  */
-function exceptionAppliesOnDay(exc: ExceptionInput, dayStart: Date, dayEnd: Date): boolean {
-  const from = exc.effectiveFrom ?? exc.createdAt;
-  return from.getTime() < dayEnd.getTime() && exc.expiresAt.getTime() > dayStart.getTime();
+function exceptionWindowOnDay(
+  exc: ExceptionInput,
+  dayStart: Date,
+  dayEnd: Date,
+): { start: number; end: number } | null {
+  const fromMs = (exc.effectiveFrom ?? exc.createdAt).getTime();
+  const startMs = Math.max(fromMs, dayStart.getTime());
+  const endMs = Math.min(exc.expiresAt.getTime(), dayEnd.getTime());
+  if (startMs >= endMs) return null;
+  return {
+    start: Math.round((startMs - dayStart.getTime()) / MS_PER_MINUTE),
+    end: Math.round((endMs - dayStart.getTime()) / MS_PER_MINUTE),
+  };
 }
 
 /** Is `grant` live and overlapping the day's `[dayStart, dayEnd)` UTC bounds? */
@@ -453,20 +476,25 @@ export function effectivePolicy(input: EffectivePolicyInput): EffectivePolicy {
     });
 
   // Date-specific overrides (#142, ADR 0012): each exception active on the day
-  // becomes a whole-day rule at the head of the precedence order, so an active
-  // override wins over the recurring rules for the target it covers. The
-  // `exceptions` array is already in precedence order (own-before-group,
-  // newest-before-older); its order is preserved.
-  const exceptionRules: ActiveRule[] = (input.exceptions ?? [])
-    .filter((exc) => exceptionAppliesOnDay(exc, dayStart, dayEnd))
-    .map((exc) => ({
-      id: exc.id,
-      targetKind: exc.targetKind,
-      targetId: exc.targetId,
-      action: exc.action,
-      startMinute: 0,
-      endMinute: MINUTES_PER_DAY,
-    }));
+  // becomes a rule at the head of the precedence order — over the local-minute
+  // window its instant range carves out of the day — so an active override wins
+  // over the recurring rules for the target it covers. The `exceptions` array is
+  // already in precedence order (own-before-group, newest-before-older); its
+  // order is preserved.
+  const exceptionRules: ActiveRule[] = (input.exceptions ?? []).flatMap((exc) => {
+    const window = exceptionWindowOnDay(exc, dayStart, dayEnd);
+    if (window === null) return [];
+    return [
+      {
+        id: exc.id,
+        targetKind: exc.targetKind,
+        targetId: exc.targetId,
+        action: exc.action,
+        startMinute: window.start,
+        endMinute: window.end,
+      },
+    ];
+  });
 
   const allowedWindows = resolveAllowedWindows([
     ...exceptionRules.filter((rule) => rule.targetKind === "overall"),

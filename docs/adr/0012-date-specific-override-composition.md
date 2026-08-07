@@ -46,10 +46,16 @@ the existing first-match-wins engine (ADR 0004) rather than a second mechanism:
   `appliesOnDay` for schedules, evaluated at day granularity (ADR 0005 anchors
   the bounds at local-day boundaries, so this is exact for every in-contract
   input).
-- **Intra-day window.** An exception carries no intra-day recurrence, so a
-  candidate exception applies to the **whole day** (`[0, 1440)` local minutes) —
-  the same treatment `schedules` give a date-scoped rule with no recurrence
-  window.
+- **Intra-day window.** An exception carries no intra-day *recurrence*, but its
+  active window `[effective_from ?? created_at, expires_at)` is a precise instant
+  range — an `expires_at` is an exact instant ("allow games until 9pm tonight"),
+  not a day boundary. So on each day it covers, the exception applies over the
+  local-minute window its instant range **intersects** with that day: an interior
+  day of a multi-day override is the full `[0, 1440)`, while the first/last day is
+  the partial window the instants carve out (e.g. `[0, 1260)` for an override that
+  expires at 21:00 local). A day-aligned override (both bounds at local midnight)
+  degenerates to whole days, exactly as the "screen-free vacation week" example
+  intends.
 - **Precedence.** Exceptions are placed **before** the recurring schedule rules
   in the first-match order, so an active override wins over the recurring rules
   for the target it covers — the issue's recommended "date-specific overrides
@@ -101,6 +107,14 @@ Because exceptions carry no seconds amount, they do not change
 `overallSeconds` or the per-activity quotas — only the allow/deny/extend
 **access windows**. Per-activity quota reduction from `deny` rules is unchanged
 (recurring `schedules` do not do it today either) and is out of scope here.
+
+Consequently, **only `overall`-scoped exceptions have an observable effect
+today**: like `activity`/`group`-scoped *schedule* rules, an
+`activity`/`group`-scoped exception is gathered and composed but resolves to a
+no-op (it neither builds an overall window nor reduces a quota) until per-target
+deny enforcement lands. `gatherUserExceptions` still returns all target kinds so
+the composition is ready when that enforcement does; the authoring editor should
+signal that non-`overall` exceptions are not yet enforced.
 
 ## Consequences
 
