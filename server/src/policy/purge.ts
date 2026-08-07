@@ -32,7 +32,9 @@
  * `RetentionPolicy.isExpired` is monotonic in the record timestamp, so each
  * category resolves to a single cutoff instant (`cutoffFor`) and the purge is a
  * set-based `DELETE WHERE <ts> < cutoff` (strict `<`, matching the rule).
- * `keepForever` ⇒ `cutoff === null` ⇒ nothing is purged.
+ * `keepForever` ⇒ `cutoff === null` ⇒ nothing is purged. (Timestamp columns
+ * are stored as whole epoch seconds, so the SQL comparison is second-granular
+ * — irrelevant at a days-scale retention window.)
  *
  * ## Bounded / interruptible batching
  *
@@ -96,6 +98,13 @@ export interface PurgeOptions {
  * and is safe to resume after an interruption for the same reason.
  */
 function purgeInBatches(deleteOneBatch: () => number, batchSize: number): number {
+  // A non-positive batch size can never make progress (`LIMIT 0` deletes
+  // nothing; SQLite treats `LIMIT -1` as unlimited), so the `n < batchSize`
+  // break would never trip — reject it loudly rather than spin forever once
+  // #137 starts driving this with configurable values.
+  if (!Number.isInteger(batchSize) || batchSize < 1) {
+    throw new RangeError(`purge batch size must be a positive integer, got ${batchSize}`);
+  }
   let deleted = 0;
   for (;;) {
     const n = deleteOneBatch();

@@ -304,6 +304,32 @@ describe("batching", () => {
     expect(countUsageSamples()).toBe(1);
   });
 
+  it("handles an expired-row count that is an exact multiple of the batch size", () => {
+    // Exercises the redundant, empty final pass (4 rows / batchSize 2): all
+    // deleted, no rows missed, loop still terminates.
+    for (let i = 0; i < 4; i++) {
+      insertSample(ago(100 + i), ago(99 + i));
+    }
+    const result = purgeUsageSamples(db, windowDays(30), NOW, { batchSize: 2 });
+    expect(result.deleted).toBe(4);
+    expect(countUsageSamples()).toBe(0);
+  });
+
+  it("retains a sample whose interval ended exactly at the cutoff (strict <)", () => {
+    // ended_at === cutoff (now − 30d): on the boundary, so retained — the SQL
+    // `<` matches isExpired's strict age `>`.
+    insertSample(ago(31), ago(30));
+    const result = purgeUsageSamples(db, windowDays(30), NOW);
+    expect(result.deleted).toBe(0);
+    expect(countUsageSamples()).toBe(1);
+  });
+
+  it("rejects a non-positive batch size rather than spinning forever", () => {
+    insertSample(ago(100), ago(99));
+    expect(() => purgeUsageSamples(db, windowDays(30), NOW, { batchSize: 0 })).toThrow(RangeError);
+    expect(() => purgeUsageSamples(db, windowDays(30), NOW, { batchSize: -1 })).toThrow(RangeError);
+  });
+
   it("defaults the batch size when unset", () => {
     expect(DEFAULT_PURGE_BATCH_SIZE).toBeGreaterThan(0);
     insertSample(ago(100), ago(99));
