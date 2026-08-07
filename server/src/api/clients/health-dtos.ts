@@ -62,6 +62,12 @@ export const clientQueueSchema = z.object({
 export const clientHealthSchema = z.object({
   clientId: z.number().int(),
   hostname: z.string(),
+  /** The admin-chosen friendly name (the card's preferred title), or null (#355). */
+  friendlyName: z.string().nullable(),
+  /** The client's self-reported IP address(es) at enrol, or null (#355). */
+  reportedIps: z.array(z.string()).nullable(),
+  /** The observed source IP of the enrol request, or null (#355). */
+  sourceIp: z.string().nullable(),
   reachability: z.enum(clientReachabilityValues),
   /**
    * When the client is `offline`, the classified SSH failure cause (#353) —

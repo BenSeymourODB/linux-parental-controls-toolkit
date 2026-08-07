@@ -89,6 +89,7 @@ export function mintEnrolmentToken(db: PolicyDb, input: MintEnrolmentTokenReques
   const row = enrolmentRepo.createEnrolmentToken(db, {
     tokenHash: hashToken(token),
     hostname: input.hostname ?? null,
+    friendlyName: input.friendlyName ?? null,
     supervisedUsers: input.supervisedUsers,
     expiresAt,
   });
@@ -102,6 +103,12 @@ export interface EnrolOptions {
   sshPublicKeyPath: string;
   /** Request logger, used to warn if the SSH key is present but unreadable. */
   log: FastifyBaseLogger;
+  /**
+   * The observed source IP of the enrol request (`request.ip`), recorded as a
+   * self-report-free ground truth of what reached the server (#355). `null`
+   * when the route couldn't determine one (e.g. a synthetic/injected call).
+   */
+  sourceIp?: string | null;
 }
 
 /**
@@ -184,9 +191,14 @@ export function enrolClient(
   try {
     result = enrolmentRepo.consumeTokenAndEnrol(db, tokenRow.id, {
       hostname: input.hostname,
+      // The admin picks the friendly name at mint time; carry it from the token
+      // onto the client so the card has a recognisable title from first sight.
+      friendlyName: tokenRow.friendlyName,
       sshUser: input.sshUser,
       bearerTokenHash: hashToken(bearerToken),
       links,
+      reportedIps: input.reportedIps ?? null,
+      sourceIp: options.sourceIp ?? null,
       agentVersion: versions.agentVersion,
       componentVersions: versions.componentVersions,
       versionsReportedAt: versions.versionsReportedAt,

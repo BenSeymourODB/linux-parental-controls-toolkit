@@ -94,6 +94,9 @@ function assemble(
   return {
     clientId: client.id,
     hostname: client.hostname,
+    friendlyName: client.friendlyName,
+    reportedIps: client.reportedIps,
+    sourceIp: client.sourceIp,
     reachability: probe?.reachability ?? "unknown",
     reachabilityReason: probe?.reachabilityReason ?? null,
     lastSeen: client.lastSeen === null ? null : client.lastSeen.toISOString(),

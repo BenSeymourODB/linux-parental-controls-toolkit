@@ -39,6 +39,30 @@ const osUserRefSchema = z
 const hostnameSchema = z.string().trim().min(1).max(253);
 /** An SSH login name for the `pct-agent` principal. */
 const sshUserSchema = z.string().trim().min(1).max(64);
+/**
+ * A human-friendly admin label for a client, e.g. "kids' living-room PC"
+ * (#355). Free-form: it travels only server-side (the mint form → the token →
+ * the client row), never through the install script's hand-rolled JSON encoder,
+ * so unlike {@link osUserRefSchema} it is not charset-constrained — only trimmed
+ * and length-bounded. Fastify/zod escape it on the way back out as JSON.
+ */
+const friendlyNameSchema = z.string().trim().min(1).max(100);
+/**
+ * A self-reported client IP address (#355). Constrained to the IPv4/IPv6
+ * literal charset (hex digits, `.`, `:`, and `%` for a link-local zone id) so a
+ * reported value can never carry a `"`/`\`/control char that would break the
+ * install script's hand-rolled JSON encoder, and length-bounded so a
+ * misbehaving client can't write a blob. Deliberately *not* validated as a
+ * fully-parseable address — it is advisory metadata for admin identification,
+ * never an SSH target in this slice — only constrained to be safe to store and
+ * echo.
+ */
+const reportedIpSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(64)
+  .regex(/^[0-9A-Fa-f.:%]+$/, "must be an IPv4/IPv6 address literal");
 /** A positive integer primary key. */
 const positiveIdSchema = z.number().int().positive();
 
@@ -97,6 +121,12 @@ export const mintEnrolmentTokenSchema = z.object({
     .default(DEFAULT_ENROLMENT_TTL_SECONDS),
   /** Optional expected hostname, recorded for the admin's reference. */
   hostname: hostnameSchema.optional(),
+  /**
+   * Optional admin-chosen friendly name (#355), applied to the client row at
+   * claim time. Reframes the mint form's former "Expected hostname" input into
+   * a recognisable label the admin picks up front.
+   */
+  friendlyName: friendlyNameSchema.optional(),
 });
 
 export const enrolmentTokenResponseSchema = z.object({
@@ -123,6 +153,13 @@ export const enrolClientSchema = z.object({
   agentVersion: versionStringSchema.optional(),
   /** Detected versions of the managed components (#164). Optional. */
   componentVersions: componentVersionsSchema.optional(),
+  /**
+   * The client's own primary IPv4/IPv6 address(es) as it detected them (#355).
+   * Advisory metadata for admin identification; each is charset-constrained and
+   * the list is bounded (see {@link reportedIpSchema}). Optional — a client that
+   * couldn't detect any simply omits it.
+   */
+  reportedIps: z.array(reportedIpSchema).max(16).optional(),
 });
 
 export const enrolResponseSchema = z.object({

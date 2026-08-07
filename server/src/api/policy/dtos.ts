@@ -106,21 +106,31 @@ export function toUserResponse(row: UserRow): UserResponse {
 export const createClientSchema = z.object({
   hostname: z.string().trim().min(1).max(253),
   sshUser: z.string().trim().min(1).max(64),
+  /** Optional admin-chosen friendly name (#355), also settable later via PATCH. */
+  friendlyName: z.string().trim().min(1).max(100).optional(),
 });
 
 export const updateClientSchema = z
   .object({
     hostname: z.string().trim().min(1).max(253).optional(),
     sshUser: z.string().trim().min(1).max(64).optional(),
+    /** Admin-editable friendly name (#355); the card titles on it. */
+    friendlyName: z.string().trim().min(1).max(100).optional(),
   })
   .refine(nonEmpty, { message: "At least one field must be provided" });
 
 export const clientResponseSchema = z.object({
   id: z.number().int(),
   hostname: z.string(),
+  /** The admin-chosen friendly name, or null if none set (#355). */
+  friendlyName: z.string().nullable(),
   sshUser: z.string(),
   enrolledAt: z.string(),
   lastSeen: z.string().nullable(),
+  /** The client's self-reported IP address(es) at enrol, or null (#355). Read-only. */
+  reportedIps: z.array(z.string()).nullable(),
+  /** The observed source IP of the enrol request, or null (#355). Read-only. */
+  sourceIp: z.string().nullable(),
   /**
    * Whether this client has been through the enrolment exchange
    * (`POST /api/clients/enrol`) — true once it holds a bearer token. A client
@@ -147,9 +157,12 @@ export function toClientResponse(row: ClientRow): ClientResponse {
   return {
     id: row.id,
     hostname: row.hostname,
+    friendlyName: row.friendlyName,
     sshUser: row.sshUser,
     enrolledAt: row.enrolledAt.toISOString(),
     lastSeen: row.lastSeen === null ? null : row.lastSeen.toISOString(),
+    reportedIps: row.reportedIps,
+    sourceIp: row.sourceIp,
     enrolled: row.bearerTokenHash !== null,
     platform: row.platform,
   };
