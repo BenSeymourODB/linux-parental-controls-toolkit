@@ -28,21 +28,23 @@
  *
  * Each rule is tagged with its {@link RuleSource} so the future inherited-vs-
  * local editor (#124) can show which rules are local and which are inherited
- * (and from which group). Exceptions are intentionally not resolved here —
- * exception composition into the effective policy is #142 and `resolve.ts`
- * consumes neither user nor group exceptions yet.
+ * (and from which group). The same user-over-group merge is applied to
+ * date-specific overrides by {@link gatherUserExceptions} (#142, ADR 0012), so
+ * the effective view reflects inherited group exceptions too.
  *
  * License boundary: none touched — plain TypeScript over the policy model.
  */
 import type { PolicyDb } from "./db.js";
 import {
   listGroupBudgets,
+  listGroupExceptions,
   listGroupSchedules,
   listUserBudgets,
+  listUserExceptions,
   listUserGroupsForUser,
   listUserSchedules,
 } from "./repository.js";
-import type { BudgetInput } from "./resolve.js";
+import type { BudgetInput, ExceptionInput } from "./resolve.js";
 import { byOrdinal, type ScheduleRule } from "./schedule-precedence.js";
 
 /** Where a gathered rule came from: the user's own list, or an inherited group. */
@@ -222,4 +224,52 @@ export function mergeBudgetsWithGroups(
  */
 export function gatherUserBudgets(db: PolicyDb, userId: number): GatheredBudget[] {
   return mergeBudgetsWithGroups(db, userId, listUserBudgets(db, userId));
+}
+
+/** Copy the {@link ExceptionInput} fields off a user or group exception row. */
+function pickExceptionFields(row: {
+  id: number;
+  targetKind: ExceptionInput["targetKind"];
+  targetId: number | null;
+  action: ExceptionInput["action"];
+  effectiveFrom: Date | null;
+  expiresAt: Date;
+  createdAt: Date;
+}): ExceptionInput {
+  return {
+    id: row.id,
+    targetKind: row.targetKind,
+    targetId: row.targetId,
+    action: row.action,
+    effectiveFrom: row.effectiveFrom,
+    expiresAt: row.expiresAt,
+    createdAt: row.createdAt,
+  };
+}
+
+/** Sort exceptions newest-first (descending `createdAt`, then `id`) within a level. */
+function newestFirst(a: ExceptionInput, b: ExceptionInput): number {
+  return b.createdAt.getTime() - a.createdAt.getTime() || b.id - a.id;
+}
+
+/**
+ * The user's effective date-specific overrides (#142, ADR 0012 §1),
+ * **in precedence order** for {@link import("./resolve.js").effectivePolicy}:
+ *
+ * 1. the user's own exceptions, newest-first (a more recently authored one-off
+ *    wins);
+ * 2. then, for each group the user belongs to (ascending group `id`), that
+ *    group's exceptions, newest-first.
+ *
+ * Own-before-group mirrors the schedule precedence (ADR 0007) so an individual's
+ * override wins over an inherited group override. Unlike schedules there is no
+ * `ordinal` and no dense re-sequencing: the resolver treats array position as
+ * precedence directly, so this order *is* the contract.
+ */
+export function gatherUserExceptions(db: PolicyDb, userId: number): ExceptionInput[] {
+  const own = listUserExceptions(db, userId).map(pickExceptionFields).sort(newestFirst);
+  const inherited = listUserGroupsForUser(db, userId).flatMap((group) =>
+    listGroupExceptions(db, group.id).map(pickExceptionFields).sort(newestFirst),
+  );
+  return [...own, ...inherited];
 }

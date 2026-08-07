@@ -24,6 +24,7 @@ import { resolveEffectiveTz, localCalendarDate } from "../../policy/budget-windo
 import { scheduleActionSchema, scopeSchema } from "../../policy/enums.js";
 import {
   gatherUserBudgets,
+  gatherUserExceptions,
   gatherUserScheduleRules,
   type GatheredBudget,
 } from "../../policy/group-resolution.js";
@@ -182,6 +183,9 @@ export function registerEffectiveRoutes(scope: FastifyInstance, settings: Settin
       // The user's effective budget baseline: own budgets, plus inherited group
       // budgets for any slot the user has not overridden (#134, ADR 0008).
       const budgetRows = gatherUserBudgets(scope.db, userId);
+      // Date-specific overrides: own exceptions merged with inherited group
+      // exceptions, in precedence order (#142, ADR 0012).
+      const exceptionRows = gatherUserExceptions(scope.db, userId);
       const grantRows: GrantInput[] = scope.db
         .select()
         .from(grants)
@@ -195,6 +199,7 @@ export function registerEffectiveRoutes(scope: FastifyInstance, settings: Settin
           schedules: scheduleRules,
           budgets: budgetRows,
           grants: grantRows,
+          exceptions: exceptionRows,
         }),
       );
     },
