@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   gatherUserBudgets,
+  gatherUserExceptions,
   gatherUserScheduleRules,
   mergeScheduleRulesWithGroups,
 } from "../../src/policy/group-resolution.js";
@@ -340,5 +341,114 @@ describe("gatherUserBudgets (#134)", () => {
     expect(gathered).toHaveLength(2);
     expect(gathered.every((b) => b.source.kind === "group")).toBe(true);
     expect(gathered.reduce((sum, b) => sum + b.secondsAllowed, 0)).toBe(1800);
+  });
+});
+
+describe("gatherUserExceptions (#142, ADR 0012)", () => {
+  let db: TestDb;
+  let userId: number;
+  const expiresAt = new Date("2030-01-01T00:00:00Z");
+  beforeEach(() => {
+    db = testDb();
+    userId = repo.createUser(db, { displayName: "Alice" }).id;
+  });
+  afterEach(() => {
+    db.$client.close();
+  });
+
+  it("returns an empty list for a user with no exceptions and no groups", () => {
+    expect(gatherUserExceptions(db, userId)).toEqual([]);
+  });
+
+  it("returns only the user's own exceptions, newest-first, when in no group", () => {
+    const first = repo.createException(db, {
+      userId,
+      targetKind: "overall",
+      action: "deny",
+      expiresAt,
+    });
+    const second = repo.createException(db, {
+      userId,
+      targetKind: "overall",
+      action: "allow",
+      expiresAt,
+    });
+    // Newest-first: same-second createdAt ties break on descending id.
+    expect(gatherUserExceptions(db, userId).map((e) => e.id)).toEqual([second.id, first.id]);
+  });
+
+  it("places the user's own exceptions before inherited group exceptions", () => {
+    const group = repo.createUserGroup(db, { name: "Kids" });
+    repo.addUserToGroup(db, group.id, userId);
+    const groupExc = repo.createGroupException(db, {
+      userGroupId: group.id,
+      targetKind: "overall",
+      action: "deny",
+      expiresAt,
+    });
+    const ownExc = repo.createException(db, {
+      userId,
+      targetKind: "overall",
+      action: "allow",
+      expiresAt,
+    });
+
+    const gathered = gatherUserExceptions(db, userId);
+    // Own first (highest precedence), then the inherited group override.
+    expect(gathered.map((e) => e.id)).toEqual([ownExc.id, groupExc.id]);
+    expect(gathered.map((e) => e.action)).toEqual(["allow", "deny"]);
+  });
+
+  it("orders inherited exceptions by ascending group id, then newest-first within a group", () => {
+    const groupA = repo.createUserGroup(db, { name: "A" });
+    const groupB = repo.createUserGroup(db, { name: "B" });
+    repo.addUserToGroup(db, groupA.id, userId);
+    repo.addUserToGroup(db, groupB.id, userId);
+    const bExc = repo.createGroupException(db, {
+      userGroupId: groupB.id,
+      targetKind: "overall",
+      action: "deny",
+      expiresAt,
+    });
+    const aExc1 = repo.createGroupException(db, {
+      userGroupId: groupA.id,
+      targetKind: "overall",
+      action: "deny",
+      expiresAt,
+    });
+    const aExc2 = repo.createGroupException(db, {
+      userGroupId: groupA.id,
+      targetKind: "overall",
+      action: "allow",
+      expiresAt,
+    });
+
+    // groupA (lower id) first — newest-first within it — then groupB.
+    expect(gatherUserExceptions(db, userId).map((e) => e.id)).toEqual([
+      aExc2.id,
+      aExc1.id,
+      bExc.id,
+    ]);
+  });
+
+  it("preserves each exception's active-window fields for the resolver", () => {
+    const effectiveFrom = new Date("2029-06-01T00:00:00Z");
+    repo.createException(db, {
+      userId,
+      targetKind: "activity",
+      targetId: 5,
+      action: "extend",
+      effectiveFrom,
+      expiresAt,
+    });
+    const [gathered] = gatherUserExceptions(db, userId);
+    expect(gathered).toMatchObject({
+      targetKind: "activity",
+      targetId: 5,
+      action: "extend",
+      effectiveFrom,
+      expiresAt,
+    });
+    expect(gathered?.createdAt).toBeInstanceOf(Date);
   });
 });
