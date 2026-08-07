@@ -70,6 +70,7 @@ function budget(overrides: Partial<BudgetResponse> = {}): BudgetResponse {
     targetId: null,
     window: "daily",
     secondsAllowed: 3600,
+    recurrenceDays: null,
     ...overrides,
   };
 }
@@ -294,6 +295,7 @@ describe("BudgetsView", () => {
         targetId: null,
         window: "daily",
         secondsAllowed: 7200,
+        recurrenceDays: null,
         source: { kind: "user" },
       },
       {
@@ -301,6 +303,7 @@ describe("BudgetsView", () => {
         targetId: 10,
         window: "daily",
         secondsAllowed: 1800,
+        recurrenceDays: null,
         source: { kind: "group", groupId: 3 },
       },
     ]);
@@ -333,6 +336,7 @@ describe("BudgetsView", () => {
         targetId: 10,
         window: "daily",
         secondsAllowed: 1800,
+        recurrenceDays: null,
         source: { kind: "group", groupId: 3 },
       },
       {
@@ -340,6 +344,7 @@ describe("BudgetsView", () => {
         targetId: 10,
         window: "daily",
         secondsAllowed: 3600,
+        recurrenceDays: null,
         source: { kind: "group", groupId: 3 },
       },
     ]);
@@ -366,6 +371,7 @@ describe("BudgetsView", () => {
         targetId: null,
         window: "daily",
         secondsAllowed: 7200,
+        recurrenceDays: null,
         source: { kind: "user" },
       },
     ]);
@@ -384,6 +390,7 @@ describe("BudgetsView", () => {
         targetId: null,
         window: "daily",
         secondsAllowed: 7200,
+        recurrenceDays: null,
         source: { kind: "group", groupId: 3 },
       },
     ]);

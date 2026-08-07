@@ -292,8 +292,13 @@ interface DayBounds {
   readonly end: Date;
 }
 
-/** The `(scope, window, target)` slot a budget occupies (ADR 0008 / 0012). */
-function budgetSlotKey(budget: BudgetInput): string {
+/**
+ * The `(scope, window, target)` slot a budget occupies — the key over which
+ * ADR 0008 dedupes cross-source budgets and ADR 0012 groups a slot's rows for
+ * weekday selection. Exported so {@link import("./group-resolution.js")} shares
+ * the one definition (the two layers must key identically or they drift).
+ */
+export function budgetSlotKey(budget: BudgetInput): string {
   return `${budget.scope}:${budget.window}:${budget.targetId ?? "null"}`;
 }
 

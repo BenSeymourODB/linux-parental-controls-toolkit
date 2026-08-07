@@ -640,6 +640,25 @@ describe("policy CRUD routes — policy model (#148)", () => {
     expect(bad.statusCode).toBe(400);
   });
 
+  it("rejects PATCHing a weekday mask onto a stored non-daily budget via the CHECK (#141)", async () => {
+    const userId = await makeUser();
+    // A weekly budget is created with no mask (the PATCH omits `window`, so the
+    // daily-only DTO refine can't see it — the storage CHECK is the guard).
+    const weekly = (
+      await auth({
+        method: "POST",
+        url: "/api/budgets",
+        payload: { userId, scope: "overall", window: "weekly", secondsAllowed: 36000 },
+      })
+    ).json();
+    const res = await auth({
+      method: "PATCH",
+      url: `/api/budgets/${weekly.id}`,
+      payload: { recurrenceDays: 31 },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
   it("creates an activity-scoped budget against an existing target", async () => {
     const userId = await makeUser();
     const activityId = await makeActivity("steam");

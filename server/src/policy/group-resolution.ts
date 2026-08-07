@@ -42,7 +42,7 @@ import {
   listUserGroupsForUser,
   listUserSchedules,
 } from "./repository.js";
-import type { BudgetInput } from "./resolve.js";
+import { budgetSlotKey, type BudgetInput } from "./resolve.js";
 import { byOrdinal, type ScheduleRule } from "./schedule-precedence.js";
 
 /** Where a gathered rule came from: the user's own list, or an inherited group. */
@@ -133,16 +133,6 @@ export function gatherUserScheduleRules(db: PolicyDb, userId: number): GatheredS
  */
 export interface GatheredBudget extends BudgetInput {
   readonly source: RuleSource;
-}
-
-/**
- * Identity of a budget "slot" — the `(scope, window, target)` triple over which
- * a user-level budget fully replaces an inherited group budget (ADR 0008). The
- * `targetId` is part of the key so an `activity`/`group` override only shadows
- * the same activity/group, not every budget of that scope.
- */
-function budgetSlotKey(budget: BudgetInput): string {
-  return `${budget.scope}:${budget.window}:${budget.targetId ?? "null"}`;
 }
 
 /**

@@ -404,8 +404,10 @@ export const budgetResponseSchema = z.object({
   secondsAllowed: z.number().int(),
   // Present on every response; `.default(null)` also lets this schema double as
   // the save-and-push **preview request** body (#64) — a proposed uniform
-  // budget need not carry the weekday mask.
-  recurrenceDays: z.number().int().nullable().default(null),
+  // budget need not carry the weekday mask. Bounded by `weekdayMaskSchema`
+  // (1..127) so a proposed mask is validated the same as on create — and so a
+  // meaningless `0` (neither weekday-specific nor uniform) can't slip through.
+  recurrenceDays: weekdayMaskSchema.nullable().default(null),
 });
 
 export type CreateBudgetRequest = z.infer<typeof createBudgetSchema>;

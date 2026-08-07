@@ -53,6 +53,7 @@ function budget(overrides: Partial<GroupBudgetResponse> = {}): GroupBudgetRespon
     targetId: null,
     window: "daily",
     secondsAllowed: 3600,
+    recurrenceDays: null,
     ...overrides,
   };
 }
