@@ -322,6 +322,18 @@ describe("loadSettings", () => {
       }
     });
 
+    it("ignores other mirror vars when disabled (default mode strips them)", () => {
+      const settings = loadSettings({
+        PCT_TIMEKPR_MIRROR: "disabled",
+        PCT_TIMEKPR_MIRROR_URL: "https://apt.lan/timekpr",
+        PCT_TIMEKPR_MIRROR_DIR: "/srv/apt/timekpr",
+        PCT_TIMEKPR_MIRROR_PACKAGE: "timekpr-next-beta",
+        PCT_TIMEKPR_MIRROR_VERSION: "0.5.5",
+      });
+
+      expect(settings.timekprMirror).toEqual({ mode: "disabled" });
+    });
+
     describe("external mode", () => {
       it("parses the apt repo url", () => {
         const settings = loadSettings({
@@ -335,8 +347,15 @@ describe("loadSettings", () => {
         });
       });
 
-      it("requires a url", () => {
-        expect(() => loadSettings({ PCT_TIMEKPR_MIRROR: "external" })).toThrow(SettingsError);
+      it("requires a url, naming the field", () => {
+        try {
+          loadSettings({ PCT_TIMEKPR_MIRROR: "external" });
+          expect.unreachable("should have thrown");
+        } catch (err) {
+          expect(err).toBeInstanceOf(SettingsError);
+          // Fails fast at startup naming the offending field, not a raw stack.
+          expect((err as SettingsError).message).toContain("url");
+        }
       });
 
       it("requires a valid url", () => {
