@@ -263,4 +263,6 @@ export {
   type ServerEvent,
   type ServerEventType,
   type EventFrame,
+  CLIENT_CAPABILITIES,
+  type ClientCapability,
 } from "../events/index.js";
