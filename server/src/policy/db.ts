@@ -54,6 +54,15 @@ export type PolicyDb = BetterSQLite3Database<typeof schema> & {
   $client: Database.Database;
 };
 
+/**
+ * A transaction handle over the policy store — the argument drizzle hands the
+ * `db.transaction((tx) => …)` callback. Structurally a {@link PolicyDb} without
+ * the `$client` escape hatch, so a write helper that must run either directly
+ * or inside a transaction takes `PolicyDb | PolicyTx` and callers can pass
+ * either the db or a `tx`.
+ */
+export type PolicyTx = Parameters<Parameters<PolicyDb["transaction"]>[0]>[0];
+
 /** Options for {@link createDb}. */
 export interface CreateDbOptions {
   /**

@@ -11,14 +11,21 @@
  * — the rollups the Phase-8 enforcement sweep then reads.
  *
  * **Pull window / cursor.** `usage_samples` is a plain append with no
- * uniqueness constraint and there is no durable pull cursor yet (#162 deferred
- * it). To keep overlapping passes from double-counting, this consumer holds an
+ * uniqueness constraint (#162 made cross-pull de-dup the pull layer's job). To
+ * keep overlapping passes from double-counting, this consumer holds an
  * in-memory per-client cursor of the last successfully-pulled window `end`:
  * each pass queries `[cursor ?? (passEnd − initialLookback), passEnd]` and, only
- * after a successful insert, advances the cursor to `passEnd`. The cursor does
- * not survive a restart — a durable cursor is tracked as a follow-up — so a
- * restart re-pulls at most `initialLookback`. Missing telemetry credits no
- * consumption (#88), so any gap is non-punitive.
+ * after a successful insert, advances the cursor to `passEnd`. That cursor is
+ * now also **durable** (#382): the pipeline seeds it from
+ * `clients.last_telemetry_pull_at` on boot and this consumer persists each
+ * advance via {@link saveTelemetryCursor} in the **same transaction** as the
+ * sample insert, so the cursor can never commit ahead of (or behind) the rows
+ * it accounts for. A restart therefore resumes exactly where the last
+ * successful pull ended rather than re-pulling `initialLookback` and
+ * overlapping already-persisted samples — even if the process is killed
+ * mid-pass. A client with no persisted cursor yet still falls back to
+ * `initialLookback`. Missing telemetry credits no consumption (#88), so any gap
+ * is non-punitive.
  *
  * **Single supervised user per client (Alpha-1).** `aw-server` binds one OS
  * account's activity on `:5600`; the loopback tunnel can't disambiguate several
@@ -35,6 +42,7 @@ import { eq } from "drizzle-orm";
 
 import type { PolicyDb } from "../policy/db.js";
 import { activities, usersOnClients } from "../policy/schema.js";
+import { saveTelemetryCursor } from "../policy/telemetry-cursor.js";
 import { insertUsageSamples } from "../policy/usage.js";
 import type {
   ActivityMatcher,
@@ -211,12 +219,25 @@ export function createUsageTelemetryConsumer(
     // hinge on an unverified aw-server semantic. (Under a stricter start-time
     // filter this can only under-credit an event's out-of-window tail — bounded
     // and non-punitive per #88 — never over-credit.)
-    const inserted = insertUsageSamples(db, clipToWindow(candidates, start, end));
+    // Persist the samples and advance the durable cursor (#382) in one
+    // transaction so the two commit or roll back together. Without it, a crash
+    // in the window *between* the two writes (SIGKILL / OOM / power loss) after
+    // the insert commits but before the cursor advance would, on the next boot,
+    // leave the cursor behind the already-persisted samples → that window is
+    // re-pulled and its rows appended a second time (`usage_samples` has no
+    // uniqueness constraint, by design), a punitive over-count. Wrapping both
+    // closes that window. An empty-but-clean pull inserts nothing yet still
+    // advances the cursor — intended.
+    const inserted = db.transaction((tx) => {
+      const rows = insertUsageSamples(tx, clipToWindow(candidates, start, end));
+      saveTelemetryCursor(tx, client.id, end);
+      return rows;
+    });
 
-    // Advance the cursor after a successful pull (regardless of row count, so a
-    // clean pull that matched nothing still moves forward). A mid-pull failure
-    // throws and is isolated by runTelemetryPull, leaving the cursor unmoved so
-    // the same window is re-pulled next pass rather than skipped.
+    // Advance the in-memory cursor only after the transaction commits, so it can
+    // never outrun the durable one. A mid-pull failure throws before this (and
+    // rolls the transaction back), leaving both cursors unmoved so the same
+    // window is re-pulled next pass rather than skipped.
     cursor.set(client.id, end);
 
     logger.info(

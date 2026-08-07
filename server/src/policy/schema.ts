@@ -160,6 +160,16 @@ export const clients = sqliteTable(
     bearerTokenHash: text("bearer_token_hash"),
     enrolledAt: timestampNow("enrolled_at"),
     lastSeen: integer("last_seen", { mode: "timestamp" }),
+    /**
+     * Durable telemetry pull cursor (#382): the `end` of the last window whose
+     * `UsageSample` rows were successfully persisted for this client. The
+     * Phase-5 pull seeds its in-memory cursor from this on boot and advances
+     * both together after each successful insert, so the first pass after a
+     * restart resumes exactly here instead of re-pulling the whole
+     * `initialLookback` window (a bounded double-count). `NULL` = no successful
+     * pull yet → the pull falls back to `initialLookback`.
+     */
+    lastTelemetryPullAt: integer("last_telemetry_pull_at", { mode: "timestamp" }),
     agentVersion: text("agent_version"),
     componentVersions: text("component_versions", { mode: "json" }).$type<ComponentVersions>(),
     versionsReportedAt: integer("versions_reported_at", { mode: "timestamp" }),

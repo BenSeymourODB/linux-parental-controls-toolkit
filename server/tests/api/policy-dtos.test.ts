@@ -48,6 +48,7 @@ describe("policy DTO mappers", () => {
       agentVersion: null,
       componentVersions: null,
       versionsReportedAt: null,
+      lastTelemetryPullAt: null,
       platform: "linux",
       updateRequired: false,
     };
@@ -73,6 +74,7 @@ describe("policy DTO mappers", () => {
       agentVersion: null,
       componentVersions: null,
       versionsReportedAt: null,
+      lastTelemetryPullAt: null,
       platform: "linux",
       updateRequired: false,
     };
@@ -90,6 +92,7 @@ describe("policy DTO mappers", () => {
       agentVersion: null,
       componentVersions: null,
       versionsReportedAt: null,
+      lastTelemetryPullAt: null,
       platform: "linux",
       updateRequired: false,
     };
@@ -107,6 +110,7 @@ describe("policy DTO mappers", () => {
       agentVersion: null,
       componentVersions: null,
       versionsReportedAt: null,
+      lastTelemetryPullAt: null,
       platform: "windows",
       updateRequired: false,
     };

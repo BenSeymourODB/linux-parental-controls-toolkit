@@ -3,6 +3,7 @@
  * #162 pull, turned on by #327). Drives `createUsageTelemetryConsumer` against a
  * seeded in-memory DB and a fake `aw-server` event source — no live tunnel.
  */
+import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -22,6 +23,7 @@ import type {
   TelemetryConsumeContext,
   TelemetryLogger,
 } from "../../src/transport/activitywatch/telemetry.js";
+import { saveTelemetryCursor } from "../../src/policy/telemetry-cursor.js";
 import { testDb, type TestDb } from "../helpers/db.js";
 
 /** A logger whose calls are inspectable. */
@@ -91,6 +93,17 @@ describe("createUsageTelemetryConsumer", () => {
       baseUrl: "http://127.0.0.1:54321",
       logger,
     };
+  }
+
+  /** The durable cursor persisted on the client row (#382), or `null`. */
+  function persistedCursor(clientId: number): Date | null {
+    const row = db
+      .select({ lastTelemetryPullAt: clients.lastTelemetryPullAt })
+      .from(clients)
+      .where(eq(clients.id, clientId))
+      .get();
+    if (row === undefined) throw new Error(`no client ${clientId}`);
+    return row.lastTelemetryPullAt;
   }
 
   it("normalises a single-user client's window events into usage samples and advances the cursor", async () => {
@@ -263,5 +276,67 @@ describe("createUsageTelemetryConsumer", () => {
     await expect(consume(context(clientId, fakeLogger()))).rejects.toThrow("aw-server exploded");
     expect(cursor.has(clientId)).toBe(false);
     expect(db.select().from(usageSamples).all()).toHaveLength(0);
+    // The durable cursor stays unmoved too (#382): the same window re-pulls.
+    expect(persistedCursor(clientId)).toBeNull();
+  });
+
+  it("leaves a pre-existing durable cursor unchanged when the pull fails (#382)", async () => {
+    const { clientId } = seedClient(["Alice"]);
+    db.insert(activities).values({ kind: "app", matcher: "firefox" }).run();
+    // A cursor an earlier successful pass already advanced.
+    const earlier = new Date("2024-02-15T11:50:00.000Z");
+    saveTelemetryCursor(db, clientId, earlier);
+    const cursor = new Map<number, Date>([[clientId, earlier]]);
+    const boom: AwEventSource = {
+      getWindowEvents: () => Promise.reject(new Error("aw-server exploded")),
+      getAfkEvents: () => Promise.resolve([]),
+    };
+    const consume = createUsageTelemetryConsumer({
+      db,
+      cursor,
+      passEnd: () => PASS_END,
+      initialLookbackMs: LOOKBACK_MS,
+      createSource: () => boom,
+    });
+
+    await expect(consume(context(clientId, fakeLogger()))).rejects.toThrow("aw-server exploded");
+    // The failed pass must not rewind or clobber the already-advanced cursor.
+    expect(persistedCursor(clientId)).toEqual(earlier);
+    expect(cursor.get(clientId)).toEqual(earlier);
+  });
+
+  it("persists the cursor durably on a successful pull (#382)", async () => {
+    const { clientId } = seedClient(["Alice"]);
+    db.insert(activities).values({ kind: "app", matcher: "firefox" }).run();
+    const consume = createUsageTelemetryConsumer({
+      db,
+      cursor: new Map(),
+      passEnd: () => PASS_END,
+      initialLookbackMs: LOOKBACK_MS,
+      createSource: () => fakeSource([windowEvent("firefox", "2024-02-15T11:55:00.000Z", 120)]),
+    });
+
+    await consume(context(clientId, fakeLogger()));
+
+    // Advanced to this pass's end, so a restart resumes here rather than
+    // re-pulling `initialLookback`.
+    expect(persistedCursor(clientId)).toEqual(PASS_END);
+  });
+
+  it("persists the cursor even when a clean pull matched nothing (#382)", async () => {
+    const { clientId } = seedClient(["Alice"]);
+    db.insert(activities).values({ kind: "app", matcher: "firefox" }).run();
+    const consume = createUsageTelemetryConsumer({
+      db,
+      cursor: new Map(),
+      passEnd: () => PASS_END,
+      initialLookbackMs: LOOKBACK_MS,
+      createSource: () => fakeSource([]), // no events this pass
+    });
+
+    await consume(context(clientId, fakeLogger()));
+
+    expect(db.select().from(usageSamples).all()).toHaveLength(0);
+    expect(persistedCursor(clientId)).toEqual(PASS_END);
   });
 });

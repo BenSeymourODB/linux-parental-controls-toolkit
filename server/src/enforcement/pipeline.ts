@@ -34,6 +34,7 @@ import type { FastifyBaseLogger } from "fastify";
 
 import type { PolicyDb } from "../policy/db.js";
 import { clients } from "../policy/schema.js";
+import { loadTelemetryCursors } from "../policy/telemetry-cursor.js";
 import type { AuditSink } from "../transport/audit/index.js";
 import {
   runTelemetryPull,
@@ -174,7 +175,10 @@ export function createEnforcementPipeline(
   // shared by both the telemetry window and the sweep — so enforcement
   // evaluates at exactly the boundary the samples were credited to, not a few
   // seconds later when the (awaited) pull returns.
-  const cursor = new Map<number, Date>();
+  // Seed the per-client cursor from the durable column (#382) so a restart
+  // resumes each client's pull where it left off; a client with no persisted
+  // cursor is absent from the map and falls back to `initialLookback`.
+  const cursor = loadTelemetryCursors(db);
   let currentPassEnd = now();
 
   // Caller-driven sweep (no internal cron): `tick()` runs after each rollup,

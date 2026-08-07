@@ -29,7 +29,7 @@
 import { and, asc, eq, gt, inArray, lt } from "drizzle-orm";
 
 import { effectiveWindow, type TimezoneChange } from "./budget-window.js";
-import type { PolicyDb } from "./db.js";
+import type { PolicyDb, PolicyTx } from "./db.js";
 import type { BudgetWindow } from "./enums.js";
 import { activitiesToGroups, usageSamples } from "./schema.js";
 
@@ -81,7 +81,10 @@ export interface WindowQuery {
  * on the supplied `Date`s is floored on write; the normaliser already emits
  * second-aligned boundaries, so for its output the persisted row is exact.
  */
-export function insertUsageSamples(db: PolicyDb, samples: readonly UsageSampleInsert[]): number {
+export function insertUsageSamples(
+  db: PolicyDb | PolicyTx,
+  samples: readonly UsageSampleInsert[],
+): number {
   if (samples.length === 0) return 0;
   const rows = samples.map((s) => ({
     userId: s.userId,

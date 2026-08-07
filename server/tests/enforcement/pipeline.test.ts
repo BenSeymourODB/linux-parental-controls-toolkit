@@ -26,6 +26,7 @@ import {
   usersOnClients,
   usageSamples,
 } from "../../src/policy/schema.js";
+import { saveTelemetryCursor } from "../../src/policy/telemetry-cursor.js";
 import { buildApp } from "../../src/web/app.js";
 import { loadSettings } from "../../src/config.js";
 import { testDb, type TestDb } from "../helpers/db.js";
@@ -164,6 +165,47 @@ describe("createEnforcementPipeline", () => {
     expect(result.sweep.evaluated).toBe(1);
     expect(result.sweep.decisions).toBe(1);
 
+    pipeline.stop();
+  });
+
+  it("seeds the in-memory cursor from the durable column so a restart resumes there (#382)", async () => {
+    const clientId = db
+      .insert(clients)
+      .values({ hostname: "alice-pc", sshUser: "pct-agent" })
+      .returning()
+      .get().id;
+    const userId = db.insert(users).values({ displayName: "Alice" }).returning().get().id;
+    db.insert(usersOnClients)
+      .values({ userId, clientId, osUsername: "alice", osUserRef: "1001" })
+      .run();
+    db.insert(activities).values({ kind: "app", matcher: "firefox" }).run();
+
+    // A durable cursor persisted by an earlier process lifetime, 2 min before
+    // this pass's end and well inside the 3600s initialLookback window — so the
+    // observed query start distinguishes "seeded from the column" (11:58) from
+    // "cold-start fallback" (11:00).
+    const persisted = new Date("2024-02-15T11:58:00.000Z");
+    saveTelemetryCursor(db, clientId, persisted);
+
+    let observedStart: Date | null = null;
+    const pipeline = createEnforcementPipeline(
+      baseOptions({
+        loadClients: () => [{ id: clientId, hostname: "alice-pc", sshUser: "pct-agent" }],
+        createSource: (): AwEventSource => ({
+          getWindowEvents: (q) => {
+            observedStart = q.start;
+            return Promise.resolve([]);
+          },
+          getAfkEvents: () => Promise.resolve([]),
+        }),
+      }),
+    );
+    if (pipeline === null) throw new Error("expected a pipeline with credentials present");
+
+    await pipeline.runOnce();
+
+    // Resumed at the persisted cursor, not `passEnd − initialLookback`.
+    expect(observedStart).toEqual(persisted);
     pipeline.stop();
   });
 
