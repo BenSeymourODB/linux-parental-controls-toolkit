@@ -111,6 +111,24 @@ export function isExpired(recordTimestamp: Date, retention: ResolvedRetention, n
 }
 
 /**
+ * The cutoff instant for `retention` as of `now`: a record is expired exactly
+ * when its timestamp is **strictly before** the cutoff, so the purge job can
+ * turn the per-row {@link isExpired} predicate into one set-based
+ * `DELETE WHERE ts < cutoff`. `keepForever` has no cutoff (nothing is ever
+ * purged), signalled by `null`.
+ *
+ * By construction `isExpired(ts, retention, now) === (cutoff !== null && ts <
+ * cutoff)`: the strict `<` here mirrors {@link isExpired}'s strict `>` on age,
+ * so a record exactly `days` old sits *on* the cutoff and is retained.
+ */
+export function retentionCutoff(retention: ResolvedRetention, now: Date): Date | null {
+  if (retention.keepForever) {
+    return null;
+  }
+  return new Date(now.getTime() - retention.days * MS_PER_DAY);
+}
+
+/**
  * The fully-resolved retention configuration: the global default plus every
  * per-category override, with the resolution rule and the {@link isExpired}
  * predicate bound together so callers (the purge job, the API serialiser)
@@ -160,6 +178,16 @@ export class RetentionPolicy {
    */
   isExpired(category: RetentionCategory, recordTimestamp: Date, now: Date): boolean {
     return isExpired(recordTimestamp, this.forCategory(category), now);
+  }
+
+  /**
+   * The cutoff instant for one category as of `now`, or `null` when the
+   * category is kept forever. A record in `category` is purgeable exactly when
+   * its timestamp is strictly before the cutoff — the predicate the purge job
+   * (`policy/purge.ts`, #138) turns into a bounded `DELETE`.
+   */
+  cutoffFor(category: RetentionCategory, now: Date): Date | null {
+    return retentionCutoff(this.forCategory(category), now);
   }
 
   /** The resolved retention for every known category, in declaration order. */

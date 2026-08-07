@@ -12,6 +12,7 @@ import {
   RetentionPolicy,
   RetentionOverrideError,
   isExpired,
+  retentionCutoff,
   overrideToResolved,
   resolveRetention,
   type ResolvedRetention,
@@ -84,6 +85,26 @@ describe("isExpired", () => {
   });
 });
 
+describe("retentionCutoff", () => {
+  it("has no cutoff under keepForever", () => {
+    expect(retentionCutoff({ keepForever: true }, NOW)).toBeNull();
+  });
+
+  it("is `now` minus the window for a finite policy", () => {
+    expect(retentionCutoff({ keepForever: false, days: 30 }, NOW)).toEqual(ago(30));
+  });
+
+  it("agrees with isExpired at the boundary (a record is expired iff ts < cutoff)", () => {
+    const retention: ResolvedRetention = { keepForever: false, days: 30 };
+    const cutoff = retentionCutoff(retention, NOW);
+    expect(cutoff).not.toBeNull();
+    for (const ts of [ago(29), ago(30), ago(30, 1), ago(400)]) {
+      const strictlyBeforeCutoff = cutoff !== null && ts.getTime() < cutoff.getTime();
+      expect(strictlyBeforeCutoff).toBe(isExpired(ts, retention, NOW));
+    }
+  });
+});
+
 describe("RetentionPolicy", () => {
   it("uses the default for categories without an override", () => {
     const policy = RetentionPolicy.fromOverrides(DEFAULT_RETENTION_DAYS, []);
@@ -118,6 +139,16 @@ describe("RetentionPolicy", () => {
     expect(policy.isExpired("audit_log", ago(10_000), NOW)).toBe(false);
     // grant_ledger: default 365 → 400 days old expires.
     expect(policy.isExpired("grant_ledger", ago(400), NOW)).toBe(true);
+  });
+
+  it("cutoffFor routes per category (null when kept forever)", () => {
+    const policy = RetentionPolicy.fromOverrides(365, [
+      { category: "usage_samples", keepForever: false, days: 30 },
+      { category: "audit_log", keepForever: true, days: null },
+    ]);
+    expect(policy.cutoffFor("usage_samples", NOW)).toEqual(ago(30));
+    expect(policy.cutoffFor("grant_ledger", NOW)).toEqual(ago(365));
+    expect(policy.cutoffFor("audit_log", NOW)).toBeNull();
   });
 
   it("resolveAll covers every category in declaration order", () => {

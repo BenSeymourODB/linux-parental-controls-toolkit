@@ -478,17 +478,26 @@ The retention **categories** are the dated tables that have an "age"
 (grounded in [`docs/adr/0005-recurrence-and-date-scoping.md`](adr/0005-recurrence-and-date-scoping.md)
 §4 — recurrence rules themselves are *not* dated and are never purged):
 
-| Category         | What it covers                                                       |
-| ---------------- | -------------------------------------------------------------------- |
-| `usage_samples`  | ActivityWatch usage history                                          |
-| `grant_ledger`   | the immutable grant ledger                                           |
-| `audit_log`      | transport audit entries                                              |
-| `date_overrides` | date-specific policy rows wholly in the past (an exception past its expiry, a schedule past its `effective_to`) |
+| Category         | What it covers                                                       | A row is purgeable once… |
+| ---------------- | -------------------------------------------------------------------- | ------------------------ |
+| `usage_samples`  | ActivityWatch usage history                                          | its interval **ended** (`ended_at`) longer ago than the window |
+| `grant_ledger`   | the immutable grant ledger                                           | it has **expired** (`expires_at`) longer ago than the window — so an active grant is never purged, and revocation (a column on the grant row) is never orphaned |
+| `audit_log`      | transport audit entries                                              | it was recorded (`at`) longer ago than the window |
+| `date_overrides` | date-specific policy rows wholly in the past (an exception past its expiry, a schedule/group-schedule past its `effective_to`) | the override's window **ended** longer ago than the window; open-ended recurrence rules (null `effective_to`) are never dated data and are never purged |
 
-This release ships the retention **configuration model and API** (#136);
-the scheduled purge job that acts on these windows lands separately
-(#137/#138). Only the global default lives in the environment — restart to
-change it; per-category overrides are runtime config and need no restart.
+Each category keys its "age" on the *end* of the record's relevant window, so
+a purge only ever removes data that is wholly in the past — an active or
+future-dated record can never be selected.
+
+This release ships the retention **configuration model and API** (#136) and the
+**per-entity deletion routines** (#138): one bounded, idempotent purge per
+category (`server/src/policy/purge.ts`, `purgeExpiredRecords`) that deletes
+strictly-expired rows in batches, so a large first run never holds a long write
+lock and an interrupted run resumes cleanly. What remains separate (#137) is the
+croner-scheduled job that *drives* these routines on a cadence, audits each run,
+and offers a dry-run/preview and a manual "run now". Only the global default
+lives in the environment — restart to change it; per-category overrides are
+runtime config and need no restart.
 
 ## Upgrade path
 
