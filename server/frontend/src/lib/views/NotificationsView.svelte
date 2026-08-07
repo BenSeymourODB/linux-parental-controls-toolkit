@@ -134,10 +134,11 @@
       const [acts, groups] = await Promise.all([listActivities(), listActivityGroups()]);
       activities = acts;
       activityGroups = groups;
-    } catch (err) {
-      // Name resolution is best-effort: keep the view usable and let the picker
-      // fall back to id labels rather than blocking on a catalogue read.
-      error ??= messageOf(err);
+    } catch {
+      // Name resolution is purely decorative: on failure the picker falls back to
+      // id labels ("Activity 7") and stays fully usable, so we deliberately don't
+      // raise the error banner for it — and avoid racing the concurrent mount-time
+      // user load, which would not clear a banner we set here.
     }
   }
 
@@ -180,8 +181,15 @@
       budgets = [];
       return;
     }
-    void loadPolicy(selectedUserId);
-    void loadBudgets(selectedUserId);
+    void loadUserData(selectedUserId);
+  }
+
+  // Load the policy first, then the budgets, in sequence — `loadPolicy` clears
+  // `error` on entry, so sequencing keeps a budgets-load failure banner from
+  // being clobbered by a concurrent policy load.
+  async function loadUserData(userId: number): Promise<void> {
+    await loadPolicy(userId);
+    await loadBudgets(userId);
   }
 
   function userName(id: number): string {

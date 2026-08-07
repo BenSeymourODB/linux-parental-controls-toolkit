@@ -359,6 +359,37 @@ describe("NotificationsView", () => {
     await waitFor(() => expect(listBudgets).toHaveBeenCalledWith(1));
   });
 
+  it("keeps the editor usable when the budgets load fails (best-effort)", async () => {
+    getNotificationPolicy.mockResolvedValue(
+      policy({ cadenceOverrides: { "activity:7": { warningMinutes: [10] } } }),
+    );
+    listBudgets.mockRejectedValue(new ApiError(500, "server_error", "boom"));
+
+    render(NotificationsView);
+    await selectUser();
+
+    // The stored override still hydrates a pickable row despite the budgets load
+    // failing, and the always-present Overall entry plus the hydrated key remain
+    // selectable — the picker degrades gracefully rather than blocking editing.
+    const picker = (await screen.findByLabelText("Budget")) as HTMLSelectElement;
+    expect(picker.value).toBe("activity:7");
+    expect(screen.getByRole("option", { name: "Overall screen time" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Activity 7" })).toBeInTheDocument();
+  });
+
+  it("falls back to an id label for a stored group override with no catalogue entry", async () => {
+    getNotificationPolicy.mockResolvedValue(
+      policy({ cadenceOverrides: { "group:9": { warningMinutes: [5] } } }),
+    );
+
+    render(NotificationsView);
+    await selectUser();
+
+    const picker = (await screen.findByLabelText("Budget")) as HTMLSelectElement;
+    expect(picker.value).toBe("group:9");
+    expect(screen.getByRole("option", { name: "Group 9" })).toBeInTheDocument();
+  });
+
   it("removes a hydrated row and saving reverts to the built-in cadence (null)", async () => {
     getNotificationPolicy.mockResolvedValue(
       policy({ cadenceOverrides: { overall: { warningMinutes: [10] } } }),
