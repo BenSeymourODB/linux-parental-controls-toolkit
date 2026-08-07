@@ -197,7 +197,9 @@ export function enrolClient(
       sshUser: input.sshUser,
       bearerTokenHash: hashToken(bearerToken),
       links,
-      reportedIps: input.reportedIps ?? null,
+      // Normalise an omitted or empty list to null so "no addresses reported"
+      // has a single wire shape (null), never a stray `[]`.
+      reportedIps: input.reportedIps && input.reportedIps.length > 0 ? input.reportedIps : null,
       sourceIp: options.sourceIp ?? null,
       agentVersion: versions.agentVersion,
       componentVersions: versions.componentVersions,

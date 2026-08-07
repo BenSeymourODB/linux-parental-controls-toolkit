@@ -193,6 +193,27 @@ describe("policy CRUD routes", () => {
     expect(list.json()).toHaveLength(1);
   });
 
+  it("persists a friendly name on a manually-created client and echoes it (#355)", async () => {
+    const created = await auth({
+      method: "POST",
+      url: "/api/clients",
+      payload: { hostname: "mint-02", sshUser: "pct-agent", friendlyName: "study desktop" },
+    });
+    expect(created.statusCode).toBe(201);
+    const body = created.json();
+    // A manual (non-enrol) record carries no self-reported addressing, so those
+    // read back as null; the friendly name round-trips.
+    expect(body).toMatchObject({
+      hostname: "mint-02",
+      friendlyName: "study desktop",
+      reportedIps: null,
+      sourceIp: null,
+    });
+
+    const one = await auth({ method: "GET", url: `/api/clients/${body.id}` });
+    expect(one.json().friendlyName).toBe("study desktop");
+  });
+
   it("409s on a duplicate hostname", async () => {
     await auth({
       method: "POST",

@@ -53,9 +53,12 @@ function client(overrides: Partial<ClientResponse> = {}): ClientResponse {
   return {
     id: 5,
     hostname: "mint-box",
+    friendlyName: null,
     sshUser: "pct-agent",
     enrolledAt: "2026-06-01T00:00:00.000Z",
     lastSeen: "2026-06-20T10:00:00.000Z",
+    reportedIps: null,
+    sourceIp: null,
     enrolled: true,
     platform: "linux",
     ...overrides,
