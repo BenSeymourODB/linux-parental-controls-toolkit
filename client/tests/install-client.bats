@@ -242,6 +242,37 @@ plan_strict() {
   [[ "$output" != *':"2guardian"'* ]]
 }
 
+# --- address reporting (#355) ----------------------------------------------
+
+@test "reports self-reported IPs in the enrol body (#355)" {
+  export PCT_REPORTED_IPS="192.168.1.42 fe80::1"
+  ok_args
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"reportedIps":["192.168.1.42","fe80::1"]'* ]]
+}
+
+@test "omits reportedIps entirely when no address can be determined (#355)" {
+  # No explicit override and the hostname probe points at a missing binary, so
+  # the field is omitted rather than reported empty — hermetic on any host.
+  export PCT_HOSTNAME=pct-no-such-binary
+  ok_args
+  [ "$status" -eq 0 ]
+  [[ "$output" != *'"reportedIps"'* ]]
+}
+
+@test "drops loopback and non-IP-charset tokens from reportedIps (#355)" {
+  # Loopback is noise; a token carrying shell metacharacters must never reach
+  # the hand-rolled JSON body — only bare IPv4/IPv6 literals survive.
+  export PCT_REPORTED_IPS="127.0.0.1 10.0.0.5 bad;host 2001:db8::1"
+  ok_args
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"reportedIps":['* ]]
+  [[ "$output" == *'"10.0.0.5"'* ]]
+  [[ "$output" == *'"2001:db8::1"'* ]]
+  [[ "$output" != *"127.0.0.1"* ]]
+  [[ "$output" != *"bad;host"* ]]
+}
+
 # --- enrol response handling ----------------------------------------------
 
 @test "authorizes the dashboard SSH key when the response carries one" {
