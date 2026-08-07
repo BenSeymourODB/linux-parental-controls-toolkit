@@ -81,6 +81,11 @@ export type {
 } from "../../../../src/api/policy/preview-dtos.js";
 export type { AuditEntryResponse, AuditListResponse } from "../../../../src/api/audit/dtos.js";
 export type {
+  RetentionEntryResponse,
+  RetentionConfigResponse,
+  SetRetentionOverrideRequest,
+} from "../../../../src/api/retention/dtos.js";
+export type {
   CreateIntegrationTokenRequest,
   IntegrationTokenCreatedResponse,
   IntegrationTokenSummaryResponse,
@@ -112,6 +117,7 @@ export type {
   ScheduleAction,
   SoundProfile,
   AuditOutcome,
+  RetentionCategory,
 } from "../../../../src/policy/enums.js";
 export type { BudgetCadenceOverride } from "../../../../src/policy/notification.js";
 export type { ErrorEnvelope, ErrorDetail } from "../../../../src/api/errors.js";
