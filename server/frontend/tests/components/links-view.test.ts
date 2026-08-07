@@ -16,7 +16,8 @@ import { resetResources } from "../../src/lib/data/resources.svelte.js";
 const listUsers = vi.fn<() => Promise<UserResponse[]>>();
 const listClients = vi.fn<() => Promise<ClientResponse[]>>();
 const listUserLinks = vi.fn<(userId: number) => Promise<LinkResponse[]>>();
-const upsertLink = vi.fn<(userId: number, clientId: number, input: unknown) => Promise<LinkResponse>>();
+const upsertLink =
+  vi.fn<(userId: number, clientId: number, input: unknown) => Promise<LinkResponse>>();
 const deleteLink = vi.fn<(userId: number, clientId: number) => Promise<void>>();
 
 vi.mock("$lib/api/users", () => ({ listUsers: () => listUsers() }));
@@ -44,9 +45,12 @@ function client(overrides: Partial<ClientResponse> = {}): ClientResponse {
   return {
     id: 5,
     hostname: "mint-box",
+    friendlyName: null,
     sshUser: "admin",
     enrolledAt: "2026-01-01T00:00:00.000Z",
     lastSeen: null,
+    reportedIps: null,
+    sourceIp: null,
     enrolled: true,
     platform: "linux",
     ...overrides,
