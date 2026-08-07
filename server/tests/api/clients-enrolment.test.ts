@@ -252,6 +252,125 @@ describe("client enrolment routes", () => {
     expect(res.json().error.code).toBe("validation_error");
   });
 
+  // --- enrolment metadata (#355) -------------------------------------------
+
+  /** The Clients-health card for `clientId`, or undefined. */
+  async function cardFor(clientId: number): Promise<Record<string, unknown> | undefined> {
+    const health = await admin({ method: "GET", url: "/api/clients/health" });
+    return (health.json() as Record<string, unknown>[]).find((c) => c.clientId === clientId);
+  }
+
+  it("records self-reported IPs and the observed source IP at enrol (#355)", async () => {
+    const userId = await createUser("Alice");
+    const token = await mintFor(userId, "alice");
+
+    const res = await enrol(token, {
+      hostname: "mint-01",
+      sshUser: "pct-agent",
+      supervisedUsers: [{ osUsername: "alice", osUserRef: "1000" }],
+      reportedIps: ["192.168.1.42", "fe80::1"],
+    });
+    expect(res.statusCode).toBe(201);
+
+    const stored = harness.db.select().from(clients).all();
+    expect(stored[0]?.reportedIps).toEqual(["192.168.1.42", "fe80::1"]);
+    // app.inject presents a loopback peer; with trustProxy off (the test
+    // default) that socket peer is the observed source IP verbatim — no
+    // X-Forwarded-For is trusted.
+    expect(stored[0]?.sourceIp).toBe("127.0.0.1");
+
+    // Both surface on the Clients health card.
+    const card = await cardFor(res.json().clientId as number);
+    expect(card?.reportedIps).toEqual(["192.168.1.42", "fe80::1"]);
+    expect(card?.sourceIp).toBe("127.0.0.1");
+  });
+
+  it("leaves reportedIps null when the client reports none, still recording sourceIp (#355)", async () => {
+    const userId = await createUser("Alice");
+    const token = await mintFor(userId, "alice");
+    const res = await enrol(token, {
+      hostname: "mint-01",
+      sshUser: "pct-agent",
+      supervisedUsers: [{ osUsername: "alice", osUserRef: "1000" }],
+    });
+    expect(res.statusCode).toBe(201);
+    const stored = harness.db.select().from(clients).all();
+    expect(stored[0]?.reportedIps).toBeNull();
+    expect(stored[0]?.sourceIp).toBe("127.0.0.1");
+  });
+
+  it("400s an enrol whose reportedIps carry a non-IP charset (#355)", async () => {
+    const userId = await createUser("Alice");
+    const token = await mintFor(userId, "alice");
+    const res = await enrol(token, {
+      hostname: "mint-01",
+      sshUser: "pct-agent",
+      supervisedUsers: [{ osUsername: "alice", osUserRef: "1000" }],
+      reportedIps: ['1.2.3.4"; rm -rf'],
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.code).toBe("validation_error");
+  });
+
+  it("carries the token's friendly name onto the enrolled client and titles the card (#355)", async () => {
+    const userId = await createUser("Alice");
+    const mint = await admin({
+      method: "POST",
+      url: "/api/clients/enrolment-tokens",
+      payload: {
+        supervisedUsers: [{ userId, osUsername: "alice" }],
+        friendlyName: "kids' living-room PC",
+      },
+    });
+    expect(mint.statusCode).toBe(201);
+
+    const res = await enrol(mint.json().token as string, {
+      hostname: "omega-B85M-DS3H",
+      sshUser: "pct-agent",
+      supervisedUsers: [{ osUsername: "alice", osUserRef: "1000" }],
+    });
+    expect(res.statusCode).toBe(201);
+
+    const stored = harness.db.select().from(clients).all();
+    expect(stored[0]?.friendlyName).toBe("kids' living-room PC");
+
+    const card = await cardFor(res.json().clientId as number);
+    expect(card?.friendlyName).toBe("kids' living-room PC");
+    expect(card?.hostname).toBe("omega-B85M-DS3H");
+  });
+
+  it("leaves the client friendly name null when the token set none (#355)", async () => {
+    const userId = await createUser("Alice");
+    const token = await mintFor(userId, "alice");
+    const res = await enrol(token, {
+      hostname: "mint-01",
+      sshUser: "pct-agent",
+      supervisedUsers: [{ osUsername: "alice", osUserRef: "1000" }],
+    });
+    expect(res.statusCode).toBe(201);
+    const stored = harness.db.select().from(clients).all();
+    expect(stored[0]?.friendlyName).toBeNull();
+  });
+
+  it("lets the admin rename a client's friendly name after enrol (#355)", async () => {
+    const userId = await createUser("Alice");
+    const token = await mintFor(userId, "alice");
+    const res = await enrol(token, {
+      hostname: "mint-01",
+      sshUser: "pct-agent",
+      supervisedUsers: [{ osUsername: "alice", osUserRef: "1000" }],
+    });
+    const clientId = res.json().clientId as number;
+
+    const patched = await admin({
+      method: "PATCH",
+      url: `/api/clients/${clientId}`,
+      payload: { friendlyName: "study desktop" },
+    });
+    expect(patched.statusCode).toBe(200);
+    expect(patched.json().friendlyName).toBe("study desktop");
+  });
+
   it("401s reuse of a consumed token (single-use)", async () => {
     const userId = await createUser("Alice");
     const token = await mintFor(userId, "alice");

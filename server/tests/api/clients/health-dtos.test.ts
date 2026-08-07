@@ -65,6 +65,9 @@ describe("health DTO contract", () => {
     const parsed = clientHealthSchema.safeParse({
       clientId: 3,
       hostname: "alice-pc.local",
+      friendlyName: "kids' living-room PC",
+      reportedIps: ["192.168.1.42", "fe80::1"],
+      sourceIp: "192.168.1.42",
       reachability: "online",
       reachabilityReason: null,
       lastSeen: "2026-06-19T12:00:00.000Z",
@@ -85,6 +88,9 @@ describe("health DTO contract", () => {
     const parsed = clientHealthSchema.safeParse({
       clientId: 3,
       hostname: "alice-pc.local",
+      friendlyName: null,
+      reportedIps: null,
+      sourceIp: null,
       reachability: "unknown",
       reachabilityReason: null,
       lastSeen: null,
@@ -105,6 +111,9 @@ describe("health DTO contract", () => {
     const parsed = clientHealthSchema.safeParse({
       clientId: 3,
       hostname: "alice-pc.local",
+      friendlyName: null,
+      reportedIps: null,
+      sourceIp: null,
       reachability: "unknown",
       reachabilityReason: null,
       lastSeen: null,

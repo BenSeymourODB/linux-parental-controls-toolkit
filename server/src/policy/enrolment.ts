@@ -29,6 +29,8 @@ export interface EnrolmentTokenCreate {
   /** SHA-256 of the plaintext token (never the plaintext itself). */
   tokenHash: string;
   hostname?: string | null;
+  /** Admin-chosen friendly name applied to the client at claim time (#355). */
+  friendlyName?: string | null;
   supervisedUsers: SupervisedUserMapping[];
   expiresAt: Date;
 }
@@ -46,10 +48,16 @@ export interface EnrolLink {
 /** Inputs to the {@link consumeTokenAndEnrol} transaction. */
 export interface EnrolWrite {
   hostname: string;
+  /** Friendly name carried from the redeemed token, or null if none (#355). */
+  friendlyName?: string | null;
   sshUser: string;
   /** SHA-256 of the per-client bearer token issued at enrolment. */
   bearerTokenHash: string;
   links: EnrolLink[];
+  /** The client's self-reported IP address(es) (#355), or null if none. */
+  reportedIps?: string[] | null;
+  /** The observed source IP of the enrol request (#355), or null. */
+  sourceIp?: string | null;
   /**
    * Version inventory reported at enrolment (#164). All three move together:
    * `versionsReportedAt` is set by the caller exactly when at least one of
@@ -75,6 +83,7 @@ export function createEnrolmentToken(db: PolicyDb, input: EnrolmentTokenCreate):
     .values({
       tokenHash: input.tokenHash,
       hostname: input.hostname ?? null,
+      friendlyName: input.friendlyName ?? null,
       supervisedUsers: input.supervisedUsers,
       expiresAt: input.expiresAt,
     })
@@ -123,8 +132,11 @@ export function consumeTokenAndEnrol(
       .insert(clients)
       .values({
         hostname: input.hostname,
+        friendlyName: input.friendlyName ?? null,
         sshUser: input.sshUser,
         bearerTokenHash: input.bearerTokenHash,
+        reportedIps: input.reportedIps ?? null,
+        sourceIp: input.sourceIp ?? null,
         agentVersion: input.agentVersion ?? null,
         componentVersions: input.componentVersions ?? null,
         versionsReportedAt: input.versionsReportedAt ?? null,

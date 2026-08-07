@@ -53,9 +53,12 @@ function client(overrides: Partial<ClientResponse> = {}): ClientResponse {
   return {
     id: 5,
     hostname: "mint-box",
+    friendlyName: null,
     sshUser: "pct-agent",
     enrolledAt: "2026-06-01T00:00:00.000Z",
     lastSeen: "2026-06-20T10:00:00.000Z",
+    reportedIps: null,
+    sourceIp: null,
     enrolled: true,
     platform: "linux",
     ...overrides,
@@ -66,6 +69,9 @@ function health(overrides: Partial<ClientHealthResponse> = {}): ClientHealthResp
   return {
     clientId: 5,
     hostname: "mint-box",
+    friendlyName: null,
+    reportedIps: null,
+    sourceIp: null,
     reachability: "online",
     reachabilityReason: null,
     lastSeen: "2026-06-20T10:00:00.000Z",
@@ -108,6 +114,36 @@ describe("ClientsView health list + queue", () => {
     expect(screen.queryByText(/Health data unavailable/)).not.toBeInTheDocument();
   });
 
+  it("titles the card on the friendly name and shows hostname + IPs (#355)", async () => {
+    listClients.mockResolvedValue([
+      client({
+        friendlyName: "kids' living-room PC",
+        hostname: "omega-B85M-DS3H",
+        reportedIps: ["192.168.1.42", "fe80::1"],
+        sourceIp: "192.168.1.42",
+      }),
+    ]);
+    listClientHealth.mockResolvedValue([health()]);
+
+    render(ClientsView);
+
+    // The friendly name is the card title; the raw hostname drops to secondary.
+    expect(await screen.findByText("kids' living-room PC")).toBeInTheDocument();
+    expect(screen.getByText("omega-B85M-DS3H")).toBeInTheDocument();
+    // Both the self-reported IPs and the observed source IP are surfaced.
+    expect(screen.getByText("192.168.1.42, fe80::1")).toBeInTheDocument();
+    expect(screen.getByText("Source IP")).toBeInTheDocument();
+  });
+
+  it("falls back to the hostname as the title when no friendly name is set (#355)", async () => {
+    listClients.mockResolvedValue([client({ friendlyName: null, hostname: "bare-host" })]);
+    listClientHealth.mockResolvedValue([health()]);
+
+    render(ClientsView);
+
+    expect(await screen.findByText("bare-host")).toBeInTheDocument();
+  });
+
   it("expands and collapses the queued-actions detail", async () => {
     listClients.mockResolvedValue([client()]);
     listClientHealth.mockResolvedValue([
@@ -141,9 +177,7 @@ describe("ClientsView health list + queue", () => {
     expect(await screen.findByText("timekpra.settimeleft")).toBeInTheDocument();
 
     await fireEvent.click(screen.getByRole("button", { name: /Hide queued actions/ }));
-    await waitFor(() =>
-      expect(screen.queryByText("timekpra.settimeleft")).not.toBeInTheDocument(),
-    );
+    await waitFor(() => expect(screen.queryByText("timekpra.settimeleft")).not.toBeInTheDocument());
   });
 
   it("renders inventory even when the health fetch fails (degraded)", async () => {
@@ -171,7 +205,11 @@ describe("ClientsView health list + queue", () => {
   it("badges version drift and shows the reported vs server version (#352)", async () => {
     listClients.mockResolvedValue([client()]);
     listClientHealth.mockResolvedValue([
-      health({ agentVersion: "0.1.0-alpha.4", serverVersion: "0.1.0-alpha.5", versionStatus: "outdated" }),
+      health({
+        agentVersion: "0.1.0-alpha.4",
+        serverVersion: "0.1.0-alpha.5",
+        versionStatus: "outdated",
+      }),
     ]);
 
     render(ClientsView);
@@ -185,7 +223,9 @@ describe("ClientsView health list + queue", () => {
 
   it("shows 'update required' when the handshake flagged the client (#352)", async () => {
     listClients.mockResolvedValue([client()]);
-    listClientHealth.mockResolvedValue([health({ updateRequired: true, versionStatus: "update_required" })]);
+    listClientHealth.mockResolvedValue([
+      health({ updateRequired: true, versionStatus: "update_required" }),
+    ]);
 
     render(ClientsView);
     await screen.findByText("mint-box");
@@ -199,7 +239,9 @@ describe("ClientsView health list + queue", () => {
       health({
         reachability: "offline",
         reachabilityReason: "dns",
-        components: [{ component: "timekpr-next", status: "unknown", detail: "host unreachable (dns)" }],
+        components: [
+          { component: "timekpr-next", status: "unknown", detail: "host unreachable (dns)" },
+        ],
       }),
     ]);
 
@@ -321,7 +363,7 @@ describe("ClientsView enrol flow", () => {
     expect(command.textContent).toContain(window.location.origin);
   });
 
-  it("includes the hostname flag when an expected hostname is given", async () => {
+  it("includes the friendly-name field when one is given (#355)", async () => {
     mintEnrolmentToken.mockResolvedValue({
       id: 1,
       token: "tok_x",
@@ -333,8 +375,8 @@ describe("ClientsView enrol flow", () => {
 
     await fireEvent.change(screen.getByLabelText("Supervised user"), { target: { value: "1" } });
     await fireEvent.input(screen.getByLabelText("OS username"), { target: { value: "chloe" } });
-    await fireEvent.input(screen.getByLabelText("Expected hostname"), {
-      target: { value: "kids-laptop" },
+    await fireEvent.input(screen.getByLabelText("Friendly name"), {
+      target: { value: "kids' living-room PC" },
     });
     await fireEvent.click(screen.getByRole("button", { name: "Generate enrolment token" }));
 
@@ -342,7 +384,7 @@ describe("ClientsView enrol flow", () => {
       expect(mintEnrolmentToken).toHaveBeenCalledWith({
         supervisedUsers: [{ userId: 1, osUsername: "chloe" }],
         ttlSeconds: 3600,
-        hostname: "kids-laptop",
+        friendlyName: "kids' living-room PC",
       }),
     );
   });

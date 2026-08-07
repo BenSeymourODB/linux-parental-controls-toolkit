@@ -156,10 +156,33 @@ export const clients = sqliteTable(
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
     hostname: text("hostname").notNull(),
+    /**
+     * An admin-chosen label ("kids' living-room PC") shown as the card title in
+     * the Clients view, in preference to the raw `hostname` (#355). Nullable:
+     * carried from the enrolment token's `friendlyName` at claim time when the
+     * admin set one, and editable afterwards via `PATCH /api/clients/:id`.
+     */
+    friendlyName: text("friendly_name"),
     sshUser: text("ssh_user").notNull(),
     bearerTokenHash: text("bearer_token_hash"),
     enrolledAt: timestampNow("enrolled_at"),
     lastSeen: integer("last_seen", { mode: "timestamp" }),
+    /**
+     * The client's own primary IPv4/IPv6 address(es) as it reported them at
+     * enrol (#355), a JSON string array. Advisory only — self-reported IPs go
+     * stale under DHCP (re-announce is tracked separately) — and never used as
+     * an SSH target in this slice; recorded so the admin can recognise a box and
+     * so a later SSH-target override has candidate addresses to offer.
+     */
+    reportedIps: text("reported_ips", { mode: "json" }).$type<string[]>(),
+    /**
+     * The observed source IP of the enrol request (#355): `request.ip`, which is
+     * the direct socket peer unless `trustProxy` is configured (#235), in which
+     * case it is the real client IP derived from a trusted `X-Forwarded-For`. A
+     * self-report-free ground truth of the address that actually reached the
+     * server client→server, for the admin and the post-enrol verification.
+     */
+    sourceIp: text("source_ip"),
     /**
      * Durable telemetry pull cursor (#382): the `end` of the last window whose
      * `UsageSample` rows were successfully persisted for this client. The
@@ -216,6 +239,14 @@ export const enrolmentTokens = sqliteTable(
     id: integer("id").primaryKey({ autoIncrement: true }),
     tokenHash: text("token_hash").notNull(),
     hostname: text("hostname"),
+    /**
+     * An optional admin-chosen label set at mint time and applied to the
+     * {@link clients} row's `friendlyName` at claim (#355). Reframes the
+     * enrol-token form's former "Expected hostname" input into a friendly
+     * identity the admin picks up front; the informational `hostname` column
+     * above is retained for backward compatibility.
+     */
+    friendlyName: text("friendly_name"),
     supervisedUsers: text("supervised_users", { mode: "json" })
       .$type<{ userId: number; osUsername: string }[]>()
       .notNull(),
