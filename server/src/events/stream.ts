@@ -215,9 +215,18 @@ export async function registerEventStream(
           }
 
           socket.send(JSON.stringify(result.frame));
-          hub.register(clientId, socket);
+          // Thread the negotiated capabilities into the hub so the fan-out can
+          // withhold frames the client can't honour (ADR 0007 §4). `hello` is
+          // non-null on accept; `?? []` satisfies the type system without a
+          // non-null assertion (a null hello is refused above).
+          hub.register(clientId, socket, hello?.capabilities ?? []);
           log.info(
-            { event: "event_stream_open", clientId, eventProtocol: result.frame.eventProtocol },
+            {
+              event: "event_stream_open",
+              clientId,
+              eventProtocol: result.frame.eventProtocol,
+              capabilities: hello?.capabilities ?? [],
+            },
             "client event stream opened",
           );
 
