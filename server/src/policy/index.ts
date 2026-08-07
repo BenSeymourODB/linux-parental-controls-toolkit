@@ -50,8 +50,20 @@ export {
   RetentionPolicy,
   RetentionOverrideError,
   isExpired,
+  retentionCutoff,
   overrideToResolved,
   resolveRetention,
 } from "./retention.js";
+
+export {
+  type PurgeCategoryResult,
+  type PurgeOptions,
+  DEFAULT_PURGE_BATCH_SIZE,
+  purgeAuditLog,
+  purgeDateOverrides,
+  purgeExpiredRecords,
+  purgeGrants,
+  purgeUsageSamples,
+} from "./purge.js";
 
 export { type WeeklyWindowsInput, resolveWeeklyAllowedWindows } from "./weekly-windows.js";

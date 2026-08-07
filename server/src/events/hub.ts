@@ -11,11 +11,21 @@
  * minimal {@link EventSocket} interface, so the hub unit-tests with plain
  * fakes and the route ({@link ./stream.ts}) supplies the real socket. A client
  * may briefly hold more than one connection (e.g. a reconnect racing a
- * not-yet-closed socket), so connections are stored as a set per client and a
- * publish reaches every open one.
+ * not-yet-closed socket), so connections are stored per client and a publish
+ * reaches every open one.
+ *
+ * **Capability gating (ADR 0007 §4).** Each connection carries the
+ * `capabilities` it advertised in its `hello` (threaded in by {@link ./stream.ts}
+ * at `accept`). Before writing a frame the hub asks {@link capabilityForEvent}
+ * whether the event is gated; a gated frame is withheld from any connection
+ * that did not advertise the matching capability — an older or
+ * differently-capable client simply never receives a frame it can't honour, and
+ * is not disconnected for it. Baseline frames (no required capability) reach
+ * every open connection.
  *
  * License boundary: none touched — plain TypeScript.
  */
+import { capabilityForEvent } from "./capabilities.js";
 import type { ServerEvent } from "./taxonomy.js";
 
 /**
@@ -40,18 +50,28 @@ export const SOCKET_OPEN = 1;
  * so producers anywhere in the process can publish without re-plumbing.
  */
 export class EventHub {
-  /** Live connections per `Client.id`. Entries are pruned when a set empties. */
-  readonly #byClient = new Map<number, Set<EventSocket>>();
+  /**
+   * Live connections per `Client.id`, each mapped to the capability set it
+   * advertised at `accept`. Entries are pruned when a client's last connection
+   * is gone.
+   */
+  readonly #byClient = new Map<number, Map<EventSocket, ReadonlySet<string>>>();
   /** Monotonic sequence stamped onto each published frame. */
   #seq = 0;
 
-  /** Register a client's connection. Idempotent for the same socket. */
-  register(clientId: number, socket: EventSocket): void {
-    const set = this.#byClient.get(clientId);
-    if (set === undefined) {
-      this.#byClient.set(clientId, new Set([socket]));
+  /**
+   * Register a client's connection with the `capabilities` it advertised in its
+   * `hello` (ADR 0007 §4). Idempotent for the same socket; re-registering
+   * refreshes its capability set. Defaults to an empty set — a connection that
+   * advertised nothing receives only ungated (baseline) frames.
+   */
+  register(clientId: number, socket: EventSocket, capabilities: Iterable<string> = []): void {
+    const caps: ReadonlySet<string> = new Set(capabilities);
+    const conns = this.#byClient.get(clientId);
+    if (conns === undefined) {
+      this.#byClient.set(clientId, new Map([[socket, caps]]));
     } else {
-      set.add(socket);
+      conns.set(socket, caps);
     }
   }
 
@@ -61,10 +81,10 @@ export class EventHub {
    * the socket was never registered.
    */
   unregister(clientId: number, socket: EventSocket): void {
-    const set = this.#byClient.get(clientId);
-    if (set === undefined) return;
-    set.delete(socket);
-    if (set.size === 0) this.#byClient.delete(clientId);
+    const conns = this.#byClient.get(clientId);
+    if (conns === undefined) return;
+    conns.delete(socket);
+    if (conns.size === 0) this.#byClient.delete(clientId);
   }
 
   /**
@@ -72,9 +92,9 @@ export class EventHub {
    * number of sockets the frame was written to (0 if the client is offline).
    */
   publishToClient(clientId: number, event: ServerEvent): number {
-    const set = this.#byClient.get(clientId);
-    if (set === undefined) return 0;
-    return this.#send(set, event);
+    const conns = this.#byClient.get(clientId);
+    if (conns === undefined) return 0;
+    return this.#write(conns, this.#frame(event), capabilityForEvent(event));
   }
 
   /**
@@ -84,9 +104,10 @@ export class EventHub {
    */
   broadcast(event: ServerEvent): number {
     const frame = this.#frame(event);
+    const required = capabilityForEvent(event);
     let delivered = 0;
-    for (const set of this.#byClient.values()) {
-      delivered += this.#write(set, frame);
+    for (const conns of this.#byClient.values()) {
+      delivered += this.#write(conns, frame, required);
     }
     return delivered;
   }
@@ -104,20 +125,24 @@ export class EventHub {
   /** Total live connections across all clients. */
   get connectionCount(): number {
     let total = 0;
-    for (const set of this.#byClient.values()) total += set.size;
+    for (const conns of this.#byClient.values()) total += conns.size;
     return total;
   }
 
-  /** Stamp + serialize an event, then write it to a set of sockets. */
-  #send(set: Set<EventSocket>, event: ServerEvent): number {
-    return this.#write(set, this.#frame(event));
-  }
-
-  /** Write an already-serialized frame to every open socket in the set. */
-  #write(set: Set<EventSocket>, frame: string): number {
+  /**
+   * Write an already-serialized frame to every open connection whose advertised
+   * capabilities satisfy `required` (`null` = ungated, so it reaches all).
+   * A closing/closed socket is skipped (its close handler cleans it up).
+   */
+  #write(
+    conns: Map<EventSocket, ReadonlySet<string>>,
+    frame: string,
+    required: string | null,
+  ): number {
     let delivered = 0;
-    for (const socket of set) {
+    for (const [socket, caps] of conns) {
       if (socket.readyState !== SOCKET_OPEN) continue;
+      if (required !== null && !caps.has(required)) continue;
       socket.send(frame);
       delivered += 1;
     }

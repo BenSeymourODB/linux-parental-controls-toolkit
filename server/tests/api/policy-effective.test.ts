@@ -13,8 +13,10 @@ import { SESSION_COOKIE } from "../../src/auth/session.js";
 import { loadSettings } from "../../src/config.js";
 import {
   budgets,
+  exceptions,
   grants,
   groupBudgets,
+  groupExceptions,
   groupSchedules,
   schedules,
   userGroupMemberships,
@@ -345,5 +347,94 @@ describe("GET /api/users/:userId/effective", () => {
     });
     expect(after.json().allowedWindows).toEqual([]);
     expect(after.json().activeRules).toHaveLength(1);
+  });
+
+  it("composes a date-specific exception override into the day (#142)", async () => {
+    const userId = await createUser("Alice"); // tz null → UTC
+    // A one-off "no screen time" deny active only for the first week of July.
+    harness.db
+      .insert(exceptions)
+      .values({
+        userId,
+        targetKind: "overall",
+        targetId: null,
+        action: "deny",
+        effectiveFrom: new Date("2026-07-01T00:00:00Z"),
+        expiresAt: new Date("2026-07-08T00:00:00Z"),
+      })
+      .run();
+
+    // Before the override window: unrestricted.
+    const before = await auth({
+      method: "GET",
+      url: `/api/users/${userId}/effective?date=2026-06-20`,
+    });
+    expect(before.json().allowedWindows).toEqual([{ start: 0, end: 1440 }]);
+
+    // Within the override window: access denied all day.
+    const during = await auth({
+      method: "GET",
+      url: `/api/users/${userId}/effective?date=2026-07-03`,
+    });
+    expect(during.json().allowedWindows).toEqual([]);
+
+    // After it expires: unrestricted again.
+    const after = await auth({
+      method: "GET",
+      url: `/api/users/${userId}/effective?date=2026-07-20`,
+    });
+    expect(after.json().allowedWindows).toEqual([{ start: 0, end: 1440 }]);
+  });
+
+  it("inherits a group exception into a member's effective day (#142)", async () => {
+    const userId = await createUser("Alice"); // tz null → UTC
+    const group = harness.db
+      .insert(userGroups)
+      .values({ name: "Kids" })
+      .returning({ id: userGroups.id })
+      .get();
+    if (group === undefined) throw new Error("group insert returned no row");
+    harness.db.insert(userGroupMemberships).values({ userId, groupId: group.id }).run();
+
+    // Group-wide "screen-free vacation" deny spanning the queried day — inherited
+    // by the member. `effectiveFrom` is set explicitly (rather than defaulting to
+    // the created-at wall clock) so the window is deterministic regardless of when
+    // the test runs.
+    harness.db
+      .insert(groupExceptions)
+      .values({
+        userGroupId: group.id,
+        targetKind: "overall",
+        targetId: null,
+        action: "deny",
+        effectiveFrom: new Date("2026-06-01T00:00:00Z"),
+        expiresAt: new Date("2030-01-01T00:00:00Z"),
+      })
+      .run();
+
+    const inherited = await auth({
+      method: "GET",
+      url: `/api/users/${userId}/effective?date=2026-06-20`,
+    });
+    expect(inherited.json().allowedWindows).toEqual([]);
+
+    // The member's own `allow` override wins over the inherited group deny.
+    harness.db
+      .insert(exceptions)
+      .values({
+        userId,
+        targetKind: "overall",
+        targetId: null,
+        action: "allow",
+        effectiveFrom: new Date("2026-06-01T00:00:00Z"),
+        expiresAt: new Date("2030-01-01T00:00:00Z"),
+      })
+      .run();
+
+    const overridden = await auth({
+      method: "GET",
+      url: `/api/users/${userId}/effective?date=2026-06-20`,
+    });
+    expect(overridden.json().allowedWindows).toEqual([{ start: 0, end: 1440 }]);
   });
 });

@@ -137,8 +137,16 @@ export type TransportQueueStatus = z.infer<typeof transportQueueStatusSchema>;
  * §4: retention purges only rows that have an "age", never the recurrence
  * rules themselves. So the categories are the dated tables that exist today:
  *
+ * Each category ages on the *end* of a record's relevant window, so a purge
+ * (`policy/purge.ts`, #138) only ever removes rows wholly in the past — an
+ * active or future-dated record can never be selected:
+ *
  * - `usage_samples` — ActivityWatch usage history (`usage_samples.ended_at`).
- * - `grant_ledger` — the immutable {@link grants} ledger (`granted_at`).
+ * - `grant_ledger` — the immutable {@link grants} ledger, keyed on
+ *   `expires_at`: a grant is purgeable only once it has expired, so an active
+ *   grant is never purged regardless of its `granted_at` age (and, since a
+ *   revocation is a `revoked_at` column on the grant row rather than a
+ *   separate ledger row, purging can never orphan a revocation).
  * - `audit_log` — transport audit entries (`audit_log.at`).
  * - `date_overrides` — date-specific policy rows whose effective window lies
  *   wholly in the past: an `exception` past `expires_at`, or a `schedule` past
