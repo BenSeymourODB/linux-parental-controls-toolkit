@@ -53,6 +53,14 @@
     return CATEGORY_META[category as RetentionCategory] ?? { label: category, description: "" };
   }
 
+  // Mirrors `MAX_RETENTION_DAYS` in `server/src/policy/retention.ts` (~100 years).
+  // A runtime value can't be imported here without dragging server code into the
+  // frontend bundle (the contract module is deliberately type-only), so the bound
+  // is duplicated as a literal; the server remains the authority and rejects an
+  // out-of-range value regardless. Used for the native input `max` and a
+  // pre-flight guard so a too-large window doesn't need a server round-trip to fail.
+  const MAX_RETENTION_DAYS = 36_525;
+
   /** Per-row draft: the edit state seeded from (and re-seeded after) a save. */
   interface Draft {
     keepForever: boolean;
@@ -133,8 +141,8 @@
       body = { keepForever: true };
     } else {
       const days = Number.parseInt(draft.days, 10);
-      if (!Number.isInteger(days) || days < 1) {
-        error = "Enter a whole number of days (1 or more), or choose keep forever.";
+      if (!Number.isInteger(days) || days < 1 || days > MAX_RETENTION_DAYS) {
+        error = `Enter a whole number of days between 1 and ${MAX_RETENTION_DAYS}, or choose keep forever.`;
         return;
       }
       body = { keepForever: false, days };
@@ -143,7 +151,7 @@
     savingCategory = entry.category;
     error = null;
     try {
-      const updated = await setRetentionOverride(entry.category as RetentionCategory, body);
+      const updated = await setRetentionOverride(entry.category, body);
       applyEntry(updated);
     } catch (err) {
       error = messageOf(err);
@@ -156,7 +164,7 @@
     clearingCategory = entry.category;
     error = null;
     try {
-      const reverted = await clearRetentionOverride(entry.category as RetentionCategory);
+      const reverted = await clearRetentionOverride(entry.category);
       applyEntry(reverted);
     } catch (err) {
       error = messageOf(err);
@@ -229,6 +237,7 @@
           {@const meta = metaFor(entry.category)}
           {@const draft = drafts[entry.category]}
           {@const isOverride = entry.source === "override"}
+          {@const busy = savingCategory === entry.category || clearingCategory === entry.category}
           <tr>
             <td>
               <div class="cat-name">{meta.label}</div>
@@ -249,7 +258,7 @@
                     aria-label={`${meta.label} retention mode`}
                     value={draft.keepForever ? "forever" : "custom"}
                     onchange={(e) => setMode(entry.category, e.currentTarget.value === "forever")}
-                    disabled={savingCategory === entry.category}
+                    disabled={busy}
                   >
                     <option value="custom">Custom window</option>
                     <option value="forever">Keep forever</option>
@@ -257,11 +266,12 @@
                   <input
                     type="number"
                     min="1"
+                    max={MAX_RETENTION_DAYS}
                     step="1"
                     aria-label={`${meta.label} retention days`}
                     value={draft.days}
                     oninput={(e) => setDays(entry.category, e.currentTarget.value)}
-                    disabled={draft.keepForever || savingCategory === entry.category}
+                    disabled={draft.keepForever || busy}
                   />
                   <span class="unit muted">days</span>
                 </div>
@@ -270,7 +280,7 @@
             <td class="actions">
               <button
                 onclick={() => handleSave(entry)}
-                disabled={savingCategory === entry.category}
+                disabled={busy}
                 aria-label={`Save ${meta.label} retention`}
               >
                 {savingCategory === entry.category ? "Saving…" : "Save override"}
@@ -278,7 +288,7 @@
               <button
                 class="ghost"
                 onclick={() => handleClear(entry)}
-                disabled={!isOverride || clearingCategory === entry.category}
+                disabled={!isOverride || busy}
                 aria-label={`Clear ${meta.label} override`}
               >
                 {clearingCategory === entry.category ? "Clearing…" : "Clear override"}

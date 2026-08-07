@@ -200,6 +200,91 @@ describe("RetentionView", () => {
     expect(setRetentionOverride).not.toHaveBeenCalled();
   });
 
+  it("rejects a day count above the maximum client-side without calling the API", async () => {
+    fetchRetention.mockResolvedValue(
+      config([entry({ category: "usage_samples", source: "default", days: 365 })]),
+    );
+
+    render(RetentionView);
+    await screen.findByText("Usage samples");
+
+    await fireEvent.input(screen.getByLabelText("Usage samples retention days"), {
+      target: { value: "40000" },
+    });
+    await fireEvent.click(screen.getByRole("button", { name: "Save Usage samples retention" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/between 1 and/i);
+    expect(setRetentionOverride).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a save error inline without losing the row", async () => {
+    const { ApiError } = await import("../../src/lib/api/client.js");
+    fetchRetention.mockResolvedValue(
+      config([entry({ category: "usage_samples", source: "default", days: 365 })]),
+    );
+    setRetentionOverride.mockRejectedValue(new ApiError(400, "invalid", "Days out of range."));
+
+    render(RetentionView);
+    await screen.findByText("Usage samples");
+
+    await fireEvent.input(screen.getByLabelText("Usage samples retention days"), {
+      target: { value: "30" },
+    });
+    await fireEvent.click(screen.getByRole("button", { name: "Save Usage samples retention" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Days out of range.");
+    // The row is unchanged — still inheriting the default, not flipped to override.
+    expect(screen.getByText("inherited default")).toBeInTheDocument();
+  });
+
+  it("toggles a keep-forever override back to a custom window and saves it", async () => {
+    fetchRetention.mockResolvedValue(
+      config([
+        entry({
+          category: "grant_ledger",
+          source: "override",
+          keepForever: true,
+          days: null,
+          updatedAt: "2026-08-07T00:00:00.000Z",
+        }),
+      ]),
+    );
+    setRetentionOverride.mockResolvedValue(
+      entry({
+        category: "grant_ledger",
+        source: "override",
+        keepForever: false,
+        days: 45,
+        updatedAt: "2026-08-07T00:00:00.000Z",
+      }),
+    );
+
+    render(RetentionView);
+    await screen.findByText("Grant ledger");
+    expect(screen.getByText("Kept forever")).toBeInTheDocument();
+
+    // The day input is disabled while keep-forever is selected...
+    const daysInput = screen.getByLabelText("Grant ledger retention days");
+    expect(daysInput).toBeDisabled();
+
+    // ...and re-enables when the mode toggles back to Custom.
+    await fireEvent.change(screen.getByLabelText("Grant ledger retention mode"), {
+      target: { value: "custom" },
+    });
+    expect(daysInput).not.toBeDisabled();
+
+    await fireEvent.input(daysInput, { target: { value: "45" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Save Grant ledger retention" }));
+
+    expect(setRetentionOverride).toHaveBeenCalledWith("grant_ledger", {
+      keepForever: false,
+      days: 45,
+    });
+    expect(await screen.findByText("45 days")).toBeInTheDocument();
+  });
+
   it("surfaces an ApiError from the load in the inline alert", async () => {
     const { ApiError } = await import("../../src/lib/api/client.js");
     fetchRetention.mockRejectedValue(new ApiError(500, "internal", "The server exploded."));
