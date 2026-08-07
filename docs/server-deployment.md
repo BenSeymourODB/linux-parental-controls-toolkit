@@ -58,6 +58,8 @@ container.
 ├── adguard/                    # populated on first run if enabled
 │   ├── AdGuardHome             # binary fetched from upstream releases
 │   └── conf/
+├── apt/
+│   └── timekpr/                # managed timekpr-next mirror (if enabled, #389)
 ├── backups/                    # automatic pre-migration snapshots (#166)
 └── logs/
 ```
@@ -216,6 +218,64 @@ process boundary required by `licensing-analysis.md`. `external` mode
 removes the binary from the deployment entirely; the user runs AdGuard
 themselves. Neither mode causes the dashboard to link or import GPL
 code.
+
+## Timekpr-nExT package mirror deployment modes
+
+Installing Timekpr-nExT on a client normally pulls it from the distro
+repository (or, opt-in, the upstream Launchpad PPA). On a slow link the
+PPA path stalls the enrolment, and the distro version can lag the upstream
+fixes we need. To take Launchpad off the client's critical path and give
+the fleet a fresher version, the dashboard can host its own mirror of the
+`timekpr-next` package, configured through `PCT_TIMEKPR_MIRROR`. This is
+modelled on the AdGuard Home trichotomy above and decided in
+[`docs/adr/0011-server-hosted-upstream-package-mirror.md`](adr/0011-server-hosted-upstream-package-mirror.md)
+(tracking issue #389).
+
+> **Status:** this release ships the configuration seam only (issue #391).
+> The background fetch/refresh job (#392), the served apt index + enrol-time
+> advertisement (#393), and the client-side repo path (#394) land in
+> subsequent Phase-14 slices; setting `managed`/`external` has no runtime
+> effect yet.
+
+| Mode | What the dashboard does | When to use it |
+|---|---|---|
+| `disabled` (default) | No mirror. The client installs `timekpr-next` from the distro repo; the upstream PPA stays opt-in on the client. | You're fine with the distro version, or you accept the PPA round-trip at install time. |
+| `managed` | Maintains a small apt repository under `/data/apt/timekpr/`, refreshed from upstream in the background and served over the LAN; clients point apt at the dashboard at enrol. | You want fast, up-to-date installs with Launchpad off the client's critical path, and you want the dashboard to own the mirror. |
+| `external` | Points clients at an apt repository you already host on the LAN. No fetch, no serving. | You already run an apt mirror for `timekpr-next` and just want clients to use it. |
+
+### Configuration
+
+Set via environment variables:
+
+```bash
+# disabled (default) — nothing to configure
+
+# managed — the dashboard hosts and refreshes the mirror
+PCT_TIMEKPR_MIRROR=managed
+PCT_TIMEKPR_MIRROR_DIR=/data/apt/timekpr        # apt repo lives here
+PCT_TIMEKPR_MIRROR_PACKAGE=timekpr-next         # or timekpr-next-beta
+PCT_TIMEKPR_MIRROR_VERSION=0.5.5                # optional: pin a version; newest if unset
+
+# external — point at an apt repo you already host
+PCT_TIMEKPR_MIRROR=external
+PCT_TIMEKPR_MIRROR_URL=https://apt.lan/timekpr
+```
+
+The mirrored **package/channel is chosen on the server**
+(`PCT_TIMEKPR_MIRROR_PACKAGE`, stable or beta), so a client never has to
+know which channel it gets.
+
+### License posture
+
+`timekpr-next` is GPL, so the mirror follows exactly the AdGuard
+managed-mode precedent: in `managed` mode the mirror is materialised in the
+`/data` volume **at runtime and never baked into the image**, so the
+published image stays GPL-free and `license-guard.yml` (which scans the
+image) is unaffected. The dashboard only *fetches* and *serves files* (and,
+where practical, shells packaging tools out as subprocesses) — no GPL code
+is linked in-process. Source-availability is met by a documented upstream
+source pointer, with source-package mirroring as an optional enhancement.
+See [`docs/licensing-analysis.md`](licensing-analysis.md) and ADR 0011.
 
 ## TrueNAS SCALE deployment
 
@@ -478,17 +538,26 @@ The retention **categories** are the dated tables that have an "age"
 (grounded in [`docs/adr/0005-recurrence-and-date-scoping.md`](adr/0005-recurrence-and-date-scoping.md)
 §4 — recurrence rules themselves are *not* dated and are never purged):
 
-| Category         | What it covers                                                       |
-| ---------------- | -------------------------------------------------------------------- |
-| `usage_samples`  | ActivityWatch usage history                                          |
-| `grant_ledger`   | the immutable grant ledger                                           |
-| `audit_log`      | transport audit entries                                              |
-| `date_overrides` | date-specific policy rows wholly in the past (an exception past its expiry, a schedule past its `effective_to`) |
+| Category         | What it covers                                                       | A row is purgeable once… |
+| ---------------- | -------------------------------------------------------------------- | ------------------------ |
+| `usage_samples`  | ActivityWatch usage history                                          | its interval **ended** (`ended_at`) longer ago than the window |
+| `grant_ledger`   | the immutable grant ledger                                           | it has **expired** (`expires_at`) longer ago than the window — so an active grant is never purged, and revocation (a column on the grant row) is never orphaned |
+| `audit_log`      | transport audit entries                                              | it was recorded (`at`) longer ago than the window |
+| `date_overrides` | date-specific policy rows wholly in the past (an exception past its expiry, a schedule/group-schedule past its `effective_to`) | the override's window **ended** longer ago than the window; open-ended recurrence rules (null `effective_to`) are never dated data and are never purged |
 
-This release ships the retention **configuration model and API** (#136);
-the scheduled purge job that acts on these windows lands separately
-(#137/#138). Only the global default lives in the environment — restart to
-change it; per-category overrides are runtime config and need no restart.
+Each category keys its "age" on the *end* of the record's relevant window, so
+a purge only ever removes data that is wholly in the past — an active or
+future-dated record can never be selected.
+
+This release ships the retention **configuration model and API** (#136) and the
+**per-entity deletion routines** (#138): one bounded, idempotent purge per
+category (`server/src/policy/purge.ts`, `purgeExpiredRecords`) that deletes
+strictly-expired rows in batches, so a large first run never holds a long write
+lock and an interrupted run resumes cleanly. What remains separate (#137) is the
+croner-scheduled job that *drives* these routines on a cadence, audits each run,
+and offers a dry-run/preview and a manual "run now". Only the global default
+lives in the environment — restart to change it; per-category overrides are
+runtime config and need no restart.
 
 ## Upgrade path
 

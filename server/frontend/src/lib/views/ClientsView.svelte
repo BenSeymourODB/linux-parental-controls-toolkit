@@ -60,12 +60,15 @@
   // Inline edit.
   let editingId = $state<number | null>(null);
   let editHostname = $state("");
+  let editFriendlyName = $state("");
   let editSshUser = $state("");
   let saving = $state(false);
 
   // Enrol flow.
   let users = $state<UserResponse[]>([]);
-  let enrolHostname = $state("");
+  // The friendly name the admin picks up front (#355): carried on the minted
+  // token and applied to the client row at claim time.
+  let enrolFriendlyName = $state("");
   let enrolRows = $state<{ userId: number | null; osUsername: string }[]>([
     { userId: null, osUsername: "" },
   ]);
@@ -143,6 +146,7 @@
   function startEdit(client: ClientResponse): void {
     editingId = client.id;
     editHostname = client.hostname;
+    editFriendlyName = client.friendlyName ?? "";
     editSshUser = client.sshUser;
     error = null;
   }
@@ -155,9 +159,14 @@
     saving = true;
     error = null;
     try {
+      // A friendly name is only sent when non-empty: the API requires ≥1 char
+      // for the field, so an empty box means "leave the existing name" rather
+      // than an unsupported clear-to-null.
+      const friendlyName = editFriendlyName.trim();
       const updated = await updateClient(id, {
         hostname: editHostname.trim(),
         sshUser: editSshUser.trim(),
+        ...(friendlyName === "" ? {} : { friendlyName }),
       });
       clients = clients.map((c) => (c.id === id ? updated : c));
       editingId = null;
@@ -219,11 +228,11 @@
         }
         supervisedUsers.push({ userId: r.userId, osUsername: r.osUsername.trim() });
       }
-      const hostname = enrolHostname.trim();
+      const friendlyName = enrolFriendlyName.trim();
       minted = await mintEnrolmentToken({
         supervisedUsers,
         ttlSeconds: 3600,
-        ...(hostname === "" ? {} : { hostname }),
+        ...(friendlyName === "" ? {} : { friendlyName }),
       });
       mintedUsernames = supervisedUsers.map((u) => u.osUsername);
     } catch (err) {
@@ -238,7 +247,7 @@
     mintedUsernames = [];
     enrolError = null;
     copied = false;
-    enrolHostname = "";
+    enrolFriendlyName = "";
     enrolRows = [{ userId: null, osUsername: "" }];
   }
 
@@ -407,18 +416,27 @@
               {#if editingId === client.id}
                 <input
                   class="edit-host"
+                  bind:value={editFriendlyName}
+                  aria-label="Edit friendly name"
+                  placeholder="Friendly name (optional)"
+                />
+                <input
+                  class="edit-host"
                   bind:value={editHostname}
                   aria-label="Edit hostname"
                 />
               {:else}
                 <div class="hostname">
-                  {client.hostname}
+                  {client.friendlyName ?? client.hostname}
                   {#if !client.enrolled}
                     <span class="badge manual" title="Created manually — has not been through the enrolment exchange, so it has no event-stream credential or supervised-user links yet.">
                       manual · not enrolled
                     </span>
                   {/if}
                 </div>
+                {#if client.friendlyName}
+                  <div class="muted small">{client.hostname}</div>
+                {/if}
               {/if}
               <div class="muted small">
                 {client.enrolled ? "enrolled" : "added"}
@@ -452,6 +470,22 @@
               </dd>
             </div>
             <div><dt>Last seen</dt><dd>{formatDateTime(client.lastSeen)}</dd></div>
+            {#if client.reportedIps && client.reportedIps.length > 0}
+              <div>
+                <dt title="The client's own reported address(es). Advisory — may be stale under DHCP.">
+                  Reported IPs
+                </dt>
+                <dd>{client.reportedIps.join(", ")}</dd>
+              </div>
+            {/if}
+            {#if client.sourceIp}
+              <div>
+                <dt title="The address the enrol request actually came from, as observed by the server.">
+                  Source IP
+                </dt>
+                <dd>{client.sourceIp}</dd>
+              </div>
+            {/if}
             <div>
               <dt>Agent version</dt>
               <dd>
@@ -600,9 +634,9 @@
         <input
           type="text"
           class="hostname-input"
-          placeholder="Expected hostname (optional)"
-          bind:value={enrolHostname}
-          aria-label="Expected hostname"
+          placeholder="Friendly name (optional, e.g. kids' living-room PC)"
+          bind:value={enrolFriendlyName}
+          aria-label="Friendly name"
         />
 
         {#if users.length === 0}

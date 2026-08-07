@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "0e860ec4-4283-4cb6-854d-2bad0c3bf4f1",
+  "id": "1c0fbc30-552d-45d7-a01c-1ad6ac067112",
   "prevId": "ac26c2ad-19e3-49c6-92eb-b7241706e9f2",
   "tables": {
     "activities": {
@@ -400,13 +400,6 @@
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
-        },
-        "recurrence_days": {
-          "name": "recurrence_days",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
         }
       },
       "indexes": {
@@ -453,14 +446,6 @@
         "budgets_target_coherence_check": {
           "name": "budgets_target_coherence_check",
           "value": "(\"budgets\".\"scope\" = 'overall') = (\"budgets\".\"target_id\" is null)"
-        },
-        "budgets_recurrence_days_check": {
-          "name": "budgets_recurrence_days_check",
-          "value": "\"budgets\".\"recurrence_days\" is null or (\"budgets\".\"recurrence_days\" between 1 and 127)"
-        },
-        "budgets_recurrence_daily_only_check": {
-          "name": "budgets_recurrence_daily_only_check",
-          "value": "\"budgets\".\"recurrence_days\" is null or \"budgets\".\"window\" = 'daily'"
         }
       }
     },
@@ -479,6 +464,13 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true,
+          "autoincrement": false
+        },
+        "friendly_name": {
+          "name": "friendly_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
           "autoincrement": false
         },
         "ssh_user": {
@@ -506,6 +498,20 @@
         "last_seen": {
           "name": "last_seen",
           "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "reported_ips": {
+          "name": "reported_ips",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "source_ip": {
+          "name": "source_ip",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
@@ -600,6 +606,13 @@
         },
         "hostname": {
           "name": "hostname",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "friendly_name": {
+          "name": "friendly_name",
           "type": "text",
           "primaryKey": false,
           "notNull": false,
@@ -972,13 +985,6 @@
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
-        },
-        "recurrence_days": {
-          "name": "recurrence_days",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
         }
       },
       "indexes": {
@@ -1025,14 +1031,6 @@
         "group_budgets_target_coherence_check": {
           "name": "group_budgets_target_coherence_check",
           "value": "(\"group_budgets\".\"scope\" = 'overall') = (\"group_budgets\".\"target_id\" is null)"
-        },
-        "group_budgets_recurrence_days_check": {
-          "name": "group_budgets_recurrence_days_check",
-          "value": "\"group_budgets\".\"recurrence_days\" is null or (\"group_budgets\".\"recurrence_days\" between 1 and 127)"
-        },
-        "group_budgets_recurrence_daily_only_check": {
-          "name": "group_budgets_recurrence_daily_only_check",
-          "value": "\"group_budgets\".\"recurrence_days\" is null or \"group_budgets\".\"window\" = 'daily'"
         }
       }
     },

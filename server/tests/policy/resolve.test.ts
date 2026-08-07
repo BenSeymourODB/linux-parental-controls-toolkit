@@ -16,6 +16,7 @@ import {
   selectBudgetsForWeekday,
   type BudgetInput,
   type EffectivePolicyInput,
+  type ExceptionInput,
   type GrantInput,
 } from "../../src/policy/resolve.js";
 import { resolveEffectiveAction, type ScheduleRule } from "../../src/policy/schedule-precedence.js";
@@ -38,6 +39,23 @@ function mkRule(overrides: Partial<ScheduleRule> = {}): ScheduleRule {
     effectiveFrom: null,
     effectiveTo: null,
     action: "allow",
+    ...overrides,
+  };
+}
+
+/**
+ * Build an {@link ExceptionInput}, defaulting to an `overall` `deny` that is
+ * active across the whole test day (2024-06-03). Overridable per test.
+ */
+function mkException(overrides: Partial<ExceptionInput> = {}): ExceptionInput {
+  return {
+    id: 1,
+    targetKind: "overall",
+    targetId: null,
+    action: "deny",
+    effectiveFrom: null,
+    expiresAt: new Date("2024-06-10T00:00:00Z"),
+    createdAt: new Date("2024-06-01T00:00:00Z"),
     ...overrides,
   };
 }
@@ -219,6 +237,63 @@ describe("effectivePolicy — allowed windows", () => {
     ]);
   });
 
+  it("`extend` widens the allowed window past a higher-precedence deny (ADR 0012 §2)", () => {
+    // A higher-precedence blanket deny would normally block the whole day; a
+    // lower-precedence `extend` window unions allowed time back in on top.
+    const result = effectivePolicy(
+      mkInput({
+        schedules: [
+          mkRule({ id: 1, ordinal: 0, action: "deny" }),
+          mkRule({
+            id: 2,
+            ordinal: 1,
+            action: "extend",
+            recurrenceStartMinute: 960,
+            recurrenceEndMinute: 1080,
+          }),
+        ],
+      }),
+    );
+    expect(result.allowedWindows).toEqual([{ start: 960, end: 1080 }]);
+  });
+
+  it("unions multiple `extend` windows over a deny, merging abutting ones", () => {
+    const result = effectivePolicy(
+      mkInput({
+        schedules: [
+          mkRule({ id: 1, ordinal: 0, action: "deny" }),
+          mkRule({
+            id: 2,
+            ordinal: 1,
+            action: "extend",
+            recurrenceStartMinute: 480,
+            recurrenceEndMinute: 600,
+          }),
+          mkRule({
+            id: 3,
+            ordinal: 2,
+            action: "extend",
+            recurrenceStartMinute: 600,
+            recurrenceEndMinute: 720,
+          }),
+          mkRule({
+            id: 4,
+            ordinal: 3,
+            action: "extend",
+            recurrenceStartMinute: 900,
+            recurrenceEndMinute: 960,
+          }),
+        ],
+      }),
+    );
+    // The two abutting extends (480–600, 600–720) merge into one; the disjoint
+    // 900–960 stays separate. Everything else remains denied.
+    expect(result.allowedWindows).toEqual([
+      { start: 480, end: 720 },
+      { start: 900, end: 960 },
+    ]);
+  });
+
   it("merges adjacent allowed segments split by a rule boundary into one window", () => {
     // A mid-day allow rule on a baseline-allow day splits the timeline into
     // three abutting allowed segments; they must collapse back to a single
@@ -342,6 +417,163 @@ describe("effectivePolicy — activeRules", () => {
   });
 });
 
+describe("effectivePolicy — date-specific exceptions (#142)", () => {
+  it("an active `deny` override blocks access over a baseline-allow day", () => {
+    const result = effectivePolicy(mkInput({ exceptions: [mkException({ action: "deny" })] }));
+    expect(result.allowedWindows).toEqual([]);
+  });
+
+  it("an active `allow` override wins over a recurring deny for the day", () => {
+    const result = effectivePolicy(
+      mkInput({
+        // A recurring blanket deny that, alone, would block the whole day.
+        schedules: [mkRule({ id: 1, ordinal: 0, action: "deny" })],
+        exceptions: [mkException({ action: "allow" })],
+      }),
+    );
+    expect(result.allowedWindows).toEqual([{ start: 0, end: 1440 }]);
+  });
+
+  it("is not active before its effective_from (future-dated override)", () => {
+    const result = effectivePolicy(
+      mkInput({
+        // Override starts 2024-06-05, resolving the 2024-06-03 day → not yet active.
+        exceptions: [
+          mkException({ action: "deny", effectiveFrom: new Date("2024-06-05T00:00:00Z") }),
+        ],
+      }),
+    );
+    expect(result.allowedWindows).toEqual([{ start: 0, end: 1440 }]);
+  });
+
+  it("becomes active on the day its effective_from opens", () => {
+    const result = effectivePolicy(
+      mkInput({
+        date: { year: 2024, month: 6, day: 5 },
+        exceptions: [
+          mkException({
+            action: "deny",
+            effectiveFrom: new Date("2024-06-05T00:00:00Z"),
+            expiresAt: new Date("2024-06-06T00:00:00Z"),
+          }),
+        ],
+      }),
+    );
+    expect(result.allowedWindows).toEqual([]);
+  });
+
+  it("is not active after it has expired", () => {
+    const result = effectivePolicy(
+      mkInput({
+        exceptions: [mkException({ action: "deny", expiresAt: new Date("2024-06-02T00:00:00Z") })],
+      }),
+    );
+    expect(result.allowedWindows).toEqual([{ start: 0, end: 1440 }]);
+  });
+
+  it("uses created_at as the active-window start when effective_from is null", () => {
+    // created_at is after the resolved day → not yet active despite no effective_from.
+    const result = effectivePolicy(
+      mkInput({
+        exceptions: [
+          mkException({
+            action: "deny",
+            effectiveFrom: null,
+            createdAt: new Date("2024-06-04T00:00:00Z"),
+          }),
+        ],
+      }),
+    );
+    expect(result.allowedWindows).toEqual([{ start: 0, end: 1440 }]);
+  });
+
+  it("resolves overrides in precedence order — index 0 allow wins", () => {
+    // Two active overall overrides; the first in the array (highest precedence)
+    // decides, mirroring gatherUserExceptions' own-before-group / newest-first.
+    const result = effectivePolicy(
+      mkInput({
+        exceptions: [
+          mkException({ id: 2, action: "allow" }),
+          mkException({ id: 1, action: "deny" }),
+        ],
+      }),
+    );
+    expect(result.allowedWindows).toEqual([{ start: 0, end: 1440 }]);
+  });
+
+  it("resolves overrides in precedence order — index 0 deny wins → no access", () => {
+    const result = effectivePolicy(
+      mkInput({
+        exceptions: [
+          mkException({ id: 2, action: "deny" }),
+          mkException({ id: 1, action: "allow" }),
+        ],
+      }),
+    );
+    expect(result.allowedWindows).toEqual([]);
+  });
+
+  it("honours a mid-day expiry: an `allow` override until 21:00 over a recurring deny", () => {
+    // "allow games until 9pm tonight" — a precise-instant expiry, not a day
+    // boundary — carves the [0, 1260) window out of an otherwise all-day deny.
+    const result = effectivePolicy(
+      mkInput({
+        schedules: [mkRule({ id: 1, ordinal: 0, action: "deny" })],
+        exceptions: [
+          mkException({
+            action: "allow",
+            effectiveFrom: new Date("2024-06-03T00:00:00Z"),
+            expiresAt: new Date("2024-06-03T21:00:00Z"),
+          }),
+        ],
+      }),
+    );
+    expect(result.allowedWindows).toEqual([{ start: 0, end: 1260 }]);
+  });
+
+  it("honours a mid-day expiry: a `deny` override until 21:00 on a baseline-allow day", () => {
+    const result = effectivePolicy(
+      mkInput({
+        exceptions: [
+          mkException({
+            action: "deny",
+            effectiveFrom: new Date("2024-06-03T00:00:00Z"),
+            expiresAt: new Date("2024-06-03T21:00:00Z"),
+          }),
+        ],
+      }),
+    );
+    // Denied until 21:00, then the baseline-allow resumes.
+    expect(result.allowedWindows).toEqual([{ start: 1260, end: 1440 }]);
+  });
+
+  it("an `extend` override widens past a recurring deny", () => {
+    const result = effectivePolicy(
+      mkInput({
+        schedules: [mkRule({ id: 1, ordinal: 0, action: "deny" })],
+        exceptions: [mkException({ action: "extend" })],
+      }),
+    );
+    expect(result.allowedWindows).toEqual([{ start: 0, end: 1440 }]);
+  });
+
+  it("an override on a non-overall target does not change the overall windows", () => {
+    const result = effectivePolicy(
+      mkInput({
+        exceptions: [mkException({ action: "deny", targetKind: "activity", targetId: 7 })],
+      }),
+    );
+    // Overall access is untouched by an activity-scoped override (parity with
+    // activity-scoped schedule rules, which also don't build overall windows).
+    expect(result.allowedWindows).toEqual([{ start: 0, end: 1440 }]);
+  });
+
+  it("ignores exceptions entirely when the field is omitted (default [])", () => {
+    const result = effectivePolicy(mkInput());
+    expect(result.allowedWindows).toEqual([{ start: 0, end: 1440 }]);
+  });
+});
+
 describe("effectivePolicy — overall budget", () => {
   const dailyOverall: BudgetInput = {
     scope: "overall",
@@ -459,7 +691,7 @@ describe("effectivePolicy — timezone & formatting", () => {
   });
 });
 
-// --- Weekday-varying budgets (#141, ADR 0012) ------------------------------
+// --- Weekday-varying budgets (#141, ADR 0013) ------------------------------
 
 /** Saturday + Sunday mask (bits 5 and 6). */
 const WEEKEND = (1 << 5) | (1 << 6); // 96

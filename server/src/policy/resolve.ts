@@ -26,13 +26,22 @@
  * (ADR 0001) — local time enters only here, storage stays UTC.
  *
  * **Scope of this slice.** Recurring windows + budgets (uniform *and*
- * weekday-varying, #141 / ADR 0012) + active grants. Weekday-varying budgets
- * resolve here via {@link selectBudgetsForWeekday} — a within-slot day layer
- * beneath the ADR-0008 group precedence, which stays in
- * {@link import("./group-resolution.js")}. Exception/date-specific-override
- * composition (#142) is a further additive layer that plugs into the same
- * resolver later; it is intentionally not resolved here so this does not code
- * against #142's not-yet-decided cross-layer ordering.
+ * weekday-varying) + active grants + date-specific overrides. Two orthogonal
+ * additive layers compose here, on independent axes that never interact:
+ *
+ * - **Date-specific overrides** — the optional `exceptions` layer (#142,
+ *   `docs/adr/0012-date-specific-override-composition.md`): an active one-off
+ *   `allow`/`deny`/`extend` override wins over the recurring rules for the
+ *   target it covers, and `extend` widens the allowed window past a standing
+ *   deny. Exceptions affect only the per-day allow/deny/extend **access
+ *   windows**, never the seconds budgets (an additive time amount is a `Grant`,
+ *   not an exception).
+ * - **Weekday-varying budgets** — the `recurrence_days` layer (#141,
+ *   `docs/adr/0013-weekday-varying-budgets.md`): {@link selectBudgetsForWeekday}
+ *   is a within-slot day layer beneath the ADR-0008 group precedence (which
+ *   stays in {@link import("./group-resolution.js")}), resolving the **seconds**
+ *   budget for the day. It touches only budgets, so it composes with the
+ *   exception layer without either coding against the other.
  *
  * License boundary: none touched — pure TypeScript over the policy model.
  */
@@ -46,6 +55,9 @@ import type { BudgetWindow, Scope, ScheduleAction } from "./enums.js";
 import { MINUTES_PER_DAY } from "./recurrence.js";
 import { byOrdinal, type RuleActivePredicate, type ScheduleRule } from "./schedule-precedence.js";
 
+/** Milliseconds in one minute — for projecting a UTC instant onto local minutes-of-day. */
+const MS_PER_MINUTE = 60_000;
+
 /**
  * The subset of a {@link import("./schema.js").budgets} row the resolver reads.
  * Structural so callers pass either a Drizzle row or a test fixture.
@@ -56,7 +68,7 @@ export interface BudgetInput {
   readonly window: BudgetWindow;
   readonly secondsAllowed: number;
   /**
-   * Weekday-varying budgets (#141, ADR 0012): a 7-bit ISO-weekday mask (bit 0 =
+   * Weekday-varying budgets (#141, ADR 0013): a 7-bit ISO-weekday mask (bit 0 =
    * Monday … bit 6 = Sunday) restricting the day(s) this `daily` allowance
    * applies to. `null`/absent = uniform (every day), the degenerate default
    * that reproduces pre-#141 behaviour. Resolved per slot by
@@ -80,6 +92,29 @@ export interface GrantInput {
   readonly expiresAt: Date;
   /** Revocation instant; `null` for a live grant (revoking never edits in place). */
   readonly revokedAt: Date | null;
+}
+
+/**
+ * The subset of an {@link import("./schema.js").exceptions} row (or a group
+ * exception, or a test fixture) the resolver reads. A one-off, date-anchored
+ * override active during `[effective_from ?? created_at, expires_at)` (ADR 0005
+ * §2). Structural so callers pass a user row, a group row, or a fixture.
+ *
+ * An exception carries an access `action`, not a seconds amount — it composes
+ * into the allow/deny/extend windows, never the budgets (ADR 0012 §1).
+ */
+export interface ExceptionInput {
+  /** Stable identity, used as the newest-first tiebreak within the exception layer. */
+  readonly id: number;
+  readonly targetKind: Scope;
+  readonly targetId: number | null;
+  readonly action: ScheduleAction;
+  /** Active-window start; `null` ⇒ active from {@link createdAt}. */
+  readonly effectiveFrom: Date | null;
+  /** Exclusive active-window end (the exception's `expires_at`). */
+  readonly expiresAt: Date;
+  /** Row creation instant — the active-window start when {@link effectiveFrom} is `null`. */
+  readonly createdAt: Date;
 }
 
 /** A half-open allowed-access interval in local minutes-from-midnight `[start, end)`. */
@@ -131,9 +166,11 @@ export interface EffectivePolicy {
   /** Effective per-activity / per-group daily allowances, ascending by target. */
   readonly perActivitySeconds: ActivityQuota[];
   /**
-   * Every schedule rule in play on the day (all scopes), in precedence order
+   * Every **schedule** rule in play on the day (all scopes), in precedence order
    * (`ordinal`, then `id`). Lets a preview surface render inherited/competing
-   * rules, not just the resolved `overall` windows.
+   * rules, not just the resolved `overall` windows. Date-specific exceptions are
+   * composed into {@link allowedWindows} but deliberately not listed here yet —
+   * surfacing their provenance in this list is #343.
    */
   readonly activeRules: ActiveRule[];
 }
@@ -147,6 +184,15 @@ export interface EffectivePolicyInput {
   readonly schedules: readonly ScheduleRule[];
   readonly budgets: readonly BudgetInput[];
   readonly grants: readonly GrantInput[];
+  /**
+   * Date-specific overrides (#142), **in precedence order** (index 0 = highest;
+   * `gatherUserExceptions` yields own-before-group, newest-before-older). Each
+   * active exception composes as a top-precedence, whole-day rule above the
+   * recurring `schedules` (ADR 0012). Optional — the recurring `timekpra` push
+   * and the force-close sweep legitimately omit it (a one-off date is not a
+   * recurring grid entry, and exceptions carry no quota), so it defaults to `[]`.
+   */
+  readonly exceptions?: readonly ExceptionInput[];
 }
 
 /** Is `rule`'s recurrence the always-on degenerate (every recurrence field NULL)? */
@@ -239,12 +285,43 @@ function ruleWindow(rule: ScheduleRule): { start: number; end: number } {
 }
 
 /**
+ * Sort `windows` by start and merge every overlapping or abutting pair into the
+ * minimal set of maximal, ascending, non-overlapping intervals. Empty and
+ * inverted (`start >= end`) inputs are dropped.
+ */
+function mergeWindows(windows: readonly AllowedWindow[]): AllowedWindow[] {
+  const sorted = windows.filter((w) => w.start < w.end).sort((a, b) => a.start - b.start);
+  const merged: AllowedWindow[] = [];
+  for (const window of sorted) {
+    const last = merged[merged.length - 1];
+    if (last !== undefined && window.start <= last.end) {
+      // Overlaps or abuts the current run — extend it (never shrink).
+      merged[merged.length - 1] = { start: last.start, end: Math.max(last.end, window.end) };
+    } else {
+      merged.push({ start: window.start, end: window.end });
+    }
+  }
+  return merged;
+}
+
+/**
  * Resolve the day's allowed overall-access windows from the `overall`-scoped
- * candidate rules. Walks the minute timeline at every rule boundary; within
- * each segment the first rule (by precedence order) whose window covers it
- * wins, and the segment is allowed unless that winner is `deny`. With no
- * winner the baseline is allow (ADR 0004). Adjacent allowed segments are
- * merged so the result is the minimal set of maximal windows.
+ * candidate rules, in precedence order (highest first — active exceptions are
+ * already prepended by {@link effectivePolicy}, ADR 0012 §1).
+ *
+ * Two composition steps:
+ *
+ * 1. **allow/deny first-match** — walk the minute timeline at every rule
+ *    boundary; within each segment the first rule whose window covers it wins,
+ *    and the segment is allowed unless that winner is `deny`. With no winner the
+ *    baseline is allow (ADR 0004). (`extend` participates here as a permit, so
+ *    it still wins its own segment exactly as before.)
+ * 2. **`extend` union** (ADR 0012 §2) — every active `extend` window is then
+ *    unioned onto the allowed set, so an `extend` widens access even past a
+ *    higher-precedence overlapping `deny`. This only ever *adds* allowed time.
+ *
+ * The union is merged with the first-match result into the minimal set of
+ * maximal windows.
  */
 function resolveAllowedWindows(overallRules: readonly ActiveRule[]): AllowedWindow[] {
   // Segment boundaries: day edges plus every rule window edge, deduped/sorted.
@@ -263,14 +340,44 @@ function resolveAllowedWindows(overallRules: readonly ActiveRule[]): AllowedWind
     const winner = overallRules.find((r) => r.startMinute <= start && r.endMinute >= end);
     const allowed = winner === undefined || winner.action !== "deny";
     if (!allowed) continue;
-    const last = windows[windows.length - 1];
-    if (last !== undefined && last.end === start) {
-      windows[windows.length - 1] = { start: last.start, end };
-    } else {
-      windows.push({ start, end });
-    }
+    windows.push({ start, end });
   }
-  return windows;
+
+  // Widen with every `extend` window (ADR 0012 §2), then merge to maximal windows.
+  const extendWindows = overallRules
+    .filter((rule) => rule.action === "extend")
+    .map((rule) => ({ start: rule.startMinute, end: rule.endMinute }));
+  return mergeWindows([...windows, ...extendWindows]);
+}
+
+/**
+ * Is `exc` active on the local day whose UTC bounds are `[dayStart, dayEnd)`?
+ * The exception's local-minute `[start, end)` window on the day whose UTC bounds
+ * are `[dayStart, dayEnd)`, or `null` when its active window
+ * `[effective_from ?? created_at, expires_at)` (ADR 0005 §2) does not overlap
+ * the day at all.
+ *
+ * The active window is a precise instant range (an exception `expires_at` is an
+ * exact instant — "allow games until 9pm tonight", ADR 0012 §1), so it is
+ * **intersected** with the day and projected onto local minutes: an interior day
+ * of a multi-day override yields the full `[0, 1440)`, while the first/last day
+ * yields the partial window the instants carve out. Minutes-since-local-midnight
+ * are the elapsed real minutes from `dayStart` (the UTC instant of local
+ * midnight), matching the resolver's existing minute model.
+ */
+function exceptionWindowOnDay(
+  exc: ExceptionInput,
+  dayStart: Date,
+  dayEnd: Date,
+): { start: number; end: number } | null {
+  const fromMs = (exc.effectiveFrom ?? exc.createdAt).getTime();
+  const startMs = Math.max(fromMs, dayStart.getTime());
+  const endMs = Math.min(exc.expiresAt.getTime(), dayEnd.getTime());
+  if (startMs >= endMs) return null;
+  return {
+    start: Math.round((startMs - dayStart.getTime()) / MS_PER_MINUTE),
+    end: Math.round((endMs - dayStart.getTime()) / MS_PER_MINUTE),
+  };
 }
 
 /** Is `grant` live and overlapping the day's `[dayStart, dayEnd)` UTC bounds? */
@@ -294,7 +401,7 @@ interface DayBounds {
 
 /**
  * The `(scope, window, target)` slot a budget occupies — the key over which
- * ADR 0008 dedupes cross-source budgets and ADR 0012 groups a slot's rows for
+ * ADR 0008 dedupes cross-source budgets and ADR 0013 groups a slot's rows for
  * weekday selection. Exported so {@link import("./group-resolution.js")} shares
  * the one definition (the two layers must key identically or they drift).
  */
@@ -304,7 +411,7 @@ export function budgetSlotKey(budget: BudgetInput): string {
 
 /**
  * Reduce a budget list to the rows that apply on the given ISO `weekday`
- * (1 = Monday … 7 = Sunday), the within-slot weekday layer of #141 / ADR 0012.
+ * (1 = Monday … 7 = Sunday), the within-slot weekday layer of #141 / ADR 0013.
  *
  * Per `(scope, window, target)` slot: rows whose `recurrenceDays` mask **covers**
  * `weekday` (weekday-specific) win over and shadow the slot's uniform
@@ -460,11 +567,33 @@ export function effectivePolicy(input: EffectivePolicyInput): EffectivePolicy {
       };
     });
 
-  const allowedWindows = resolveAllowedWindows(
-    activeRules.filter((rule) => rule.targetKind === "overall"),
-  );
+  // Date-specific overrides (#142, ADR 0012): each exception active on the day
+  // becomes a rule at the head of the precedence order — over the local-minute
+  // window its instant range carves out of the day — so an active override wins
+  // over the recurring rules for the target it covers. The `exceptions` array is
+  // already in precedence order (own-before-group, newest-before-older); its
+  // order is preserved.
+  const exceptionRules: ActiveRule[] = (input.exceptions ?? []).flatMap((exc) => {
+    const window = exceptionWindowOnDay(exc, dayStart, dayEnd);
+    if (window === null) return [];
+    return [
+      {
+        id: exc.id,
+        targetKind: exc.targetKind,
+        targetId: exc.targetId,
+        action: exc.action,
+        startMinute: window.start,
+        endMinute: window.end,
+      },
+    ];
+  });
 
-  // Budgets: reduce to the rows in play on this weekday (#141, ADR 0012) — a
+  const allowedWindows = resolveAllowedWindows([
+    ...exceptionRules.filter((rule) => rule.targetKind === "overall"),
+    ...activeRules.filter((rule) => rule.targetKind === "overall"),
+  ]);
+
+  // Budgets: reduce to the rows in play on this weekday (#141, ADR 0013) — a
   // uniform-only list passes through unchanged — then resolve the overall daily
   // allowance and the per-activity/per-group quotas, each folding in active
   // grants overlapping the day (`dayBounds` carries the effective-tz day edges

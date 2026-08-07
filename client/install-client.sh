@@ -113,6 +113,12 @@ PCT_AGENT_VERSION="${PCT_AGENT_VERSION:-}"
 PCT_TIMEKPR_VERSION="${PCT_TIMEKPR_VERSION:-}"
 PCT_E2GUARDIAN_VERSION="${PCT_E2GUARDIAN_VERSION:-}"
 PCT_ACTIVITYWATCH_VERSION="${PCT_ACTIVITYWATCH_VERSION:-}"
+# Address reporting at enrol (#355). PCT_HOSTNAME is the command probed for the
+# box's own IP(s) (`hostname -I`); PCT_REPORTED_IPS is an explicit override
+# (space- or comma-separated) used verbatim instead of probing — handy for tests
+# and installs where the probe can't see a usable address.
+PCT_HOSTNAME="${PCT_HOSTNAME:-hostname}"
+PCT_REPORTED_IPS="${PCT_REPORTED_IPS:-}"
 
 # --- usage -----------------------------------------------------------------
 
@@ -271,12 +277,47 @@ pct_orch_build_component_versions_json() {
   printf '{%s}' "${parts[*]}"
 }
 
+# The reportedIps JSON array for the box's own primary address(es) (#355), or
+# the empty string when none could be determined (the caller then omits the
+# field). Sourced from an explicit PCT_REPORTED_IPS override, else `hostname -I`
+# (all non-loopback addresses). Loopback is dropped and each token must be a
+# bare IPv4/IPv6 literal — [0-9A-Fa-f.:%], matching the server's reportedIps DTO
+# — so a value can never carry a '"' or '\' that would break the hand-rolled
+# JSON encoding below. Advisory metadata only: it is never used as an SSH target
+# here (the server records the observed source IP as the reliable ground truth),
+# so a stale or missing value is harmless. Capped at 16 entries to match the DTO.
+pct_orch_build_reported_ips_json() {
+  local raw
+  if [ -n "$PCT_REPORTED_IPS" ]; then
+    raw="$PCT_REPORTED_IPS"
+  else
+    raw="$("$PCT_HOSTNAME" -I 2>/dev/null || true)"
+  fi
+  local parts=() tokens=() ip count=0
+  # Split on whitespace and commas into an array (no unquoted-glob word split).
+  local IFS=$' \t\n,'
+  read -ra tokens <<<"$raw"
+  for ip in "${tokens[@]}"; do
+    [ -n "$ip" ] || continue
+    case "$ip" in
+      127.0.0.1 | ::1) continue ;;
+      *[!0-9A-Fa-f.:%]*) continue ;;
+    esac
+    parts+=("\"${ip}\"")
+    count=$((count + 1))
+    [ "$count" -ge 16 ] && break
+  done
+  [ "${#parts[@]}" -gt 0 ] || return 0
+  local IFS=","
+  printf '[%s]' "${parts[*]}"
+}
+
 # Build the JSON body for POST /api/clients/enrol from the hostname, ssh user,
-# the detected agent version + componentVersions JSON (either may be empty, in
-# which case the field is omitted), and a flat list of (username uid) pairs,
-# matching the zod DTO (#77/#164/#230):
+# the detected agent version + componentVersions JSON, the reportedIps JSON
+# array (any of which may be empty, in which case the field is omitted), and a
+# flat list of (username uid) pairs, matching the zod DTO (#77/#164/#230/#355):
 # {hostname, sshUser, supervisedUsers:[{osUsername, osUserRef:"<string>"}],
-#  agentVersion?, componentVersions?}.
+#  agentVersion?, componentVersions?, reportedIps?}.
 #
 # `osUserRef` is the OS-neutral account reference (#230): a uid on Linux, a SID
 # on Windows. It is a JSON **string** — on Linux this is the numeric uid in its
@@ -292,8 +333,8 @@ pct_orch_build_component_versions_json() {
 # are the trust boundary; this is not a general JSON encoder and must not be
 # reused for free-form input.
 pct_orch_build_enrol_body() {
-  local hostname="$1" sshuser="$2" agent_version="$3" components_json="$4"
-  shift 4
+  local hostname="$1" sshuser="$2" agent_version="$3" components_json="$4" reported_ips_json="$5"
+  shift 5
   local users_json="" sep=""
   while [ "$#" -ge 2 ]; do
     users_json="${users_json}${sep}{\"osUsername\":\"$1\",\"osUserRef\":\"$2\"}"
@@ -303,6 +344,7 @@ pct_orch_build_enrol_body() {
   local extra=""
   [ -n "$agent_version" ] && extra="${extra},\"agentVersion\":\"${agent_version}\""
   [ -n "$components_json" ] && extra="${extra},\"componentVersions\":${components_json}"
+  [ -n "$reported_ips_json" ] && extra="${extra},\"reportedIps\":${reported_ips_json}"
   printf '{"hostname":"%s","sshUser":"%s","supervisedUsers":[%s]%s}' \
     "$hostname" "$sshuser" "$users_json" "$extra"
 }
@@ -336,12 +378,14 @@ pct_orch_json_number() {
 pct_orch_enrol() {
   local server="$1" token="$2" hostname="$3" sshuser="$4"
   shift 4
-  local body url agent_version components_json
+  local body url agent_version components_json reported_ips_json
   # Best-effort version inventory (#164) — detection never fails, so an
   # undetectable tool just omits its field.
   agent_version="$(pct_orch_detect_agent_version)"
   components_json="$(pct_orch_build_component_versions_json)"
-  body="$(pct_orch_build_enrol_body "$hostname" "$sshuser" "$agent_version" "$components_json" "$@")"
+  # Best-effort self-reported addresses (#355) — the field is omitted when none.
+  reported_ips_json="$(pct_orch_build_reported_ips_json)"
+  body="$(pct_orch_build_enrol_body "$hostname" "$sshuser" "$agent_version" "$components_json" "$reported_ips_json" "$@")"
   url="${server%/}/api/clients/enrol"
 
   if pct_is_dry_run; then

@@ -112,6 +112,12 @@ export function registerClientEnrolmentRoutes(scope: FastifyInstance, settings: 
         const result = enrolClient(scope.db, token, request.body, {
           sshPublicKeyPath: settings.sshPublicKeyPath,
           log: request.log,
+          // `request.ip` is the direct socket peer unless `trustProxy` is set
+          // (#235), in which case Fastify derives the real client IP from a
+          // trusted `X-Forwarded-For` — the documented reverse-proxy posture, so
+          // this needs no separate header parse. Recorded as observed ground
+          // truth of the address that reached us client→server (#355).
+          sourceIp: request.ip,
         });
         enrolLimiter.recordSuccess(key);
         reply.code(201);

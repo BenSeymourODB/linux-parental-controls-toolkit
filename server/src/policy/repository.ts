@@ -75,12 +75,16 @@ export interface UserUpdate {
 export interface ClientCreate {
   hostname: string;
   sshUser: string;
+  /** Optional admin-chosen friendly name (#355). */
+  friendlyName?: string | undefined;
 }
 
 /** Mutable fields on a {@link clients} row; omitted keys are left unchanged. */
 export interface ClientUpdate {
   hostname?: string | undefined;
   sshUser?: string | undefined;
+  /** Admin-editable friendly name (#355). */
+  friendlyName?: string | undefined;
 }
 
 /** The link's own attributes (the user/client pair comes from the route). */
@@ -145,7 +149,11 @@ export function getClient(db: PolicyDb, id: number): ClientRow | undefined {
 export function createClient(db: PolicyDb, input: ClientCreate): ClientRow {
   return db
     .insert(clients)
-    .values({ hostname: input.hostname, sshUser: input.sshUser })
+    .values({
+      hostname: input.hostname,
+      sshUser: input.sshUser,
+      friendlyName: input.friendlyName ?? null,
+    })
     .returning()
     .get();
 }
@@ -648,7 +656,7 @@ export interface BudgetCreate {
   targetId?: number | null | undefined;
   window: BudgetWindow;
   secondsAllowed: number;
-  /** 7-bit ISO-weekday mask (#141, ADR 0012); null/absent = uniform. Daily budgets only. */
+  /** 7-bit ISO-weekday mask (#141, ADR 0013); null/absent = uniform. Daily budgets only. */
   recurrenceDays?: number | null | undefined;
 }
 
@@ -1249,7 +1257,7 @@ export interface GroupBudgetCreate {
   targetId?: number | null | undefined;
   window: BudgetWindow;
   secondsAllowed: number;
-  /** 7-bit ISO-weekday mask (#141, ADR 0012); null/absent = uniform. Daily budgets only. */
+  /** 7-bit ISO-weekday mask (#141, ADR 0013); null/absent = uniform. Daily budgets only. */
   recurrenceDays?: number | null | undefined;
 }
 

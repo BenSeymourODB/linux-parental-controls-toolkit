@@ -20,7 +20,7 @@
  * grid — exactly Phase 4's "dashboard pushes overall session limits". Grants
  * are resolved as `[]` here (the grant-driven recompute push is #117); PlayTime
  * / per-activity limits are Phase 8 (#99). Weekday-varying budgets (#141, ADR
- * 0012) are resolved per weekday below via
+ * 0013) are resolved per weekday below via
  * {@link import("../../policy/resolve.js").overallDailySecondsForWeekday}, so a
  * "2h weekdays / 4h weekends" budget reaches the seven-day `--settimelimits`
  * list — without changing this contract.
@@ -91,7 +91,7 @@ function rollingOverallSeconds(
  * the live push hands to a {@link import("../timekpr/client.js").TimekprClient}.
  *
  * The per-weekday daily overall limit comes from the resolver's weekday layer
- * (#141, ADR 0012), so the one "what applies on day D" computation stays the
+ * (#141, ADR 0013), so the one "what applies on day D" computation stays the
  * single source. Each of the seven `--settimelimits` days is resolved
  * independently: a weekday with **no** daily overall budget is pushed as the
  * whole-day allowance (`SECONDS_PER_DAY` — the same "maximal allowance =

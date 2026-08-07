@@ -1,4 +1,4 @@
-# ADR 0012 — Weekday-varying budgets: nullable recurrence mask, within-slot resolution
+# ADR 0013 — Weekday-varying budgets: nullable recurrence mask, within-slot resolution
 
 - **Status:** Accepted (2026-08-07)
 - **Issue:** [#141](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/141)
@@ -6,6 +6,13 @@
   builds on the column-reservation decision ADR 0005 / [#146](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/146);
   composes with group budgets ADR 0008 / [#134](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/134))
 - **Phase:** 13
+
+> **Numbering note.** This decision was first drafted as ADR 0012, but the
+> concurrently-merged date-specific-override composition took 0012
+> (`0012-date-specific-override-composition.md`, #142/#398). To avoid a second
+> 0012, weekday-varying budgets take the next free number, **0013**. The two are
+> orthogonal layers of the same resolver — exceptions vary the allow/deny
+> **access windows**, this varies the **seconds** budget — and never interact.
 
 ## Context
 

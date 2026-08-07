@@ -38,6 +38,7 @@
   import LinksView from "$lib/views/LinksView.svelte";
   import IntegrationTokensView from "$lib/views/IntegrationTokensView.svelte";
   import AuditLogView from "$lib/views/AuditLogView.svelte";
+  import RetentionView from "$lib/views/RetentionView.svelte";
 
   // `null` while the initial session probe (and, if authenticated, the setup
   // status fetch) are in flight. Both fetches complete before `session` is set,
@@ -113,6 +114,7 @@
     { id: "notifications", label: "Notifications" },
     { id: "integrations", label: "Integrations" },
     { id: "audit", label: "Audit log" },
+    { id: "retention", label: "Data retention" },
   ];
   let activeView = $state<string>("dashboard");
 
@@ -234,6 +236,8 @@
       <IntegrationTokensView />
     {:else if activeView === "audit"}
       <AuditLogView />
+    {:else if activeView === "retention"}
+      <RetentionView />
     {:else}
       <DashboardView {username} onnavigate={(id) => (activeView = id)} />
     {/if}

@@ -3,7 +3,7 @@
 Roadmap: `docs/roadmap.md` → **Phase 13** (calendar-based scheduling/budgeting
 extensions). Blockers #139 (ADR 0005) and #146 (column reservation) are closed;
 extends the #143 resolver. Decision recorded in
-[`docs/adr/0012-weekday-varying-budgets.md`](../../docs/adr/0012-weekday-varying-budgets.md).
+[`docs/adr/0013-weekday-varying-budgets.md`](../../docs/adr/0013-weekday-varying-budgets.md).
 
 ## Goal
 
@@ -12,7 +12,7 @@ Let a `daily` budget vary by day of week — "2h on school days, 4h on weekends"
 (display) **and** the `timekpra` push (enforcement) in the same PR, so it is not
 display-only (the trap #362 fixed for group rules).
 
-## Design (see ADR 0012)
+## Design (see ADR 0013)
 
 - Weekday is a **within-slot** dimension. ADR 0008's own-vs-group full-replace
   per `(scope, window, target)` slot is **unchanged**; weekday selection runs
