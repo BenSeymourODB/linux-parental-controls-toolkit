@@ -596,6 +596,50 @@ describe("policy CRUD routes — policy model (#148)", () => {
     expect((await auth({ method: "DELETE", url: `/api/budgets/${body.id}` })).statusCode).toBe(204);
   });
 
+  it("stores/returns a weekday-varying daily budget and rejects a mask on a non-daily one (#141)", async () => {
+    const userId = await makeUser();
+    // Mon..Fri mask (bits 0..4 = 31).
+    const created = await auth({
+      method: "POST",
+      url: "/api/budgets",
+      payload: {
+        userId,
+        scope: "overall",
+        window: "daily",
+        secondsAllowed: 7200,
+        recurrenceDays: 31,
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    expect(created.json()).toMatchObject({ recurrenceDays: 31 });
+    const id = created.json().id;
+    expect((await auth({ method: "GET", url: `/api/budgets/${id}` })).json().recurrenceDays).toBe(
+      31,
+    );
+
+    // A PATCH can clear the mask back to uniform.
+    const patched = await auth({
+      method: "PATCH",
+      url: `/api/budgets/${id}`,
+      payload: { recurrenceDays: null },
+    });
+    expect(patched.json().recurrenceDays).toBeNull();
+
+    // A weekday mask on a rolling weekly budget is rejected up front (daily-only, ADR 0012).
+    const bad = await auth({
+      method: "POST",
+      url: "/api/budgets",
+      payload: {
+        userId,
+        scope: "overall",
+        window: "weekly",
+        secondsAllowed: 36000,
+        recurrenceDays: 31,
+      },
+    });
+    expect(bad.statusCode).toBe(400);
+  });
+
   it("creates an activity-scoped budget against an existing target", async () => {
     const userId = await makeUser();
     const activityId = await makeActivity("steam");

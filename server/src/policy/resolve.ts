@@ -25,12 +25,14 @@
  * the user's effective timezone, via {@link import("./budget-window.js")}
  * (ADR 0001) — local time enters only here, storage stays UTC.
  *
- * **Scope of this slice.** Recurring windows + uniform budgets + active grants,
- * exactly the Phase-4 core of #143. Exception/date-specific-override
- * composition (#142) and weekday-varying budgets (#141) are additive layers
- * that plug into the same resolver later; they are intentionally not resolved
- * here so this does not code against #142's not-yet-decided cross-layer
- * ordering.
+ * **Scope of this slice.** Recurring windows + budgets (uniform *and*
+ * weekday-varying, #141 / ADR 0012) + active grants. Weekday-varying budgets
+ * resolve here via {@link selectBudgetsForWeekday} — a within-slot day layer
+ * beneath the ADR-0008 group precedence, which stays in
+ * {@link import("./group-resolution.js")}. Exception/date-specific-override
+ * composition (#142) is a further additive layer that plugs into the same
+ * resolver later; it is intentionally not resolved here so this does not code
+ * against #142's not-yet-decided cross-layer ordering.
  *
  * License boundary: none touched — pure TypeScript over the policy model.
  */
@@ -53,6 +55,14 @@ export interface BudgetInput {
   readonly targetId: number | null;
   readonly window: BudgetWindow;
   readonly secondsAllowed: number;
+  /**
+   * Weekday-varying budgets (#141, ADR 0012): a 7-bit ISO-weekday mask (bit 0 =
+   * Monday … bit 6 = Sunday) restricting the day(s) this `daily` allowance
+   * applies to. `null`/absent = uniform (every day), the degenerate default
+   * that reproduces pre-#141 behaviour. Resolved per slot by
+   * {@link selectBudgetsForWeekday}.
+   */
+  readonly recurrenceDays?: number | null;
 }
 
 /**
@@ -282,6 +292,76 @@ interface DayBounds {
   readonly end: Date;
 }
 
+/** The `(scope, window, target)` slot a budget occupies (ADR 0008 / 0012). */
+function budgetSlotKey(budget: BudgetInput): string {
+  return `${budget.scope}:${budget.window}:${budget.targetId ?? "null"}`;
+}
+
+/**
+ * Reduce a budget list to the rows that apply on the given ISO `weekday`
+ * (1 = Monday … 7 = Sunday), the within-slot weekday layer of #141 / ADR 0012.
+ *
+ * Per `(scope, window, target)` slot: rows whose `recurrenceDays` mask **covers**
+ * `weekday` (weekday-specific) win over and shadow the slot's uniform
+ * (`null`-mask) rows; rows whose mask is set but does **not** cover `weekday`
+ * are dropped. If a slot has weekday-specific rows but none covers `weekday`
+ * and there is no uniform fallback, the slot contributes nothing that day (no
+ * daily limit). Surviving rows are returned as-is so the callers' existing
+ * same-slot summing is preserved — a uniform-only list passes through unchanged,
+ * so pre-#141 behaviour is exact.
+ *
+ * This is a *within-slot* dimension: it never mixes sources, so it composes
+ * with the ADR-0008 group precedence resolved upstream in
+ * {@link import("./group-resolution.js").gatherUserBudgets} without disturbing
+ * the "a slot is sourced from exactly one place" invariant.
+ */
+export function selectBudgetsForWeekday(
+  budgets: readonly BudgetInput[],
+  weekday: number,
+): BudgetInput[] {
+  const weekdayBit = 1 << (weekday - 1);
+  const bySlot = new Map<string, BudgetInput[]>();
+  for (const budget of budgets) {
+    const key = budgetSlotKey(budget);
+    const existing = bySlot.get(key);
+    if (existing === undefined) bySlot.set(key, [budget]);
+    else existing.push(budget);
+  }
+
+  const selected: BudgetInput[] = [];
+  for (const rows of bySlot.values()) {
+    const specific = rows.filter((b) => {
+      const mask = b.recurrenceDays ?? null;
+      return mask !== null && (mask & weekdayBit) !== 0;
+    });
+    if (specific.length > 0) {
+      selected.push(...specific);
+      continue;
+    }
+    selected.push(...rows.filter((b) => (b.recurrenceDays ?? null) === null));
+  }
+  return selected;
+}
+
+/**
+ * The effective overall daily allowance for one ISO `weekday`, in seconds — the
+ * sum of the `overall`/`daily` budgets that {@link selectBudgetsForWeekday}
+ * leaves in play on that weekday, or `null` when none does (no daily limit that
+ * day). Grants are **not** folded in here: this is the per-weekday baseline the
+ * `timekpra` push (`transport/policy-push/resolve.ts`) reads to build the
+ * seven-day `--settimelimits` list, and the grant overlay is a per-user
+ * recompute layer above the push (#117).
+ */
+export function overallDailySecondsForWeekday(
+  budgets: readonly BudgetInput[],
+  weekday: number,
+): number | null {
+  const daily = selectBudgetsForWeekday(budgets, weekday).filter(
+    (b) => b.scope === "overall" && b.window === "daily",
+  );
+  return daily.length === 0 ? null : daily.reduce((sum, b) => sum + b.secondsAllowed, 0);
+}
+
 /**
  * The effective overall daily allowance in seconds: the sum of the user's
  * `overall`/`daily` budgets plus any active overall grants overlapping the day.
@@ -379,12 +459,15 @@ export function effectivePolicy(input: EffectivePolicyInput): EffectivePolicy {
     activeRules.filter((rule) => rule.targetKind === "overall"),
   );
 
-  // Budgets: the overall daily allowance and the per-activity/per-group quotas,
-  // each folding in active grants overlapping the day (`dayBounds` carries the
-  // effective-tz day edges the grant-overlap test needs).
+  // Budgets: reduce to the rows in play on this weekday (#141, ADR 0012) — a
+  // uniform-only list passes through unchanged — then resolve the overall daily
+  // allowance and the per-activity/per-group quotas, each folding in active
+  // grants overlapping the day (`dayBounds` carries the effective-tz day edges
+  // the grant-overlap test needs).
   const dayBounds: DayBounds = { start: dayStart, end: dayEnd };
-  const overallSeconds = resolveOverallSeconds(input.budgets, input.grants, dayBounds);
-  const perActivitySeconds = buildActivityQuotas(input.budgets, input.grants, dayBounds);
+  const budgetsForDay = selectBudgetsForWeekday(input.budgets, weekday);
+  const overallSeconds = resolveOverallSeconds(budgetsForDay, input.grants, dayBounds);
+  const perActivitySeconds = buildActivityQuotas(budgetsForDay, input.grants, dayBounds);
 
   return {
     date: `${year}-${pad2(month)}-${pad2(day)}`,

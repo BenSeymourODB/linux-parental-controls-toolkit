@@ -648,6 +648,8 @@ export interface BudgetCreate {
   targetId?: number | null | undefined;
   window: BudgetWindow;
   secondsAllowed: number;
+  /** 7-bit ISO-weekday mask (#141, ADR 0012); null/absent = uniform. Daily budgets only. */
+  recurrenceDays?: number | null | undefined;
 }
 
 /** Mutable fields on a {@link budgets} row; omitted keys are left unchanged. */
@@ -656,6 +658,7 @@ export interface BudgetUpdate {
   targetId?: number | null | undefined;
   window?: BudgetWindow | undefined;
   secondsAllowed?: number | undefined;
+  recurrenceDays?: number | null | undefined;
 }
 
 /** All budgets, ascending by id. */
@@ -686,6 +689,7 @@ export function createBudget(db: PolicyDb, input: BudgetCreate): BudgetRow {
       targetId: input.targetId ?? null,
       window: input.window,
       secondsAllowed: input.secondsAllowed,
+      recurrenceDays: input.recurrenceDays ?? null,
     })
     .returning()
     .get();
@@ -1245,6 +1249,8 @@ export interface GroupBudgetCreate {
   targetId?: number | null | undefined;
   window: BudgetWindow;
   secondsAllowed: number;
+  /** 7-bit ISO-weekday mask (#141, ADR 0012); null/absent = uniform. Daily budgets only. */
+  recurrenceDays?: number | null | undefined;
 }
 
 /** Mutable fields on a {@link groupBudgets} row; omitted keys are left unchanged. */
@@ -1253,6 +1259,7 @@ export interface GroupBudgetUpdate {
   targetId?: number | null | undefined;
   window?: BudgetWindow | undefined;
   secondsAllowed?: number | undefined;
+  recurrenceDays?: number | null | undefined;
 }
 
 /** All budgets for one group, ascending by id. */
@@ -1284,6 +1291,7 @@ export function createGroupBudget(db: PolicyDb, input: GroupBudgetCreate): Group
       targetId: input.targetId ?? null,
       window: input.window,
       secondsAllowed: input.secondsAllowed,
+      recurrenceDays: input.recurrenceDays ?? null,
     })
     .returning()
     .get();

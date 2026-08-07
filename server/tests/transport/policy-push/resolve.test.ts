@@ -64,6 +64,36 @@ describe("resolvePolicyPush", () => {
     expect(resolved.perWeekdaySeconds?.[0]).toBe(5400);
   });
 
+  it("resolves a weekend-only budget per weekday, filling limitless weekdays with the whole day (#141)", () => {
+    // Sat + Sun mask (bits 5, 6); perWeekdaySeconds is Mon..Sun order.
+    const budgets: BudgetInput[] = [
+      {
+        scope: "overall",
+        targetId: null,
+        window: "daily",
+        secondsAllowed: 14400,
+        recurrenceDays: (1 << 5) | (1 << 6),
+      },
+    ];
+    const resolved = resolvePolicyPush({ tz: "UTC", schedules: [], budgets, now: NOW });
+    expect(resolved.perWeekdaySeconds).toEqual([86400, 86400, 86400, 86400, 86400, 14400, 14400]);
+  });
+
+  it("combines a uniform weekday baseline with a weekend override per weekday (#141)", () => {
+    const budgets: BudgetInput[] = [
+      { scope: "overall", targetId: null, window: "daily", secondsAllowed: 7200 },
+      {
+        scope: "overall",
+        targetId: null,
+        window: "daily",
+        secondsAllowed: 14400,
+        recurrenceDays: (1 << 5) | (1 << 6),
+      },
+    ];
+    const resolved = resolvePolicyPush({ tz: "UTC", schedules: [], budgets, now: NOW });
+    expect(resolved.perWeekdaySeconds).toEqual([7200, 7200, 7200, 7200, 7200, 14400, 14400]);
+  });
+
   it("reads rolling weekly/monthly limits from the overall budgets", () => {
     const budgets: BudgetInput[] = [
       { scope: "overall", targetId: null, window: "weekly", secondsAllowed: 36000 },

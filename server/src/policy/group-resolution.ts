@@ -185,6 +185,7 @@ export function mergeBudgetsWithGroups(
       targetId: row.targetId,
       window: row.window,
       secondsAllowed: row.secondsAllowed,
+      recurrenceDays: row.recurrenceDays ?? null,
       source: { kind: "user" },
     });
     covered.add(budgetSlotKey(row));
@@ -204,6 +205,7 @@ export function mergeBudgetsWithGroups(
         targetId: row.targetId,
         window: row.window,
         secondsAllowed: row.secondsAllowed,
+        recurrenceDays: row.recurrenceDays ?? null,
         source: { kind: "group", groupId: group.id },
       });
       groupSlots.add(key);

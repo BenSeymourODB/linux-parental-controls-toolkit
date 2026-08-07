@@ -182,6 +182,39 @@ describe("gatherUserBudgets (#134)", () => {
     expect(gathered[0]?.source).toEqual({ kind: "user" });
   });
 
+  it("carries the weekday-recurrence mask through the merge, own and inherited (#141)", () => {
+    const group = repo.createUserGroup(db, { name: "Kids" });
+    repo.addUserToGroup(db, group.id, userId);
+    // Group per-activity weekday budget (a slot the user does not override).
+    repo.createGroupBudget(db, {
+      userGroupId: group.id,
+      scope: "activity",
+      targetId: 2,
+      window: "daily",
+      secondsAllowed: 3600,
+      recurrenceDays: 31, // Mon..Fri
+    });
+    // The user's own overall weekend budget for a different slot.
+    repo.createBudget(db, {
+      userId,
+      scope: "overall",
+      window: "daily",
+      secondsAllowed: 7200,
+      recurrenceDays: (1 << 5) | (1 << 6), // Sat + Sun
+    });
+
+    const gathered = gatherUserBudgets(db, userId);
+    const own = gathered.find((b) => b.source.kind === "user");
+    const inherited = gathered.find((b) => b.source.kind === "group");
+    expect(own?.recurrenceDays).toBe((1 << 5) | (1 << 6));
+    expect(inherited?.recurrenceDays).toBe(31);
+  });
+
+  it("leaves recurrenceDays null for a uniform budget row (#141)", () => {
+    repo.createBudget(db, { userId, scope: "overall", window: "daily", secondsAllowed: 3600 });
+    expect(gatherUserBudgets(db, userId)[0]?.recurrenceDays).toBeNull();
+  });
+
   it("inherits the group baseline for a slot the user has not defined", () => {
     const group = repo.createUserGroup(db, { name: "Kids" });
     repo.addUserToGroup(db, group.id, userId);

@@ -360,6 +360,12 @@ export const budgets = sqliteTable(
     targetId: integer("target_id"),
     window: text("window", { enum: budgetWindowValues }).notNull(),
     secondsAllowed: integer("seconds_allowed").notNull(),
+    // Weekday-varying budgets (#141, ADR 0012): a 7-bit ISO-weekday mask (bit 0
+    // = Monday … bit 6 = Sunday) restricting the day(s) this allowance applies
+    // to; NULL = uniform (every day), the degenerate default identical to a
+    // pre-#141 row. Only meaningful for `daily` budgets — a rolling weekly/
+    // monthly cap is a period total, not a per-day figure.
+    recurrenceDays: integer("recurrence_days"),
   },
   (table) => [
     index("budgets_user_scope_window_idx").on(table.userId, table.scope, table.window),
@@ -367,6 +373,16 @@ export const budgets = sqliteTable(
     check("budgets_window_check", oneOf(table.window, budgetWindowValues)),
     check("budgets_seconds_check", sql`${table.secondsAllowed} >= 0`),
     check("budgets_target_coherence_check", targetCoherence(table.scope, table.targetId)),
+    // Weekday mask, when present, names at least one ISO weekday (1..127).
+    check(
+      "budgets_recurrence_days_check",
+      sql`${table.recurrenceDays} is null or (${table.recurrenceDays} between ${sql.raw(String(WEEKDAY_MASK_MIN))} and ${sql.raw(String(WEEKDAY_MASK_MAX))})`,
+    ),
+    // A weekday mask only makes sense on a daily budget (ADR 0012 §1).
+    check(
+      "budgets_recurrence_daily_only_check",
+      sql`${table.recurrenceDays} is null or ${table.window} = 'daily'`,
+    ),
   ],
 );
 
@@ -608,6 +624,9 @@ export const groupBudgets = sqliteTable(
     targetId: integer("target_id"),
     window: text("window", { enum: budgetWindowValues }).notNull(),
     secondsAllowed: integer("seconds_allowed").notNull(),
+    // Weekday-varying group budgets (#141, ADR 0012); same 7-bit ISO-weekday
+    // mask semantics as {@link budgets}.recurrenceDays. NULL = uniform.
+    recurrenceDays: integer("recurrence_days"),
   },
   (table) => [
     index("group_budgets_group_scope_window_idx").on(table.userGroupId, table.scope, table.window),
@@ -615,6 +634,14 @@ export const groupBudgets = sqliteTable(
     check("group_budgets_window_check", oneOf(table.window, budgetWindowValues)),
     check("group_budgets_seconds_check", sql`${table.secondsAllowed} >= 0`),
     check("group_budgets_target_coherence_check", targetCoherence(table.scope, table.targetId)),
+    check(
+      "group_budgets_recurrence_days_check",
+      sql`${table.recurrenceDays} is null or (${table.recurrenceDays} between ${sql.raw(String(WEEKDAY_MASK_MIN))} and ${sql.raw(String(WEEKDAY_MASK_MAX))})`,
+    ),
+    check(
+      "group_budgets_recurrence_daily_only_check",
+      sql`${table.recurrenceDays} is null or ${table.window} = 'daily'`,
+    ),
   ],
 );
 
