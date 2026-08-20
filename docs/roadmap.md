@@ -89,6 +89,20 @@ Goal: enrolling a fresh Mint client is one command.
   `Client`, so the fleet-update work has a version inventory to diff
   against from day one (pulled forward from Phase 14;
   [#164](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/164)).
+- **Server-hosted mirror for `timekpr-next`** so no install depends on a
+  `launchpad.net` PPA-add: the dashboard keeps a `/data`-resident copy of the
+  upstream package, refreshed by a background job and served over the LAN, and
+  advertises it at enrol. Fixes the two problems a live Mint enrolment hit —
+  Launchpad latency on the client's critical path (its `add-apt-repository`
+  timeout is not ours to control) and a distro version that lags the upstream
+  PPA. Ship the MVP (serve the cached `.deb`, advertised at enrol) here; the
+  signed apt index graduates to Phase 14. Design in
+  [`docs/adr/0011-server-hosted-upstream-package-mirror.md`](adr/0011-server-hosted-upstream-package-mirror.md);
+  epic [#389](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/389)
+  (#391 landed the config seam; #392/#393/#394/#395 remain).
+  *Pulled forward from Phase 14 (2026-08-20) — same reasoning as #164 above:
+  it bites on every enrolment, including the Alpha-1 acceptance run (#261),
+  and `install-baseline-tools.sh` is itself a Phase 3 deliverable.*
 
 ## Phase 4 — SSH + `timekpra` transport
 
@@ -425,6 +439,10 @@ once clients are deployed):
   ([#165](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/165)).
 - Automatic pre-migration DB backup, on the backup utility → **Phase 11**
   ([#166](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/166)).
+- Server-hosted `timekpr-next` mirror — the MVP that gets Launchpad off the
+  client's install path → **Phase 3**
+  ([#389](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/389)).
+  The signed apt index stays here.
 
 Phase 14 itself:
 
@@ -456,10 +474,11 @@ Phase 14 itself:
   `update_required`, one-click update
   ([#174](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/174)).
 - Server-hosted mirror for upstream client packages (managed `timekpr-next`
-  mirror): the dashboard maintains a `/data`-resident apt repo, refreshed in
-  the background and served over the LAN, so clients stop round-tripping to
-  Launchpad at install time and get a fresher version than the distro ships.
-  Design in
+  mirror) — **moved to Phase 3**, because getting Launchpad off the client's
+  critical path is an *enrolment-time* fix, not a fleet-upgrade one. What
+  remains a Phase 14 concern is the *end state*: the signed apt index with
+  scheduled auto-refresh that makes clean in-place `apt upgrade`/pinning/
+  rollback possible. Design in
   [`docs/adr/0011-server-hosted-upstream-package-mirror.md`](adr/0011-server-hosted-upstream-package-mirror.md)
   ([#389](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/389)).
 
