@@ -17,7 +17,15 @@ function jsonResponse(status: number, body: unknown): Response {
 
 const proposed: PolicyPreviewRequest = {
   budgets: [
-    { id: 1, userId: 7, scope: "overall", targetId: null, window: "daily", secondsAllowed: 9000 },
+    {
+      id: 1,
+      userId: 7,
+      scope: "overall",
+      targetId: null,
+      window: "daily",
+      secondsAllowed: 9000,
+      recurrenceDays: null,
+    },
   ],
   schedules: [],
 };

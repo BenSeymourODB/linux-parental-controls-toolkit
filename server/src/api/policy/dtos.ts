@@ -27,6 +27,7 @@ import {
   scheduleActionSchema,
   scopeSchema,
   soundProfileSchema,
+  type BudgetWindow,
   type MatchType,
 } from "../../policy/enums.js";
 import {
@@ -363,13 +364,36 @@ export const userGroupMemberParamsSchema = z.object({
 
 // --- Budgets ---------------------------------------------------------------
 
-export const createBudgetSchema = z.object({
-  userId: z.number().int().positive(),
-  scope: scopeSchema,
-  targetId: targetIdSchema.default(null),
-  window: budgetWindowSchema,
-  secondsAllowed: z.number().int().min(0),
-});
+/**
+ * A weekday-varying budget only makes sense on a `daily` window (#141, ADR
+ * 0013) — a rolling weekly/monthly cap is a period total, not a per-day figure.
+ * The storage `CHECK` is the backstop (a PATCH that leaves `window` implicit is
+ * validated there); this predicate rejects the incoherent create/update body up
+ * front with a clear message when `window` is present.
+ */
+function recurrenceDaysCoherent(v: {
+  recurrenceDays?: number | null | undefined;
+  window?: BudgetWindow | undefined;
+}): boolean {
+  return v.recurrenceDays == null || v.window === undefined || v.window === "daily";
+}
+const recurrenceDaysCoherentIssue = {
+  message: "recurrenceDays is only valid for a daily budget",
+  path: ["recurrenceDays"],
+};
+
+export const createBudgetSchema = z
+  .object({
+    userId: z.number().int().positive(),
+    scope: scopeSchema,
+    targetId: targetIdSchema.default(null),
+    window: budgetWindowSchema,
+    secondsAllowed: z.number().int().min(0),
+    // Weekday-varying budgets (#141): 7-bit ISO-weekday mask; null/absent =
+    // uniform (every day). Only valid on a daily budget (refined below).
+    recurrenceDays: weekdayMaskSchema.nullable().optional(),
+  })
+  .refine(recurrenceDaysCoherent, recurrenceDaysCoherentIssue);
 
 export const updateBudgetSchema = z
   .object({
@@ -379,8 +403,10 @@ export const updateBudgetSchema = z
     targetId: targetIdSchema.optional(),
     window: budgetWindowSchema.optional(),
     secondsAllowed: z.number().int().min(0).optional(),
+    recurrenceDays: weekdayMaskSchema.nullable().optional(),
   })
-  .refine(nonEmpty, { message: "At least one field must be provided" });
+  .refine(nonEmpty, { message: "At least one field must be provided" })
+  .refine(recurrenceDaysCoherent, recurrenceDaysCoherentIssue);
 
 export const budgetResponseSchema = z.object({
   id: z.number().int(),
@@ -389,6 +415,12 @@ export const budgetResponseSchema = z.object({
   targetId: z.number().int().nullable(),
   window: budgetWindowSchema,
   secondsAllowed: z.number().int(),
+  // Present on every response; `.default(null)` also lets this schema double as
+  // the save-and-push **preview request** body (#64) — a proposed uniform
+  // budget need not carry the weekday mask. Bounded by `weekdayMaskSchema`
+  // (1..127) so a proposed mask is validated the same as on create — and so a
+  // meaningless `0` (neither weekday-specific nor uniform) can't slip through.
+  recurrenceDays: weekdayMaskSchema.nullable().default(null),
 });
 
 export type CreateBudgetRequest = z.infer<typeof createBudgetSchema>;
@@ -404,6 +436,7 @@ export function toBudgetResponse(row: BudgetRow): BudgetResponse {
     targetId: row.targetId,
     window: row.window,
     secondsAllowed: row.secondsAllowed,
+    recurrenceDays: row.recurrenceDays,
   };
 }
 
@@ -835,12 +868,15 @@ export function toGroupExceptionResponse(row: GroupExceptionRow): GroupException
  * group is the path param). Same shape as {@link createBudgetSchema} minus the
  * owner.
  */
-export const createGroupBudgetSchema = z.object({
-  scope: scopeSchema,
-  targetId: targetIdSchema.default(null),
-  window: budgetWindowSchema,
-  secondsAllowed: z.number().int().min(0),
-});
+export const createGroupBudgetSchema = z
+  .object({
+    scope: scopeSchema,
+    targetId: targetIdSchema.default(null),
+    window: budgetWindowSchema,
+    secondsAllowed: z.number().int().min(0),
+    recurrenceDays: weekdayMaskSchema.nullable().optional(),
+  })
+  .refine(recurrenceDaysCoherent, recurrenceDaysCoherentIssue);
 
 export const groupBudgetResponseSchema = z.object({
   id: z.number().int(),
@@ -849,6 +885,7 @@ export const groupBudgetResponseSchema = z.object({
   targetId: z.number().int().nullable(),
   window: budgetWindowSchema,
   secondsAllowed: z.number().int(),
+  recurrenceDays: z.number().int().nullable(),
 });
 
 export type CreateGroupBudgetRequest = z.infer<typeof createGroupBudgetSchema>;
@@ -863,6 +900,7 @@ export function toGroupBudgetResponse(row: GroupBudgetRow): GroupBudgetResponse 
     targetId: row.targetId,
     window: row.window,
     secondsAllowed: row.secondsAllowed,
+    recurrenceDays: row.recurrenceDays,
   };
 }
 
@@ -889,6 +927,7 @@ export const resolvedBudgetResponseSchema = z.object({
   targetId: z.number().int().nullable(),
   window: budgetWindowSchema,
   secondsAllowed: z.number().int(),
+  recurrenceDays: z.number().int().nullable(),
   source: resolvedBudgetSourceSchema,
 });
 

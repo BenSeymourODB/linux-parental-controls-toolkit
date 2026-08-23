@@ -145,6 +145,7 @@ function toResolvedBudgetResponse(budget: GatheredBudget): ResolvedBudgetRespons
     targetId: budget.targetId,
     window: budget.window,
     secondsAllowed: budget.secondsAllowed,
+    recurrenceDays: budget.recurrenceDays ?? null,
     source:
       budget.source.kind === "group"
         ? { kind: "group", groupId: budget.source.groupId }

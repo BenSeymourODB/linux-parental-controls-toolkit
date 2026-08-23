@@ -19,14 +19,15 @@
  * **Scope of this slice.** Overall session limits + the recurring allowed-hours
  * grid — exactly Phase 4's "dashboard pushes overall session limits". Grants
  * are resolved as `[]` here (the grant-driven recompute push is #117); PlayTime
- * / per-activity limits are Phase 8 (#99); weekday-varying budgets (#141) would
- * turn the single daily resolve below into a per-weekday one without changing
- * this contract.
+ * / per-activity limits are Phase 8 (#99). Weekday-varying budgets (#141, ADR
+ * 0013) are resolved per weekday below via
+ * {@link import("../../policy/resolve.js").overallDailySecondsForWeekday}, so a
+ * "2h weekdays / 4h weekends" budget reaches the seven-day `--settimelimits`
+ * list — without changing this contract.
  *
  * License boundary: none touched — pure TypeScript over the policy model.
  */
-import { localCalendarDate } from "../../policy/budget-window.js";
-import { effectivePolicy, type BudgetInput } from "../../policy/resolve.js";
+import { overallDailySecondsForWeekday, type BudgetInput } from "../../policy/resolve.js";
 import type { ScheduleRule } from "../../policy/schedule-precedence.js";
 import { resolveWeeklyAllowedWindows } from "../../policy/weekly-windows.js";
 import type { TimeWindow, WeeklyAllowedWindows } from "../timekpr/allowed-hours.js";
@@ -89,26 +90,29 @@ function rollingOverallSeconds(
  * Resolve the user's effective overall policy into the {@link ResolvedPolicyPush}
  * the live push hands to a {@link import("../timekpr/client.js").TimekprClient}.
  *
- * The daily overall limit comes from the resolver (so the one "what applies on
- * day D" computation is the single source); it is currently weekday-uniform (no
- * weekday-varying budgets yet, #141), so the resolved daily value is replicated
- * across all seven days of the `--settimelimits` list.
+ * The per-weekday daily overall limit comes from the resolver's weekday layer
+ * (#141, ADR 0013), so the one "what applies on day D" computation stays the
+ * single source. Each of the seven `--settimelimits` days is resolved
+ * independently: a weekday with **no** daily overall budget is pushed as the
+ * whole-day allowance (`SECONDS_PER_DAY` — the same "maximal allowance =
+ * unrestricted" expression {@link unrestrictedPolicyPush} uses), and
+ * `perWeekdaySeconds` is `null` (no daily limit pushed) only when **every**
+ * weekday resolves to no limit. A uniform budget therefore still yields seven
+ * identical values, exactly as before #141.
  */
 export function resolvePolicyPush(input: PolicyPushResolveInput): ResolvedPolicyPush {
   const { tz, schedules, budgets, now } = input;
 
   const weekly = resolveWeeklyAllowedWindows({ schedules, tz, reference: now });
 
-  const today = localCalendarDate(now, tz);
-  const dailyOverall = effectivePolicy({
-    date: today,
-    tz,
-    schedules,
-    budgets,
-    grants: [],
-  }).overallSeconds;
-  const perWeekdaySeconds =
-    dailyOverall === null ? null : Array.from({ length: DAYS_PER_WEEK }, () => dailyOverall);
+  // ALL_ISO_WEEKDAYS is Monday..Sunday — the same order as the seven-day
+  // `--settimelimits` list, so this maps position-for-position.
+  const perWeekday = ALL_ISO_WEEKDAYS.map((weekday) =>
+    overallDailySecondsForWeekday(budgets, weekday),
+  );
+  const perWeekdaySeconds = perWeekday.every((seconds) => seconds === null)
+    ? null
+    : perWeekday.map((seconds) => seconds ?? SECONDS_PER_DAY);
 
   return {
     perWeekdaySeconds,
