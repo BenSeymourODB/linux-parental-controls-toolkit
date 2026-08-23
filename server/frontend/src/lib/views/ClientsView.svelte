@@ -470,6 +470,29 @@
               </dd>
             </div>
             <div><dt>Last seen</dt><dd>{formatDateTime(client.lastSeen)}</dd></div>
+            <div>
+              <dt title="Whether the dashboard could reach this client over SSH — the post-enrol self-test the installer runs (#354).">
+                Verified
+              </dt>
+              <dd>
+                {#if h === null || h.lastVerifiedAt === null}
+                  <span class="muted">never verified</span>
+                {:else if h.lastVerifyReachable}
+                  <span class="pill ok">reachable</span>
+                  <span class="muted small">· {formatDateTime(h.lastVerifiedAt)}</span>
+                {:else}
+                  <span
+                    class="pill warn"
+                    title={h.lastVerifyReason
+                      ? (REACHABILITY_HINTS[h.lastVerifyReason] ?? undefined)
+                      : undefined}
+                  >
+                    failed{h.lastVerifyReason ? ` (${h.lastVerifyReason})` : ""}
+                  </span>
+                  <span class="muted small">· {formatDateTime(h.lastVerifiedAt)}</span>
+                {/if}
+              </dd>
+            </div>
             {#if client.reportedIps && client.reportedIps.length > 0}
               <div>
                 <dt title="The client's own reported address(es). Advisory — may be stale under DHCP.">

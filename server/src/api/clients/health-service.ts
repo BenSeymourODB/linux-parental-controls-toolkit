@@ -22,8 +22,10 @@ import * as repo from "../../policy/repository.js";
 import type { ClientRow } from "../../policy/repository.js";
 import {
   CLIENT_COMPONENTS,
+  sshUnreachableReasonValues,
   type ClientProber,
   type ClientProbeResult,
+  type SshUnreachableReason,
 } from "../../transport/health/index.js";
 import { listForClient } from "../../transport/queue/index.js";
 import { mapWithConcurrency, timerDeadline, type DeadlineFactory } from "../../util/concurrency.js";
@@ -45,6 +47,19 @@ const DEFAULT_PROBE_CONCURRENCY = 4;
 
 /** Default per-list probe deadline in ms (≈1.5× the SSH readyTimeout). */
 const DEFAULT_PROBE_DEADLINE_MS = 15_000;
+
+/**
+ * Narrow the persisted `last_verify_reason` (stored as plain text so `policy/`
+ * keeps no `transport/` dependency, #354) back to the typed
+ * {@link SshUnreachableReason} for the wire DTO. Only the verify path writes it,
+ * always a valid reason, so an unrecognised value can only be pre-#354 data or
+ * corruption — reported as `null` rather than trusted onto the enum.
+ */
+function toVerifyReason(value: string | null): SshUnreachableReason | null {
+  return value !== null && (sshUnreachableReasonValues as readonly string[]).includes(value)
+    ? (value as SshUnreachableReason)
+    : null;
+}
 
 /** Every catalogue component reported `unknown` with one shared detail. */
 function unknownComponents(detail: string): ComponentHealthDto[] {
@@ -100,6 +115,9 @@ function assemble(
     reachability: probe?.reachability ?? "unknown",
     reachabilityReason: probe?.reachabilityReason ?? null,
     lastSeen: client.lastSeen === null ? null : client.lastSeen.toISOString(),
+    lastVerifiedAt: client.lastVerifiedAt === null ? null : client.lastVerifiedAt.toISOString(),
+    lastVerifyReachable: client.lastVerifyReachable,
+    lastVerifyReason: toVerifyReason(client.lastVerifyReason),
     enrolledAt: client.enrolledAt.toISOString(),
     probedAt: probe === undefined ? null : probe.at.toISOString(),
     updateRequired: client.updateRequired,

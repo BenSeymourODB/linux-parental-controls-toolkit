@@ -79,6 +79,22 @@ export const clientHealthSchema = z.object({
   reachabilityReason: z.enum(sshUnreachableReasonValues).nullable(),
   /** Last time the client was confirmed reachable (ISO), or null if never. */
   lastSeen: z.string().nullable(),
+  /**
+   * When the post-enrol connectivity verification (#354) last ran (ISO), or
+   * null if it never has. Lets the card show "enrolled but never verified" as a
+   * distinct state from "verified once, currently offline" — the passive
+   * `lastSeen`/`reachability` signals can't tell those apart on their own.
+   */
+  lastVerifiedAt: z.string().nullable(),
+  /** The verdict of the most recent verification (#354): reachable or not; null if never run. */
+  lastVerifyReachable: z.boolean().nullable(),
+  /**
+   * The classified SSH failure cause (#353) of the most recent verification
+   * when it failed, or null when it succeeded or never ran (#354). Distinct
+   * from {@link reachabilityReason}, which reflects a live probe this request
+   * ran; this is the persisted outcome of the installer-triggered self-test.
+   */
+  lastVerifyReason: z.enum(sshUnreachableReasonValues).nullable(),
   enrolledAt: z.string(),
   /** When this status was probed (ISO), or null when no probe ran (degraded). */
   probedAt: z.string().nullable(),
