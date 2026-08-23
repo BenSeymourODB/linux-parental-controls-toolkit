@@ -265,7 +265,19 @@ Tamper resistance is "best-effort within a supervised household
 context", not "hostile actor with root". Specifically:
 
 - The supervised user does **not** have sudo. The orchestration agent
-  user (`pct-agent`) does, but only NOPASSWD for whitelisted commands.
+  user (`pct-agent`) does, but scoped to what the dashboard needs — today
+  NOPASSWD for `timekpra` only. The privilege the dashboard's `pct-agent`
+  carries for **Ansible-driven** reconfiguration (the Phase-6 playbooks, and
+  in-place upgrades) is a deliberate decision, not blanket root by default:
+  see [ADR 0014](adr/0014-client-privilege-model.md). Note that Ansible module
+  `become` escalates by running the module interpreter as root, so meaningful
+  *command-level* scoping of it is not a sudoers command-list but a fixed
+  wrapper redesign; ADR 0014 records the trade-off and proposes a dedicated,
+  documented `become` drop-in for now, tightened to wrappers if the server
+  ever leaves the household trust boundary (the cloud-hosted stretch #27).
+  Either way this is admin-initiated **config management**, not
+  anti-circumvention hardening — the supervised user's own privilege is
+  unchanged (still no sudo).
 - Ansible playbook runs periodically (e.g., hourly via systemd timer
   initiated by the server) and reverts unauthorised edits to
   `/etc/e2guardian/*`, Timekpr config, and iptables rules.
