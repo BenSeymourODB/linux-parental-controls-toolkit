@@ -466,6 +466,136 @@ describe("POST /api/users/:userId/policy-preview", () => {
     expect(res.statusCode).toBe(200);
     expect(res.json().affectedClients[0]).toMatchObject({ reachability: null, probedAt: null });
   });
+
+  // --- future-dated preview (`date`, #281) ---
+
+  // A proposed deny 08:00–12:00 daily, scoped to the single ISO week
+  // Mon 2027-03-15 … Sun 2027-03-21 (effectiveTo is the exclusive next Monday).
+  // Dormant every other week, so the diff it produces depends on the reference
+  // date — exactly what the future-dated preview surfaces.
+  function dateScopedDenyRule(overrides: Record<string, unknown> = {}) {
+    return proposedSchedule({
+      action: "deny",
+      recurrenceStartMinute: 480, // 08:00
+      recurrenceEndMinute: 720, // 12:00
+      effectiveFrom: "2027-03-15T00:00:00.000Z",
+      effectiveTo: "2027-03-22T00:00:00.000Z",
+      ...overrides,
+    });
+  }
+
+  it("previews a date-scoped rule as a no-op today but active on a date in its window", async () => {
+    const userId = await createUser("Alice"); // tz null → UTC
+
+    // Today (well before the window): the proposed rule's date gate is closed,
+    // so the resolved push is unchanged from the ruleless baseline — no diff.
+    const today = await auth({
+      method: "POST",
+      url: `/api/users/${userId}/policy-preview`,
+      payload: { budgets: [], schedules: [dateScopedDenyRule()], now: "2026-06-17T12:00:00Z" },
+    });
+    expect(today.statusCode).toBe(200);
+    expect(today.json().hasChanges).toBe(false);
+
+    // A date inside the window: the rule is live all seven days of that week, so
+    // every day's allowed hours tighten from all-day to 00:00–08:00, 12:00–24:00.
+    const inWindow = await auth({
+      method: "POST",
+      url: `/api/users/${userId}/policy-preview`,
+      payload: { budgets: [], schedules: [dateScopedDenyRule()], date: "2027-03-17" },
+    });
+    expect(inWindow.statusCode).toBe(200);
+    const body = inWindow.json();
+    expect(body.hasChanges).toBe(true);
+    const allowedHours = body.changes.filter((c: { field: string }) => c.field === "allowed-hours");
+    expect(allowedHours).toHaveLength(7);
+    expect(allowedHours[0]).toMatchObject({
+      field: "allowed-hours",
+      kind: "changed",
+      before: "00:00–24:00",
+      after: "00:00–08:00, 12:00–24:00",
+    });
+  });
+
+  it("respects the exclusive effective_to: a date in the next week is a no-op again", async () => {
+    const userId = await createUser("Alice"); // tz null → UTC
+    // 2027-03-22 is the next Monday — the first day the window (exclusive end)
+    // no longer covers — so its whole week is outside the rule and the diff empties.
+    const res = await auth({
+      method: "POST",
+      url: `/api/users/${userId}/policy-preview`,
+      payload: { budgets: [], schedules: [dateScopedDenyRule()], date: "2027-03-22" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().hasChanges).toBe(false);
+  });
+
+  it("interprets `date` in the user's timezone (local noon selects the local week)", async () => {
+    // Honolulu is UTC-10 with no DST. The rule is scoped to local-midnight
+    // boundaries of the same week (10:00Z each day). Previewing date=2027-03-15
+    // resolves to local noon = 2027-03-15T22:00Z, which lands inside the window
+    // and in the local week Mon 03-15 … Sun 03-21. A naive UTC-midnight reading
+    // (2027-03-15T00:00Z = Sun 03-14 14:00 local) would fall in the *previous*
+    // local week, before the window, and miss the rule — so a diff here proves
+    // the reference is built from the user's timezone, at local noon.
+    const userId = await createUser("Kai", "Pacific/Honolulu");
+    const rule = dateScopedDenyRule({
+      effectiveFrom: "2027-03-15T10:00:00.000Z", // local midnight 03-15
+      effectiveTo: "2027-03-22T10:00:00.000Z", // local midnight 03-22 (exclusive)
+    });
+    const res = await auth({
+      method: "POST",
+      url: `/api/users/${userId}/policy-preview`,
+      payload: { budgets: [], schedules: [rule], date: "2027-03-15" },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.hasChanges).toBe(true);
+    expect(body.changes.some((c: { field: string }) => c.field === "allowed-hours")).toBe(true);
+  });
+
+  it("lets `date` take precedence over `now`", async () => {
+    const userId = await createUser("Alice"); // tz null → UTC
+    // `now` is today (rule dormant); `date` is inside the window (rule live).
+    // If `date` wins, the diff reflects the live rule.
+    const res = await auth({
+      method: "POST",
+      url: `/api/users/${userId}/policy-preview`,
+      payload: {
+        budgets: [],
+        schedules: [dateScopedDenyRule()],
+        now: "2026-06-17T12:00:00Z",
+        date: "2027-03-17",
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().hasChanges).toBe(true);
+    expect(res.json().changes.some((c: { field: string }) => c.field === "allowed-hours")).toBe(
+      true,
+    );
+  });
+
+  it("rejects a malformed `date` (not a real calendar date) with a 400", async () => {
+    const userId = await createUser("Alice");
+    const res = await auth({
+      method: "POST",
+      url: `/api/users/${userId}/policy-preview`,
+      payload: { budgets: [], schedules: [], date: "2027-13-40" },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.code).toBe("validation_error");
+  });
+
+  it("rejects a date-time value in `date` (calendar date only) with a 400", async () => {
+    const userId = await createUser("Alice");
+    const res = await auth({
+      method: "POST",
+      url: `/api/users/${userId}/policy-preview`,
+      payload: { budgets: [], schedules: [], date: "2027-03-17T00:00:00Z" },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.code).toBe("validation_error");
+  });
 });
 
 /**
