@@ -62,6 +62,19 @@ AW_PREFIX="${AW_PREFIX:-/opt/activitywatch}"
 AW_HOST="${AW_HOST:-127.0.0.1}"
 AW_PORT="${AW_PORT:-5600}"
 
+# Set to 1 by pct_baseline_install_activitywatch when it replaces a *different*
+# previously-installed AW version (a genuine upgrade). The configure step reads
+# it to decide whether the running per-user units need a restart to pick up the
+# new binaries. A first install (no prior version) and a same-version no-op
+# re-run both leave it 0 — see #347.
+PCT_AW_VERSION_CHANGED=0
+# systemctl used for the per-user (`--user`) ActivityWatch calls, and the base of
+# the per-user runtime directory whose presence tells us the user's `systemd
+# --user` bus is reachable. Both overridable so the restart-on-upgrade path is
+# unit-testable without root, a real login session, or a real `/run/user`.
+PCT_USER_SYSTEMCTL="${PCT_USER_SYSTEMCTL:-systemctl}"
+PCT_USER_RUNTIME_BASE="${PCT_USER_RUNTIME_BASE:-/run/user}"
+
 # timekpr-next now ships in the Debian/Ubuntu repositories, so by default we
 # install it straight from the distro (a plain `apt-get install timekpr-next`,
 # no external repository). The upstream PPA is kept as an opt-in fallback for
@@ -336,9 +349,21 @@ pct_baseline_configure_sshd() {
 pct_baseline_install_activitywatch() {
   pct_step "Install ActivityWatch ${AW_VERSION} (upstream release bundle)"
   local stamp="${AW_PREFIX}/.pct-aw-version"
-  if [ -f "$stamp" ] && [ "$(cat "$stamp" 2>/dev/null)" = "$AW_VERSION" ]; then
+  local prev=""
+  [ -f "$stamp" ] && prev="$(cat "$stamp" 2>/dev/null || true)"
+  if [ "$prev" = "$AW_VERSION" ]; then
     pct_ok "ActivityWatch ${AW_VERSION} already installed at ${AW_PREFIX}"
     return 0
+  fi
+
+  # A *different* previously-installed version means this is an upgrade: the new
+  # binaries land at ${AW_PREFIX} but the running per-user units still execute the
+  # old ones until restarted. Signal the configure step to bounce them (#347). A
+  # first install (no prior version) does not need this — its units are freshly
+  # enabled and start clean on the user's next login.
+  if [ -n "$prev" ]; then
+    PCT_AW_VERSION_CHANGED=1
+    pct_log "ActivityWatch upgrade detected (${prev} -> ${AW_VERSION})"
   fi
 
   # The pinned upstream bundle is x86_64-only; fail loudly rather than 404 on a
@@ -493,6 +518,35 @@ WantedBy=default.target
 EOF
 }
 
+# Best-effort restart of a supervised user's ActivityWatch `systemd --user`
+# units so an *upgraded* binary takes effect on a re-run. Only acts when the
+# user's `systemd --user` bus is reachable — i.e. a per-user runtime dir
+# (${PCT_USER_RUNTIME_BASE}/<uid>) exists, meaning an active or lingering
+# session. When it is not reachable there is nothing to bounce: the newly
+# installed binaries start clean on the user's next login. `try-restart` is a
+# no-op for an inactive unit, so a lingering-but-logged-out user is handled
+# cleanly too; a genuine failure of an active unit to come back is NOT swallowed.
+# Dry-run prints the conditional intent (mirrors pct_apply_change).
+pct_aw_restart_user_units() {
+  local user="$1" uid="$2"
+  if pct_is_dry_run; then
+    printf '%s ActivityWatch upgraded: try-restart the aw-server/aw-watcher-* --user units for %s (only if their session is reachable)\n' \
+      "$PCT_DRYRUN_PREFIX" "$user" >&2
+    return 0
+  fi
+  local runtime="${PCT_USER_RUNTIME_BASE}/${uid}"
+  if [ -z "$uid" ] || [ ! -d "$runtime" ]; then
+    pct_log "user ${user}'s systemd --user bus not reachable; upgraded ActivityWatch takes effect on next login"
+    return 0
+  fi
+  pct_log "ActivityWatch upgraded; restarting ${user}'s --user units to apply"
+  local svc
+  for svc in aw-server aw-watcher-afk aw-watcher-window; do
+    sudo -u "$user" XDG_RUNTIME_DIR="$runtime" \
+      "$PCT_USER_SYSTEMCTL" --user try-restart "${svc}.service"
+  done
+}
+
 pct_baseline_configure_activitywatch() {
   pct_step "Configure ActivityWatch systemd --user units (per supervised user)"
   local user home
@@ -546,9 +600,15 @@ EOF
     pct_run loginctl enable-linger "$user"
     local svc
     for svc in aw-server aw-watcher-afk aw-watcher-window; do
-      pct_run sudo -u "$user" XDG_RUNTIME_DIR="/run/user/${uid}" \
+      pct_run sudo -u "$user" XDG_RUNTIME_DIR="${PCT_USER_RUNTIME_BASE}/${uid}" \
         systemctl --user enable "${svc}.service"
     done
+
+    # On an upgrade re-run the units above are already enabled and running the
+    # OLD binary; restart them so the just-installed version takes effect (#347).
+    if [ "${PCT_AW_VERSION_CHANGED:-0}" = "1" ]; then
+      pct_aw_restart_user_units "$user" "$uid"
+    fi
   done
 }
 
