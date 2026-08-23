@@ -43,6 +43,10 @@ class FakeSocket implements WebSocketLike {
     else if (event === "close") this.#close = listener as () => void;
     return this;
   }
+  readonly sent: string[] = [];
+  send(data: string): void {
+    this.sent.push(data);
+  }
   closed = false;
   close(): void {
     this.closed = true;
@@ -88,6 +92,9 @@ function nextLine(socket: net.Socket): Promise<string> {
 }
 
 const tick = (): Promise<void> => new Promise((r) => setImmediate(r));
+
+/** The server's accept reply — the bridge withholds event frames until it lands. */
+const acceptFrame = JSON.stringify({ type: "accept", eventProtocol: 1, apiVersion: 1 });
 
 function frame(userId: number, seq = 1): EventFrame {
   return {
@@ -152,6 +159,9 @@ describe("Bridge (fake WS → real AF_UNIX)", () => {
     const fakeWs = sockets[0];
     expect(fakeWs).toBeDefined();
     fakeWs?.emitOpen();
+    // The bridge speaks first (hello) and only streams after the server accepts.
+    expect(fakeWs?.sent).toHaveLength(1);
+    fakeWs?.emitMessage(acceptFrame);
 
     const line = nextLine(agent);
     fakeWs?.emitMessage(JSON.stringify(frame(7, 42)));
@@ -203,6 +213,7 @@ describe("Bridge (fake WS → real AF_UNIX)", () => {
     const bridge = new Bridge(config, { logger: testLogger(), wsFactory: factory });
     await bridge.start();
     fakeWs?.emitOpen();
+    fakeWs?.emitMessage(acceptFrame);
 
     // userId 999 is not in the config; this must be a silent no-op, not a throw.
     expect(() => fakeWs?.emitMessage(JSON.stringify(frame(999)))).not.toThrow();

@@ -20,6 +20,7 @@
  */
 import { socketPathForUid, type BridgeConfig } from "./config.js";
 import { Dispatcher } from "./dispatch.js";
+import type { AcceptFrame, RefuseFrame } from "./handshake.js";
 import type { Logger } from "./logger.js";
 import { WsClient, type Timers, type WebSocketFactory } from "./ws-client.js";
 
@@ -32,8 +33,12 @@ export interface BridgeDeps {
   timers?: Timers;
   /** Override the backoff jitter RNG. */
   rng?: () => number;
-  /** Optional handshake seam fired on each successful connect (ADR-0007, #165). */
+  /** Optional seam fired on each successful socket open (before `hello`). */
   onOpen?: () => void;
+  /** Optional seam fired when the server accepts the ADR-0007 handshake (#303). */
+  onAccept?: (frame: AcceptFrame) => void;
+  /** Optional seam fired when the server refuses the handshake as incompatible (#303). */
+  onRefuse?: (frame: RefuseFrame) => void;
 }
 
 /** The composed bridge: an event-stream client feeding an AF_UNIX dispatcher. */
@@ -53,6 +58,7 @@ export class Bridge {
     this.#wsClient = new WsClient({
       url: config.serverUrl,
       token: config.token,
+      agentVersion: config.agentVersion,
       onFrame: (frame) => this.#dispatcher.dispatch(frame),
       backoff: config.backoff,
       logger: deps.logger,
@@ -60,6 +66,8 @@ export class Bridge {
       ...(deps.timers ? { timers: deps.timers } : {}),
       ...(deps.rng ? { rng: deps.rng } : {}),
       ...(deps.onOpen ? { onOpen: deps.onOpen } : {}),
+      ...(deps.onAccept ? { onAccept: deps.onAccept } : {}),
+      ...(deps.onRefuse ? { onRefuse: deps.onRefuse } : {}),
     });
   }
 

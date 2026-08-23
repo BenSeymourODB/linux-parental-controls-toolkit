@@ -8,27 +8,47 @@
  * exponential backoff** whenever the socket drops. Outbound-only because the
  * client is typically behind NAT.
  *
- * Liveness is the standard `ws` ping/pong: the server pings
+ * ## Version handshake (ADR 0007, #303)
+ *
+ * On every (re)connect the bridge **speaks first**: it sends a `hello`
+ * (`agentVersion`, `eventProtocol`, `capabilities`) and forwards **no** event
+ * frames to {@link WsClientOptions.onFrame} until the server's `accept`. The
+ * server always sends its `accept`/`refuse` as the first message (before it
+ * starts the event fan-out), so the first inbound message is treated as the
+ * handshake reply and everything after it as an event frame.
+ *
+ * - `accept` → the stream proceeds in the agreed dialect.
+ * - `refuse` (`code: "incompatible_protocol"`) → the server closes the socket;
+ *   the bridge surfaces the `update_required` condition (via
+ *   {@link WsClientOptions.onRefuse}) and **stops reconnecting**, since retrying
+ *   the same protocol against the same server cannot succeed until the agent is
+ *   updated (ADR 0007 §2, §5).
+ * - A bounded {@link WsClientOptions.handshakeTimeoutMs} closes and reconnects
+ *   if no reply arrives (backstop for a server that never replies).
+ *
+ * Liveness (post-accept) is the standard `ws` ping/pong: the server pings
  * (`server/src/events/heartbeat.ts`) and the `ws` runtime auto-replies with a
  * pong, so the bridge needs no heartbeat logic of its own — a dead peer is
  * surfaced to us as a `close`, which drives the reconnect.
  *
  * The actual `WebSocket` is created through an injected {@link WebSocketFactory}
- * so the lifecycle (open → frames → close → backoff → reconnect) is unit-tested
- * with a fake socket and no network. A malformed frame is logged and dropped —
- * one poison frame must never tear down the connection.
- *
- * Deferred: the ADR-0007 `hello`/`accept`/`refuse` version handshake. Its
- * server side + shared schemas land with #165 (PR #286); {@link WsClient}
- * exposes the {@link WsClientOptions.onOpen} seam where it will slot in. Against
- * `main`'s current handshake-less stream the connection proceeds straight to
- * frames.
+ * so the lifecycle (open → hello → accept → frames → close → backoff →
+ * reconnect) is unit-tested with a fake socket and no network. A malformed event
+ * frame is logged and dropped — one poison frame must never tear down the
+ * connection.
  *
  * License boundary: none touched — `ws` (MIT) behind an injected factory.
  */
 import { WebSocket } from "ws";
 
 import { computeBackoffDelayMs, type BackoffOptions } from "./backoff.js";
+import {
+  BRIDGE_CAPABILITIES,
+  buildHello,
+  parseHandshakeReply,
+  type AcceptFrame,
+  type RefuseFrame,
+} from "./handshake.js";
 import type { Logger } from "./logger.js";
 import { decodeFrame, FrameDecodeError, type EventFrame } from "./protocol.js";
 
@@ -40,6 +60,8 @@ export interface WebSocketLike {
   on(event: "open" | "close", listener: () => void): unknown;
   on(event: "message", listener: (data: RawMessage) => void): unknown;
   on(event: "error", listener: (err: Error) => void): unknown;
+  /** Send a text frame (the opening `hello`). */
+  send(data: string): void;
   /** Begin a clean close handshake. */
   close(): void;
   /** Forcibly drop the socket (used on stop()). */
@@ -65,17 +87,42 @@ const defaultTimers: Timers = {
 
 const defaultFactory: WebSocketFactory = (url, options) => new WebSocket(url, options);
 
+/**
+ * How long to wait for the server's `accept`/`refuse` after sending `hello`
+ * before closing and reconnecting. Above the server's own hello-timeout (10s,
+ * `server/src/events/stream.ts`), so in the normal too-slow case the server's
+ * close drives the reconnect and this is only the backstop for a server that
+ * accepts internally but never replies.
+ */
+export const DEFAULT_HANDSHAKE_TIMEOUT_MS = 15_000;
+
 /** Options for {@link WsClient}. */
 export interface WsClientOptions {
   /** Dashboard event-stream URL (`ws(s)://…/api/events/stream`). */
   url: string;
   /** Per-client bearer token sent as `Authorization: Bearer <token>`. */
   token: string;
-  /** Called with each decoded, validated frame. */
+  /** The `pct-client` agent version advertised in `hello` (refreshes the inventory). */
+  agentVersion: string;
+  /** Called with each decoded, validated event frame (only after `accept`). */
   onFrame: (frame: EventFrame) => void;
   backoff: BackoffOptions;
   logger: Logger;
-  /** Optional hook fired on each successful open (the handshake seam). */
+  /** Capabilities advertised in `hello` (defaults to {@link BRIDGE_CAPABILITIES}). */
+  capabilities?: readonly string[];
+  /** Protocol version advertised in `hello` (defaults to the handshake module's). */
+  eventProtocol?: number;
+  /** Fired when the server accepts the handshake. */
+  onAccept?: (frame: AcceptFrame) => void;
+  /**
+   * Fired when the server refuses the handshake as incompatible. The bridge has
+   * already stopped reconnecting; the hook surfaces the `update_required`
+   * condition (ADR 0007 §5).
+   */
+  onRefuse?: (frame: RefuseFrame) => void;
+  /** How long to wait for the handshake reply (defaults to {@link DEFAULT_HANDSHAKE_TIMEOUT_MS}). */
+  handshakeTimeoutMs?: number;
+  /** Optional hook fired on each successful socket open (before `hello` is sent). */
   onOpen?: () => void;
   /** Override the WebSocket constructor (tests inject a fake). */
   factory?: WebSocketFactory;
@@ -86,36 +133,46 @@ export interface WsClientOptions {
 }
 
 /**
- * Manages the event-stream connection: connect, decode-and-forward frames, and
- * reconnect with backoff on every drop until {@link stop} is called.
+ * Manages the event-stream connection: connect, run the version handshake,
+ * decode-and-forward frames, and reconnect with backoff on every drop until
+ * {@link stop} is called (or the server refuses the handshake as incompatible).
  */
 export class WsClient {
   readonly #options: WsClientOptions;
   readonly #factory: WebSocketFactory;
   readonly #timers: Timers;
   readonly #rng: () => number;
+  readonly #handshakeTimeoutMs: number;
 
   #socket: WebSocketLike | null = null;
   #reconnectTimer: { unref?: () => void } | null = null;
+  #handshakeTimer: { unref?: () => void } | null = null;
   #attempt = 0;
   #stopped = false;
+  /** True once the server has refused this bridge's protocol; suppresses reconnect. */
+  #refused = false;
+  /** True between sending `hello` and receiving the `accept`/`refuse` reply. */
+  #awaitingHandshake = false;
 
   constructor(options: WsClientOptions) {
     this.#options = options;
     this.#factory = options.factory ?? defaultFactory;
     this.#timers = options.timers ?? defaultTimers;
     this.#rng = options.rng ?? Math.random;
+    this.#handshakeTimeoutMs = options.handshakeTimeoutMs ?? DEFAULT_HANDSHAKE_TIMEOUT_MS;
   }
 
   /** Open the connection. Subsequent drops reconnect automatically. */
   start(): void {
     this.#stopped = false;
+    this.#refused = false;
     this.#connect();
   }
 
   /** Stop reconnecting and close the current socket. Idempotent. */
   stop(): void {
     this.#stopped = true;
+    this.#clearHandshakeTimer();
     if (this.#reconnectTimer !== null) {
       this.#timers.clear(this.#reconnectTimer);
       this.#reconnectTimer = null;
@@ -126,6 +183,7 @@ export class WsClient {
 
   #connect(): void {
     this.#reconnectTimer = null;
+    this.#awaitingHandshake = false;
     const socket = this.#factory(this.#options.url, {
       headers: { Authorization: `Bearer ${this.#options.token}` },
     });
@@ -135,6 +193,7 @@ export class WsClient {
       this.#attempt = 0;
       this.#options.logger.info({ url: this.#options.url }, "event stream connected");
       this.#options.onOpen?.();
+      this.#sendHello(socket);
     });
 
     socket.on("message", (data) => this.#onMessage(data));
@@ -147,12 +206,38 @@ export class WsClient {
 
     socket.on("close", () => {
       this.#socket = null;
-      if (this.#stopped) return;
+      this.#clearHandshakeTimer();
+      this.#awaitingHandshake = false;
+      if (this.#stopped || this.#refused) return;
       this.#scheduleReconnect();
     });
   }
 
+  /** Speak first: send `hello` and await the server's `accept`/`refuse`. */
+  #sendHello(socket: WebSocketLike): void {
+    const hello = buildHello({
+      agentVersion: this.#options.agentVersion,
+      ...(this.#options.eventProtocol !== undefined
+        ? { eventProtocol: this.#options.eventProtocol }
+        : {}),
+      capabilities: this.#options.capabilities ?? BRIDGE_CAPABILITIES,
+    });
+    this.#awaitingHandshake = true;
+    socket.send(JSON.stringify(hello));
+    this.#options.logger.info(
+      { eventProtocol: hello.eventProtocol, capabilities: hello.capabilities },
+      "sent event-stream hello",
+    );
+    const handle = this.#timers.set(() => this.#onHandshakeTimeout(), this.#handshakeTimeoutMs);
+    handle.unref?.();
+    this.#handshakeTimer = handle;
+  }
+
   #onMessage(data: RawMessage): void {
+    if (this.#awaitingHandshake) {
+      this.#onHandshakeReply(data);
+      return;
+    }
     let frame: EventFrame;
     try {
       frame = decodeFrame(toFrameInput(data));
@@ -166,6 +251,61 @@ export class WsClient {
     this.#options.onFrame(frame);
   }
 
+  #onHandshakeReply(data: RawMessage): void {
+    const reply = parseHandshakeReply(toFrameInput(data));
+
+    if (reply === null) {
+      // The server should send accept/refuse first; anything else pre-handshake
+      // is a protocol violation. Close and reconnect (with backoff) rather than
+      // forwarding a frame we can't trust the negotiation for.
+      this.#clearHandshakeTimer();
+      this.#awaitingHandshake = false;
+      this.#options.logger.warn({}, "unexpected pre-handshake frame; closing to retry");
+      this.#socket?.close();
+      return;
+    }
+
+    this.#clearHandshakeTimer();
+    this.#awaitingHandshake = false;
+
+    if (reply.kind === "refuse") {
+      this.#refused = true;
+      this.#options.logger.error(
+        { code: reply.frame.error.code, message: reply.frame.error.message },
+        "event-stream handshake refused; client update required — not reconnecting",
+      );
+      this.#options.onRefuse?.(reply.frame);
+      // The server closes the socket on refuse; terminate defensively so we do
+      // not linger if it does not, and the close handler (with #refused set) will
+      // not reconnect.
+      this.#socket?.terminate();
+      this.#socket = null;
+      return;
+    }
+
+    this.#options.logger.info(
+      { eventProtocol: reply.frame.eventProtocol, apiVersion: reply.frame.apiVersion },
+      "event-stream handshake accepted",
+    );
+    this.#options.onAccept?.(reply.frame);
+  }
+
+  #onHandshakeTimeout(): void {
+    if (!this.#awaitingHandshake) return;
+    this.#handshakeTimer = null;
+    this.#awaitingHandshake = false;
+    this.#options.logger.warn({}, "no handshake reply before timeout; closing to retry");
+    // Close → the close handler schedules a backoff reconnect.
+    this.#socket?.close();
+  }
+
+  #clearHandshakeTimer(): void {
+    if (this.#handshakeTimer !== null) {
+      this.#timers.clear(this.#handshakeTimer);
+      this.#handshakeTimer = null;
+    }
+  }
+
   #scheduleReconnect(): void {
     const delay = computeBackoffDelayMs(this.#attempt, this.#options.backoff, this.#rng);
     this.#attempt += 1;
@@ -174,7 +314,7 @@ export class WsClient {
       "scheduling event stream reconnect",
     );
     const handle = this.#timers.set(() => {
-      if (!this.#stopped) this.#connect();
+      if (!this.#stopped && !this.#refused) this.#connect();
     }, delay);
     // Don't let a pending reconnect keep the process alive on its own.
     handle.unref?.();
