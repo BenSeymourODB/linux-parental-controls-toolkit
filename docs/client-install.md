@@ -193,8 +193,10 @@ separately:
      using the one-time enrolment token) into
      `~pct-agent/.ssh/authorized_keys`.
 8. **Register with the server**
-   - POST to `<server>/api/clients/enrol` with hostname, distro info,
-     supervised-user details, and the local SSH host key fingerprint.
+   - POST to `<server>/api/clients/enrol` with hostname, the SSH user the
+     dashboard connects as, and the supervised-user details (each local
+     login name plus its account reference — the Linux uid). The enrolment
+     token authenticates the request as an `Authorization: Bearer` header.
    - Also reports the installed versions it could detect (#164) — the
      `pct-client` agent `.deb` version and the managed-tool versions
      (`timekpr`, `e2guardian`, `activitywatch`) — so the dashboard keeps a

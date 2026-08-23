@@ -212,8 +212,14 @@ server. See [`docs/client-install.md`](docs/client-install.md).
 
 ## Documentation map
 
+Start with the **[how-to guides](docs/how-to/)** for task-oriented walk-throughs
+(enrol a client, define a policy, set up DNS filtering, issue an integration
+token, recover from a backup). The documents below are the design references
+behind them.
+
 | Document | What's in it |
 |---|---|
+| [`docs/how-to/`](docs/how-to/) | Task-oriented how-to guides for running the dashboard. |
 | [`docs/proposed-tech-stack.md`](docs/proposed-tech-stack.md) | The four-layer architecture and the rationale for each tool choice. |
 | [`docs/licensing-analysis.md`](docs/licensing-analysis.md) | License inventory, copyleft analysis, and the process-boundary rules we follow. |
 | [`docs/architecture.md`](docs/architecture.md) | Detailed component / data-flow diagrams and the policy model. |
