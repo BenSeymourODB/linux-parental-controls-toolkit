@@ -28,6 +28,14 @@ vi.mock("$lib/api/app-session", () => ({
   pinLogout: () => pinLogout(),
 }));
 
+// The signed-in state renders `AppStatusView` (#110), which fetches its own
+// status. Stub it so this page-orchestrator test stays about the session cycle,
+// not the status content (that has its own component test). A never-resolving
+// stub keeps the child in its harmless loading state.
+vi.mock("$lib/api/app-status", () => ({
+  fetchAppStatus: () => new Promise(() => {}),
+}));
+
 // Imported after the mocks are registered so the page picks up the mocked client.
 const { default: AppPage } = await import("../../src/routes/app/+page.svelte");
 
@@ -58,7 +66,9 @@ describe("/app PIN login", () => {
 
     render(AppPage);
 
-    expect(await screen.findByText("Hi, Alice")).toBeInTheDocument();
+    // Signed-in state is the page's own "Sign out" control (the greeting now
+    // lives inside AppStatusView, covered by its own test).
+    expect(await screen.findByRole("button", { name: "Sign out" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Sign in" })).not.toBeInTheDocument();
   });
 
@@ -73,7 +83,7 @@ describe("/app PIN login", () => {
     await fireEvent.input(screen.getByLabelText("PIN"), { target: { value: "1234" } });
     await fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
-    expect(await screen.findByText("Hi, Alice")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Sign out" })).toBeInTheDocument();
     expect(pinLogin).toHaveBeenCalledWith({ userId: 7, pin: "1234" });
     expect(screen.queryByRole("button", { name: "Sign in" })).not.toBeInTheDocument();
   });
@@ -112,7 +122,7 @@ describe("/app PIN login", () => {
     pinLogout.mockResolvedValue({ authenticated: false });
 
     render(AppPage);
-    await screen.findByText("Hi, Alice");
+    await screen.findByRole("button", { name: "Sign out" });
 
     await fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
 

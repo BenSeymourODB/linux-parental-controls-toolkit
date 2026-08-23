@@ -14,7 +14,7 @@ import { registerEventStream, type EventHub, type EventStreamOptions } from "../
 import type { ClientProber } from "../transport/health/index.js";
 import type { PolicyPushNow, TimeTodayAdjuster } from "../transport/policy-push/index.js";
 import type { PolicyPushStub } from "../transport/stub.js";
-import { registerAppAuthRoutes } from "./app/index.js";
+import { registerAppAuthRoutes, registerAppStatusRoutes } from "./app/index.js";
 import { registerAuditRoutes } from "./audit/index.js";
 import { registerClientEnrolmentRoutes, registerClientHealthRoutes } from "./clients/index.js";
 import { registerDnsRoutes } from "./dns/index.js";
@@ -92,6 +92,11 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (scope, opt
   // (`GET /api/app/me`). Registered after auth so `scope.requireAdmin` /
   // `scope.requirePinSession` exist and the cookie plugin is installed.
   registerAppAuthRoutes(scope, opts.settings);
+  // Per-child status screen (#110): GET /api/app/status — the PIN-scoped
+  // "My time" read (overall + per-activity time left, next transition).
+  // Registered after auth so `scope.requirePinSession` exists; needs
+  // `settings` for the server-default timezone of users with no `tz`.
+  registerAppStatusRoutes(scope, opts.settings);
   registerMetaRoute(scope);
   // Policy CRUD (#51) — registered after auth so `scope.requireAdmin` exists.
   // The live SSH dispatcher (#201) is injected from buildApp; absent it, the

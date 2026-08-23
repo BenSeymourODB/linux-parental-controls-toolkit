@@ -27,6 +27,10 @@ export type {
   SetUserPinRequest,
   UserPinStatusResponse,
   AppMeResponse,
+  AppOverallStatus,
+  AppActivityStatus,
+  AppNextTransition,
+  AppStatusResponse,
 } from "../../../../src/api/app/dtos.js";
 export type {
   UserResponse,
