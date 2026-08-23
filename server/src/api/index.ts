@@ -201,13 +201,19 @@ export {
   type TimelineSample,
 } from "./usage/index.js";
 
-// DNS-status DTO (#95): the read-only contract surfacing the active AdGuard mode
-// and its health. Schema lives in `./dns/dtos.ts` next to the route.
+// DNS DTOs: the read-only mode/health contract (#95) plus the per-client
+// blocklist preview/apply contract (#97). Schemas live in `./dns/dtos.ts`.
 export {
   dnsModeSchema,
   dnsHealthSchema,
   dnsStatusResponseSchema,
+  dnsBlocklistClientSchema,
+  dnsBlocklistSkippedSchema,
+  dnsBlocklistPreviewResponseSchema,
+  dnsBlocklistApplyResponseSchema,
   type DnsStatusResponse,
+  type DnsBlocklistPreviewResponse,
+  type DnsBlocklistApplyResponse,
 } from "./dns/index.js";
 
 // System-status DTO (#39): the read-only contract surfacing first-run subsystem
