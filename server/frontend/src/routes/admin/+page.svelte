@@ -39,6 +39,7 @@
   import IntegrationTokensView from "$lib/views/IntegrationTokensView.svelte";
   import AuditLogView from "$lib/views/AuditLogView.svelte";
   import RetentionView from "$lib/views/RetentionView.svelte";
+  import DnsFilteringView from "$lib/views/DnsFilteringView.svelte";
 
   // `null` while the initial session probe (and, if authenticated, the setup
   // status fetch) are in flight. Both fetches complete before `session` is set,
@@ -113,6 +114,7 @@
     { id: "group-exceptions", label: "Group Exceptions" },
     { id: "notifications", label: "Notifications" },
     { id: "integrations", label: "Integrations" },
+    { id: "dns", label: "DNS filtering" },
     { id: "audit", label: "Audit log" },
     { id: "retention", label: "Data retention" },
   ];
@@ -234,6 +236,8 @@
       <NotificationsView />
     {:else if activeView === "integrations"}
       <IntegrationTokensView />
+    {:else if activeView === "dns"}
+      <DnsFilteringView />
     {:else if activeView === "audit"}
       <AuditLogView />
     {:else if activeView === "retention"}

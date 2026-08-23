@@ -201,13 +201,42 @@ configuration:
   dashboard owns and manages. The dashboard names them with a stable
   prefix (e.g. `pct:alice-laptop`) so it can identify which clients are
   its responsibility and leave everything else alone.
-- **Blocked-services and custom-rule entries** scoped to those
-  dashboard-owned clients only. The dashboard never edits global rules,
-  upstream DNS, or DHCP settings.
+- **Custom filtering rules** in AdGuard's global user-rules list, each
+  scoped to a dashboard-owned client with a `$client=` modifier and all of
+  them bracketed by a dashboard marker block. AdGuard exposes no per-client
+  rule list over REST, so the global list is the only mechanism; the
+  dashboard reads it, replaces just its own marked block, and writes it
+  back, so the household's own hand-written rules are preserved. The
+  dashboard never edits upstream DNS or DHCP settings.
 
 This means the admin can keep using their existing AdGuard for
 household-wide blocklists, custom DNS, etc., without the dashboard
 clobbering any of it.
+
+### Per-client domain blocklists (the admin surface)
+
+The **DNS filtering** view under `/admin` (`#97`) is where per-client
+blocklists live. It surfaces the **active mode** and its health (so the
+admin can see where DNS rules end up, including the `external`-mode
+confinement note above), and — in `external` or `managed` mode — the
+per-device blocklist composed from policy, with an **Apply** action that
+pushes it to AdGuard over REST.
+
+The blocklist itself is not authored here: it is derived from the existing
+policy model. A device's DNS denies are the **always-on `deny` schedules on
+`domain`-kind activities** for the supervised users on that device (own and
+inherited group denies), authored in the Activities and Schedules editors.
+Each dashboard client (device) with reported IPs maps to one
+`pct:<friendly-name>` AdGuard client keyed on those IPs; a device with
+denies but no reported address is listed as *not enforced* until it
+re-enrols with an address. The full model — per-device (not per-user, since
+DNS carries no Linux UID) granularity, the rule-ownership marker, and the
+always-on-denies-only v1 scope — is recorded in
+[`docs/adr/0015-adguard-dns-filtering-model.md`](adr/0015-adguard-dns-filtering-model.md).
+
+In `disabled` mode the view shows an explanatory empty state rather than an
+editor; deny policy is still enforced at the web-proxy (e2guardian) layer
+where that is configured.
 
 ### License posture is identical in both modes
 
