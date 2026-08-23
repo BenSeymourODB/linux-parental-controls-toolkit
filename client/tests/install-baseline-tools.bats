@@ -237,7 +237,7 @@ EOS
     pct_aw_restart_user_units alice 4242
   '
   [ "$status" -eq 0 ]
-  [[ "$output" == *"not reachable"* ]]
+  [[ "$output" == *"runtime dir is absent"* ]]
   [ ! -f "$rec" ]   # no systemctl --user call was issued
 }
 
@@ -268,6 +268,42 @@ EOS
   '
   [ "$status" -eq 0 ]
   [ -f "$rec" ]
+  [ "$(grep -c 'try-restart aw-server.service' "$rec")" -eq 1 ]
+  [ "$(grep -c 'try-restart aw-watcher-afk.service' "$rec")" -eq 1 ]
+  [ "$(grep -c 'try-restart aw-watcher-window.service' "$rec")" -eq 1 ]
+}
+
+@test "aw per-user restart is best-effort: one unit failing does not abort (real)" {
+  local rec="${TMP}/user-systemctl-calls" stub="${TMP}/user-systemctl"
+  cat >"$stub" <<EOS
+#!/usr/bin/env bash
+echo "\$*" >>"${rec}"
+# Fail specifically on aw-server to prove the loop continues and the function
+# still succeeds (best-effort) rather than aborting the reconcile under set -e.
+if [[ "\$*" == *aw-server.service* ]]; then exit 1; fi
+EOS
+  chmod +x "$stub"
+  local bin="${TMP}/bin"
+  mkdir -p "$bin" "${TMP}/run/4242"
+  cat >"${bin}/sudo" <<'EOS'
+#!/usr/bin/env bash
+shift 2
+while [ "$#" -gt 0 ]; do case "$1" in *=*) shift ;; *) break ;; esac; done
+exec "$@"
+EOS
+  chmod +x "${bin}/sudo"
+  run env -u PCT_DRY_RUN bash -c '
+    export PATH="'"$bin"':$PATH"
+    PCT_USER_SYSTEMCTL="'"$stub"'"
+    PCT_USER_RUNTIME_BASE="'"$TMP"'/run"
+    source "'"$SCRIPT"'"                 # sourcing activates set -euo pipefail from the script
+    pct_aw_restart_user_units alice 4242
+    echo "RETURNED $?"
+  '
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"RETURNED 0"* ]]
+  [[ "$output" == *"could not restart"*"aw-server.service; it will pick up the ActivityWatch upgrade"* ]]
+  # All three were still attempted despite aw-server failing.
   [ "$(grep -c 'try-restart aw-server.service' "$rec")" -eq 1 ]
   [ "$(grep -c 'try-restart aw-watcher-afk.service' "$rec")" -eq 1 ]
   [ "$(grep -c 'try-restart aw-watcher-window.service' "$rec")" -eq 1 ]

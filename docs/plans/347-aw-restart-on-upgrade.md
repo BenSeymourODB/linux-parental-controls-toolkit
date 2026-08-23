@@ -28,11 +28,14 @@ Part (a) of #347 only — the ActivityWatch per-user restart.
   no-op re-run both leave it `0`.
 - **Best-effort per-user restart** (`pct_aw_restart_user_units`): when AW was
   upgraded, `try-restart` each of the user's three `--user` units so they pick
-  up the new binaries. Only acts when the user's `systemd --user` bus is
-  reachable (`${PCT_USER_RUNTIME_BASE}/<uid>` exists — an active or lingering
-  session); otherwise the newly installed binaries start clean on the user's
-  next login, so there is nothing to bounce. `try-restart` is a no-op for an
-  inactive unit, so a lingering-but-logged-out user is handled cleanly too.
+  up the new binaries. Skips cleanly when the user has no per-user runtime dir
+  (`${PCT_USER_RUNTIME_BASE}/<uid>` absent — no `systemd --user` bus to talk to);
+  the newly installed binaries then start clean on next login. The configure
+  loop runs `loginctl enable-linger` just before this, so on a re-run the runtime
+  dir is usually already present; `try-restart` is a no-op for an inactive unit,
+  so only actually-running units are bounced. Failures are per-user best-effort:
+  a unit that will not restart is **warned about, never fatal**, so one user's
+  failure cannot abort the whole (idempotent) reconcile mid-way under `set -e`.
 - Reuses the established change-detection idiom: `try-*` verbs (never swallow a
   genuine failure of an active unit), a dry-run intent line mirroring
   `pct_apply_change`, and env-overridable seams (`PCT_USER_SYSTEMCTL`,
@@ -55,6 +58,8 @@ Part (a) of #347 only — the ActivityWatch per-user restart.
   for each supervised user.
 - Real reachability guard: unreachable bus → logs + issues no `systemctl --user`
   call; reachable bus → exactly one `try-restart` per unit.
+- Real best-effort guarantee: one unit's `try-restart` failing → the function
+  still returns 0, warns, and still attempts the other two units.
 
 Validated with `shellcheck -x` (client + scripts) and `bats client/tests/`.
 

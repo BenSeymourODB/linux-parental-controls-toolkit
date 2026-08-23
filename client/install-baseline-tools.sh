@@ -519,14 +519,15 @@ EOF
 }
 
 # Best-effort restart of a supervised user's ActivityWatch `systemd --user`
-# units so an *upgraded* binary takes effect on a re-run. Only acts when the
-# user's `systemd --user` bus is reachable — i.e. a per-user runtime dir
-# (${PCT_USER_RUNTIME_BASE}/<uid>) exists, meaning an active or lingering
-# session. When it is not reachable there is nothing to bounce: the newly
-# installed binaries start clean on the user's next login. `try-restart` is a
-# no-op for an inactive unit, so a lingering-but-logged-out user is handled
-# cleanly too; a genuine failure of an active unit to come back is NOT swallowed.
-# Dry-run prints the conditional intent (mirrors pct_apply_change).
+# units so an *upgraded* binary takes effect on a re-run. Skips cleanly when the
+# user has no per-user runtime dir (${PCT_USER_RUNTIME_BASE}/<uid>) — there is no
+# `systemd --user` bus to talk to, and the new binaries start clean on the user's
+# next login. The configure loop runs `loginctl enable-linger` just before this,
+# so on a re-run the runtime dir is usually already present; `try-restart` is a
+# no-op for an inactive unit, so only actually-running units are bounced. This is
+# per-user best-effort: a unit that will not restart is warned about, never
+# fatal, so one user's failure cannot abort the whole reconcile mid-way. Dry-run
+# prints the conditional intent (mirrors pct_apply_change).
 pct_aw_restart_user_units() {
   local user="$1" uid="$2"
   if pct_is_dry_run; then
@@ -536,14 +537,18 @@ pct_aw_restart_user_units() {
   fi
   local runtime="${PCT_USER_RUNTIME_BASE}/${uid}"
   if [ -z "$uid" ] || [ ! -d "$runtime" ]; then
-    pct_log "user ${user}'s systemd --user bus not reachable; upgraded ActivityWatch takes effect on next login"
+    pct_log "user ${user}'s systemd --user runtime dir is absent; upgraded ActivityWatch takes effect on next login"
     return 0
   fi
-  pct_log "ActivityWatch upgraded; restarting ${user}'s --user units to apply"
+  pct_log "ActivityWatch upgraded; restarting ${user}'s active --user units to apply"
   local svc
   for svc in aw-server aw-watcher-afk aw-watcher-window; do
+    # Warn-and-continue: a single unit failing to bounce (or a not-quite-ready
+    # bus right after enable-linger) must not abort the reconcile under `set -e`
+    # — the upgrade is picked up on next login regardless.
     sudo -u "$user" XDG_RUNTIME_DIR="$runtime" \
-      "$PCT_USER_SYSTEMCTL" --user try-restart "${svc}.service"
+      "$PCT_USER_SYSTEMCTL" --user try-restart "${svc}.service" ||
+      pct_warn "could not restart ${user}'s ${svc}.service; it will pick up the ActivityWatch upgrade on next login"
   done
 }
 
