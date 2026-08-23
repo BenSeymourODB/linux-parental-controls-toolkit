@@ -16,7 +16,9 @@
  */
 import type { FastifyInstance } from "fastify";
 
+import type { Settings } from "../../config.js";
 import { makeRequireIntegrationToken } from "../../integrations/guard.js";
+import { FixedWindowQuota } from "../../integrations/rate-limit.js";
 import {
   issueIntegrationToken,
   listIntegrationTokenSummaries,
@@ -50,14 +52,26 @@ function toSummaryResponse(summary: IntegrationTokenSummary): IntegrationTokenSu
  * `scope.requireAdmin` is decorated. Also decorates
  * `scope.requireIntegrationToken` so the inbound integration endpoints (#113)
  * can gate themselves on a scoped bearer token.
+ *
+ * `settings` carries the per-token rate-limit window (#115): a single
+ * long-lived {@link FixedWindowQuota} is built here and closed over by the
+ * guard, so every inbound integration endpoint shares one bucket per token.
  */
-export function registerIntegrationRoutes(scope: FastifyInstance): void {
+export function registerIntegrationRoutes(scope: FastifyInstance, settings: Settings): void {
   const typed = scope.withTypeProvider<ZodTypeProvider>();
 
+  // One process-lifetime limiter shared by every request the guard admits, keyed
+  // inside the guard by the authenticated token id (#115). In-memory + fixed
+  // window — one process, so it needs nothing more (mirrors `auth/rate-limit.ts`).
+  const rateLimiter = new FixedWindowQuota({
+    maxRequests: settings.integrations.rateLimitMax,
+    windowMs: settings.integrations.rateLimitWindowSeconds * 1000,
+  });
+
   // The bearer guard used by the (future) inbound integration endpoints (#113).
-  // Decorated here, bound to this scope's db, so those endpoints apply it with
-  // `{ preHandler: scope.requireIntegrationToken("grants:write") }`.
-  scope.decorate("requireIntegrationToken", makeRequireIntegrationToken(scope.db));
+  // Decorated here, bound to this scope's db + limiter, so those endpoints apply
+  // it with `{ preHandler: scope.requireIntegrationToken("grants:write") }`.
+  scope.decorate("requireIntegrationToken", makeRequireIntegrationToken(scope.db, rateLimiter));
 
   typed.post(
     "/integrations/tokens",
