@@ -23,6 +23,14 @@ import { DEFAULT_BACKOFF } from "./backoff.js";
 /** Default directory the bridge owns its per-user AF_UNIX sockets under. */
 export const DEFAULT_SOCKET_DIR = "/run/pct";
 
+/**
+ * Fallback agent version advertised in the ADR-0007 `hello` when the packaging
+ * has not stamped `PCT_BRIDGE_AGENT_VERSION`. Matches the placeholder in
+ * `package.json`; the real `.deb` build sets the env to the release version
+ * (client-packaging work, #106).
+ */
+export const DEFAULT_AGENT_VERSION = "0.0.0";
+
 /** Default mode for a per-user socket (owner read/write only). */
 export const DEFAULT_SOCKET_MODE = 0o600;
 
@@ -54,6 +62,13 @@ export const bridgeConfigSchema = z.object({
   serverUrl: z.url({ protocol: /^wss?$/ }),
   /** The per-client bearer token from enrolment (#77). */
   token: z.string().min(1),
+  /**
+   * The `pct-client` agent version advertised in the ADR-0007 `hello` (#303),
+   * which refreshes the server's `agent_version` inventory on every connect
+   * (#164). Defaults to {@link DEFAULT_AGENT_VERSION}; the packaging stamps the
+   * real `.deb` version via `PCT_BRIDGE_AGENT_VERSION`.
+   */
+  agentVersion: z.string().min(1).max(100).default(DEFAULT_AGENT_VERSION),
   /** Directory the bridge creates its per-user sockets in. */
   socketDir: z.string().min(1).default(DEFAULT_SOCKET_DIR),
   /** Filesystem mode applied to each per-user socket. */
@@ -105,6 +120,7 @@ export function socketPathForUid(config: BridgeConfig, linuxUid: number): string
 export interface BridgeEnv {
   PCT_BRIDGE_SERVER_URL?: string;
   PCT_BRIDGE_TOKEN?: string;
+  PCT_BRIDGE_AGENT_VERSION?: string;
   PCT_BRIDGE_SOCKET_DIR?: string;
   PCT_BRIDGE_SOCKET_MODE?: string;
   /** JSON array of `{ userId, linuxUid }` objects. */
@@ -133,6 +149,7 @@ export function loadConfigFromEnv(env: BridgeEnv = process.env): BridgeConfig {
   const raw = {
     serverUrl: env.PCT_BRIDGE_SERVER_URL,
     token: env.PCT_BRIDGE_TOKEN,
+    agentVersion: env.PCT_BRIDGE_AGENT_VERSION,
     socketDir: env.PCT_BRIDGE_SOCKET_DIR,
     socketMode: parseOptionalInt(env.PCT_BRIDGE_SOCKET_MODE, "PCT_BRIDGE_SOCKET_MODE"),
     users,
