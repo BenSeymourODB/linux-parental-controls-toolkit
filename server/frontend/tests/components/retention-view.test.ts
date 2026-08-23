@@ -13,17 +13,24 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   RetentionConfigResponse,
   RetentionEntryResponse,
+  RetentionPurgeRunsResponse,
 } from "../../src/lib/api/contract.js";
 
 const fetchRetention = vi.fn<() => Promise<RetentionConfigResponse>>();
 const setRetentionOverride =
   vi.fn<(category: string, body: unknown) => Promise<RetentionEntryResponse>>();
 const clearRetentionOverride = vi.fn<(category: string) => Promise<RetentionEntryResponse>>();
+const fetchRetentionPurgeRuns = vi.fn<() => Promise<RetentionPurgeRunsResponse>>();
 
 vi.mock("$lib/api/retention", () => ({
   fetchRetention: () => fetchRetention(),
   setRetentionOverride: (category: string, body: unknown) => setRetentionOverride(category, body),
   clearRetentionOverride: (category: string) => clearRetentionOverride(category),
+  // The purge panel loads the last run on mount; stub it so these config-flow
+  // tests aren't coupled to it (its own flows live in retention-purge-panel.test.ts).
+  fetchRetentionPurgeRuns: () => fetchRetentionPurgeRuns(),
+  previewRetentionPurge: vi.fn(),
+  runRetentionPurge: vi.fn(),
 }));
 
 const { default: RetentionView } = await import("../../src/lib/views/RetentionView.svelte");
@@ -50,6 +57,8 @@ beforeEach(() => {
   fetchRetention.mockReset();
   setRetentionOverride.mockReset();
   clearRetentionOverride.mockReset();
+  fetchRetentionPurgeRuns.mockReset();
+  fetchRetentionPurgeRuns.mockResolvedValue({ runs: [] });
 });
 
 afterEach(() => {
