@@ -62,6 +62,9 @@
   let editHostname = $state("");
   let editFriendlyName = $state("");
   let editSshUser = $state("");
+  // The SSH-target override (#406): empty string means "no override" (dial the
+  // hostname); a non-empty value pins the transport to that host/IP.
+  let editSshTarget = $state("");
   let saving = $state(false);
 
   // Enrol flow.
@@ -148,6 +151,7 @@
     editHostname = client.hostname;
     editFriendlyName = client.friendlyName ?? "";
     editSshUser = client.sshUser;
+    editSshTarget = client.sshTarget ?? "";
     error = null;
   }
 
@@ -163,10 +167,14 @@
       // for the field, so an empty box means "leave the existing name" rather
       // than an unsupported clear-to-null.
       const friendlyName = editFriendlyName.trim();
+      // The SSH-target override is nullable: an empty box sends `null` to clear
+      // it (back to the hostname), a non-empty value pins the transport to it.
+      const sshTarget = editSshTarget.trim();
       const updated = await updateClient(id, {
         hostname: editHostname.trim(),
         sshUser: editSshUser.trim(),
         ...(friendlyName === "" ? {} : { friendlyName }),
+        sshTarget: sshTarget === "" ? null : sshTarget,
       });
       clients = clients.map((c) => (c.id === id ? updated : c));
       editingId = null;
@@ -469,6 +477,52 @@
                 {/if}
               </dd>
             </div>
+            <div>
+              <dt title="The host the dashboard's SSH transport dials for this client — a per-client override, or the hostname when unset (#406).">
+                SSH target
+              </dt>
+              <dd>
+                {#if editingId === client.id}
+                  {@const candidates = [
+                    ...(client.reportedIps ?? []),
+                    ...(client.sourceIp === null ? [] : [client.sourceIp]),
+                  ]}
+                  <input
+                    class="ssh-target-input"
+                    bind:value={editSshTarget}
+                    aria-label="Edit SSH target override"
+                    placeholder="{client.hostname} (hostname — leave blank)"
+                  />
+                  <div class="ssh-target-hints">
+                    {#if candidates.length > 0}
+                      {#each candidates as candidate (candidate)}
+                        <button
+                          type="button"
+                          class="chip"
+                          onclick={() => (editSshTarget = candidate)}
+                        >
+                          {candidate}
+                        </button>
+                      {/each}
+                    {/if}
+                    {#if editSshTarget.trim() !== ""}
+                      <button type="button" class="chip clear" onclick={() => (editSshTarget = "")}>
+                        Use hostname
+                      </button>
+                    {/if}
+                  </div>
+                {:else if client.sshTarget === null}
+                  <span class="muted" title="No override — the transport dials the hostname.">
+                    hostname
+                  </span>
+                {:else}
+                  {client.effectiveSshTarget}
+                  <span class="badge override" title="Pinned to an admin-set address instead of the hostname.">
+                    override
+                  </span>
+                {/if}
+              </dd>
+            </div>
             <div><dt>Last seen</dt><dd>{formatDateTime(client.lastSeen)}</dd></div>
             {#if client.reportedIps && client.reportedIps.length > 0}
               <div>
@@ -723,6 +777,33 @@
   .badge.manual {
     background: #fef3c7;
     color: #92400e;
+  }
+  .badge.override {
+    background: #e0e7ff;
+    color: #3730a3;
+  }
+  .ssh-target-hints {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0.25rem;
+    margin-top: 0.25rem;
+  }
+  .chip {
+    border: 1px solid #d1d5db;
+    background: #f9fafb;
+    color: #374151;
+    border-radius: 999px;
+    padding: 0.05rem 0.5rem;
+    font-size: 0.72rem;
+    cursor: pointer;
+  }
+  .chip:hover {
+    background: #eef2ff;
+    border-color: #a5b4fc;
+  }
+  .chip.clear {
+    color: #6b7280;
   }
   .kv {
     margin: 0;

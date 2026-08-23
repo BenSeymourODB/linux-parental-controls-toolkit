@@ -51,6 +51,8 @@ function client(overrides: Partial<ClientResponse> = {}): ClientResponse {
     lastSeen: null,
     reportedIps: null,
     sourceIp: null,
+    sshTarget: null,
+    effectiveSshTarget: "mint-box",
     enrolled: true,
     platform: "linux",
     ...overrides,
