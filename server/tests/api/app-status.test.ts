@@ -264,6 +264,47 @@ describe("GET /api/app/status", () => {
     });
   });
 
+  it("wires a real next transition from a bedtime schedule", async () => {
+    const userId = await createUser("Fay"); // UTC
+    const cookie = await pinLogin(userId, "8642");
+
+    // Every-day overall deny 21:00–24:00 ⇒ allowed 00:00–21:00 (1260) each day.
+    harness.db
+      .insert(schedules)
+      .values([
+        {
+          userId,
+          targetKind: "overall",
+          targetId: null,
+          recurrenceDays: 127, // all ISO weekdays
+          recurrenceStartMinute: 1260,
+          recurrenceEndMinute: 1440,
+          action: "deny",
+          ordinal: 0,
+        },
+      ])
+      .run();
+
+    const res = await asChild(cookie, { method: "GET", url: "/api/app/status" });
+    const body = res.json();
+    // A schedule is in play, so there is always an upcoming transition. The
+    // branch is clock-dependent, so assert each side deterministically: this
+    // catches a route-wiring regression (wrong today/tomorrow arg order, wrong
+    // now-minute or date) that the isolated unit tests can't.
+    expect(body.access.nextTransition).not.toBeNull();
+    if (body.access.allowedNow) {
+      // Before 21:00 local: inside today's window ⇒ access ends at 21:00 today.
+      expect(body.access.nextTransition).toEqual({
+        kind: "access_ends",
+        localDate: body.date,
+        atMinuteOfDay: 1260,
+      });
+    } else {
+      // In the 21:00–24:00 deny: access resumes at the midnight roll (tomorrow).
+      expect(body.access.nextTransition.kind).toBe("access_resumes");
+    }
+  });
+
   it("reports access denied now when an all-day deny is in effect", async () => {
     const userId = await createUser("Dan");
     const cookie = await pinLogin(userId, "9753");

@@ -37,8 +37,8 @@
     } catch (err) {
       error =
         err instanceof ApiError
-          ? "We couldn't load your time right now. Pull to refresh in a moment."
-          : "Something went wrong loading your time. Try again in a moment.";
+          ? "We couldn't load your time right now. Please try again in a moment."
+          : "Something went wrong loading your time. Please try again in a moment.";
     } finally {
       loading = false;
     }
