@@ -54,6 +54,7 @@ describe("policy DTO mappers", () => {
       lastTelemetryPullAt: null,
       platform: "linux",
       updateRequired: false,
+      capabilities: null,
     };
     expect(toClientResponse(row)).toEqual({
       id: 2,
@@ -86,6 +87,7 @@ describe("policy DTO mappers", () => {
       lastTelemetryPullAt: null,
       platform: "linux",
       updateRequired: false,
+      capabilities: null,
     };
     expect(toClientResponse(row).enrolled).toBe(false);
   });
@@ -107,6 +109,7 @@ describe("policy DTO mappers", () => {
       lastTelemetryPullAt: null,
       platform: "linux",
       updateRequired: false,
+      capabilities: null,
     };
     expect(toClientResponse(row).lastSeen).toBeNull();
   });
@@ -128,6 +131,7 @@ describe("policy DTO mappers", () => {
       lastTelemetryPullAt: null,
       platform: "windows",
       updateRequired: false,
+      capabilities: null,
     };
     expect(toClientResponse(row).platform).toBe("windows");
   });

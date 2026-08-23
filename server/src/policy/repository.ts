@@ -237,6 +237,24 @@ export function setClientUpdateRequired(db: PolicyDb, id: number, value: boolean
   db.update(clients).set({ updateRequired: value }).where(eq(clients.id, id)).run();
 }
 
+/**
+ * Record the capability set a client advertised in its event-stream `hello`
+ * handshake (ADR 0007 §4, #400). Like {@link recordClientAgentVersion} this is
+ * a system-observed inventory column (not admin-editable), so it writes the
+ * `capabilities` column directly rather than through {@link updateClient}. The
+ * advertised set is de-duplicated (order preserved) before it is stored; an
+ * empty array is stored as `[]` (handshaked, advertises nothing) — distinct
+ * from the `NULL` default (never handshaked). A no-op if no such client.
+ */
+export function recordClientCapabilities(
+  db: PolicyDb,
+  id: number,
+  capabilities: readonly string[],
+): void {
+  const deduped = [...new Set(capabilities)];
+  db.update(clients).set({ capabilities: deduped }).where(eq(clients.id, id)).run();
+}
+
 // --- User-on-client links --------------------------------------------------
 
 /** All links for a user, ascending by client id. */
