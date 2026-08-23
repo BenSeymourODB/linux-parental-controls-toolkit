@@ -28,6 +28,7 @@ describe("loadSettings", () => {
     expect(settings.retention).toEqual({ defaultDays: 365 });
     expect(settings.reapply).toEqual({ cron: "0 * * * *", playbooks: [] });
     expect(settings.clientHealth).toEqual({ probeConcurrency: 4, probeDeadlineMs: 15000 });
+    expect(settings.integrations).toEqual({ rateLimitMax: 120, rateLimitWindowSeconds: 60 });
     expect(settings.preMigrationBackup).toEqual({ enabled: true, retain: 5 });
     expect(settings.serverVersion).toBeUndefined();
     expect(settings.protocolCompatWindow).toBe(1);
@@ -452,6 +453,26 @@ describe("loadSettings", () => {
         SettingsError,
       );
       expect(() => loadSettings({ PCT_ENFORCEMENT_INITIAL_LOOKBACK_SECONDS: "nope" })).toThrow(
+        SettingsError,
+      );
+    });
+  });
+
+  describe("PCT_INTEGRATIONS_RATE_LIMIT_*", () => {
+    it("honours an explicit per-token rate limit and window", () => {
+      const settings = loadSettings({
+        PCT_INTEGRATIONS_RATE_LIMIT_MAX: "30",
+        PCT_INTEGRATIONS_RATE_LIMIT_WINDOW_SECONDS: "10",
+      });
+      expect(settings.integrations).toEqual({ rateLimitMax: 30, rateLimitWindowSeconds: 10 });
+    });
+
+    it("rejects a non-positive or non-numeric limit or window", () => {
+      expect(() => loadSettings({ PCT_INTEGRATIONS_RATE_LIMIT_MAX: "0" })).toThrow(SettingsError);
+      expect(() => loadSettings({ PCT_INTEGRATIONS_RATE_LIMIT_WINDOW_SECONDS: "-5" })).toThrow(
+        SettingsError,
+      );
+      expect(() => loadSettings({ PCT_INTEGRATIONS_RATE_LIMIT_MAX: "lots" })).toThrow(
         SettingsError,
       );
     });

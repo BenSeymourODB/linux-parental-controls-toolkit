@@ -512,6 +512,28 @@ const settingsSchema = z
      * {@link timekprMirrorSchema}.
      */
     timekprMirror: timekprMirrorSchema,
+    /**
+     * Inbound integration API throttling (#115): a per-token request-rate
+     * ceiling on `/api/integrations/*` so a noisy or misbehaving integrator
+     * can't overwhelm the single-process dashboard (`docs/architecture.md` →
+     * "External integrations": per-integration tokens are "rate-limited"). Like
+     * the `telemetry`/`clientHealth` blocks above, a fixed in-process window;
+     * the guard (`integrations/guard.ts`) keys it by the authenticated token id.
+     */
+    integrations: z.object({
+      /**
+       * Max requests one token may make per window before it is throttled
+       * (`PCT_INTEGRATIONS_RATE_LIMIT_MAX`). Defaults to 120 — generous for a
+       * webhook-driven integrator at the default 60 s window (≈2 req/s
+       * sustained) while still cutting a runaway loop short.
+       */
+      rateLimitMax: z.coerce.number().int().positive().default(120),
+      /**
+       * Fixed-window length in seconds (`PCT_INTEGRATIONS_RATE_LIMIT_WINDOW_SECONDS`).
+       * Defaults to 60.
+       */
+      rateLimitWindowSeconds: z.coerce.number().int().positive().default(60),
+    }),
   })
   .superRefine((settings, ctx) => {
     if (settings.adguard.mode !== "external") return;
@@ -617,6 +639,10 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
       dataDir: env.PCT_TIMEKPR_MIRROR_DIR,
       package: env.PCT_TIMEKPR_MIRROR_PACKAGE,
       version: env.PCT_TIMEKPR_MIRROR_VERSION,
+    },
+    integrations: {
+      rateLimitMax: env.PCT_INTEGRATIONS_RATE_LIMIT_MAX,
+      rateLimitWindowSeconds: env.PCT_INTEGRATIONS_RATE_LIMIT_WINDOW_SECONDS,
     },
   });
 

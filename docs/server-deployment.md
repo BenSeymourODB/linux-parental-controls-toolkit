@@ -432,6 +432,17 @@ failed-attempt limiter" (#235).
 - Client SSH access uses a single dedicated key generated on first run;
   rotation is a one-click action in the dashboard that pushes a new key
   via the existing connection.
+- **Integration-token throttling.** The machine-to-machine `/api/integrations/*`
+  surface (per-integration bearer tokens minted from `/admin`, #114) is
+  rate-limited **per token** so a noisy or misbehaving integrator can't
+  overwhelm the single-process dashboard. The limit is a fixed in-process
+  window keyed by the authenticated token: `PCT_INTEGRATIONS_RATE_LIMIT_MAX`
+  requests (default 120) per `PCT_INTEGRATIONS_RATE_LIMIT_WINDOW_SECONDS`
+  (default 60). An over-limit request gets `429 rate_limited` with a
+  `Retry-After` header; every response carries `RateLimit-Limit` /
+  `RateLimit-Remaining` / `RateLimit-Reset`. Raise the limit for a chatty
+  integrator, or lower it to tighten a shared LAN. This is per-IP-independent —
+  it throttles the credential, not the source address.
 
 ## Backup and restore
 

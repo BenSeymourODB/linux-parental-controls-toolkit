@@ -159,8 +159,9 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (scope, opt
   registerSystemRoutes(scope);
   // Integration tokens (#114): admin-only mint/list/revoke of per-integration
   // bearer tokens, and the `scope.requireIntegrationToken` guard the inbound
-  // `/api/integrations/*` endpoints (#113) authenticate with.
-  registerIntegrationRoutes(scope);
+  // `/api/integrations/*` endpoints (#113) authenticate with. `settings` carries
+  // the per-token rate-limit window (#115).
+  registerIntegrationRoutes(scope, opts.settings);
 };
 
 /** Mount the JSON API under `/api` on the given app. */
