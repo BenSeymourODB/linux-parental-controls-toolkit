@@ -87,7 +87,7 @@ export interface ClientProber {
    * passes the full client row so `clientId` is logged in production.
    */
   probe(
-    client: Pick<ClientRow, "hostname" | "sshUser"> & { readonly id?: number },
+    client: Pick<ClientRow, "hostname" | "sshUser" | "sshTarget"> & { readonly id?: number },
   ): Promise<ClientProbeResult>;
 }
 
@@ -232,7 +232,7 @@ export class SshClientProber implements ClientProber {
   }
 
   async probe(
-    client: Pick<ClientRow, "hostname" | "sshUser"> & { readonly id?: number },
+    client: Pick<ClientRow, "hostname" | "sshUser" | "sshTarget"> & { readonly id?: number },
   ): Promise<ClientProbeResult> {
     const target = targetFromClient(client, this.#credentials);
     const at = this.#now();

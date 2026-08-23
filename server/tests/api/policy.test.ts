@@ -193,6 +193,52 @@ describe("policy CRUD routes", () => {
     expect(list.json()).toHaveLength(1);
   });
 
+  it("sets, echoes the effective target for, and clears an SSH-target override (#406)", async () => {
+    const created = await auth({
+      method: "POST",
+      url: "/api/clients",
+      payload: { hostname: "mint-ssh", sshUser: "pct-agent" },
+    });
+    const body = created.json();
+    // No override yet → effective target is the hostname.
+    expect(body.sshTarget).toBeNull();
+    expect(body.effectiveSshTarget).toBe("mint-ssh");
+
+    // Set an override to a recorded IP → the effective target follows it.
+    const set = await auth({
+      method: "PATCH",
+      url: `/api/clients/${body.id}`,
+      payload: { sshTarget: "192.168.1.50" },
+    });
+    expect(set.statusCode).toBe(200);
+    expect(set.json().sshTarget).toBe("192.168.1.50");
+    expect(set.json().effectiveSshTarget).toBe("192.168.1.50");
+
+    // Clear it with null → back to the hostname.
+    const cleared = await auth({
+      method: "PATCH",
+      url: `/api/clients/${body.id}`,
+      payload: { sshTarget: null },
+    });
+    expect(cleared.statusCode).toBe(200);
+    expect(cleared.json().sshTarget).toBeNull();
+    expect(cleared.json().effectiveSshTarget).toBe("mint-ssh");
+  });
+
+  it("rejects an SSH-target override that is not a hostname or IP literal (#406)", async () => {
+    const created = await auth({
+      method: "POST",
+      url: "/api/clients",
+      payload: { hostname: "mint-bad-ssh", sshUser: "pct-agent" },
+    });
+    const res = await auth({
+      method: "PATCH",
+      url: `/api/clients/${created.json().id}`,
+      payload: { sshTarget: "not a host!" },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
   it("persists a friendly name on a manually-created client and echoes it (#355)", async () => {
     const created = await auth({
       method: "POST",

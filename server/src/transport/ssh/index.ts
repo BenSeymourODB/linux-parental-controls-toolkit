@@ -20,6 +20,7 @@ export {
 export {
   SshTransport,
   targetFromClient,
+  sshHostForClient,
   type SshTarget,
   type SshCredentials,
   type ExecResult,

@@ -160,6 +160,7 @@ const {
   SshParseError,
   SshExecTimeoutError,
   targetFromClient,
+  sshHostForClient,
 } = await import("../../../src/transport/ssh/index.js");
 
 const target = { host: "client.local", username: "pct-agent", privateKey: "PRIVATE-KEY" };
@@ -587,7 +588,7 @@ describe("SshTransport disposal", () => {
 describe("targetFromClient", () => {
   it("maps a clients row to a target with key-based credentials", () => {
     const result = targetFromClient(
-      { hostname: "mint-01", sshUser: "pct-agent" },
+      { hostname: "mint-01", sshUser: "pct-agent", sshTarget: null },
       { privateKey: "KEY" },
     );
 
@@ -596,7 +597,7 @@ describe("targetFromClient", () => {
 
   it("carries an explicit port and passphrase when supplied", () => {
     const result = targetFromClient(
-      { hostname: "mint-01", sshUser: "pct-agent" },
+      { hostname: "mint-01", sshUser: "pct-agent", sshTarget: null },
       { privateKey: "KEY", port: 2222, passphrase: "secret" },
     );
 
@@ -607,5 +608,34 @@ describe("targetFromClient", () => {
       port: 2222,
       passphrase: "secret",
     });
+  });
+
+  it("dials the SSH-target override in preference to the hostname (#406)", () => {
+    const result = targetFromClient(
+      { hostname: "mint-01", sshUser: "pct-agent", sshTarget: "192.168.1.42" },
+      { privateKey: "KEY" },
+    );
+
+    expect(result.host).toBe("192.168.1.42");
+  });
+
+  it("falls back to the hostname when the override is null (#406)", () => {
+    const result = targetFromClient(
+      { hostname: "mint-01", sshUser: "pct-agent", sshTarget: null },
+      { privateKey: "KEY" },
+    );
+
+    expect(result.host).toBe("mint-01");
+  });
+});
+
+describe("sshHostForClient", () => {
+  it("returns the override when set", () => {
+    expect(sshHostForClient({ hostname: "mint-01", sshTarget: "10.0.0.5" })).toBe("10.0.0.5");
+  });
+
+  it("returns the hostname when the override is null or absent", () => {
+    expect(sshHostForClient({ hostname: "mint-01", sshTarget: null })).toBe("mint-01");
+    expect(sshHostForClient({ hostname: "mint-01" })).toBe("mint-01");
   });
 });

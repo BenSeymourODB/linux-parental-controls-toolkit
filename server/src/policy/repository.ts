@@ -85,6 +85,12 @@ export interface ClientUpdate {
   sshUser?: string | undefined;
   /** Admin-editable friendly name (#355). */
   friendlyName?: string | undefined;
+  /**
+   * Admin-editable SSH target override (#406): a host string the transport uses
+   * in preference to `hostname`. `null` clears the override (back to hostname);
+   * an omitted key leaves it unchanged.
+   */
+  sshTarget?: string | null | undefined;
 }
 
 /** The link's own attributes (the user/client pair comes from the route). */

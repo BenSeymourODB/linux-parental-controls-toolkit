@@ -184,6 +184,18 @@ export const clients = sqliteTable(
      */
     sourceIp: text("source_ip"),
     /**
+     * An admin-chosen SSH target override (#406): the host string the SSH
+     * transport connects to for this client, in preference to the raw
+     * `hostname`. Nullable — `NULL` (the default) keeps the transport targeting
+     * `hostname`, so existing clients are unaffected. Set to a recorded IP (from
+     * `reportedIps` / `sourceIp`) or a typed hostname/IP when the dashboard's
+     * container can't resolve the client's LAN hostname. Resolution is
+     * `ssh_target ?? hostname`, centralised in `sshHostForClient`
+     * (`transport/ssh/facade.ts`) so the transport and the admin-facing
+     * effective-target display never drift.
+     */
+    sshTarget: text("ssh_target"),
+    /**
      * Durable telemetry pull cursor (#382): the `end` of the last window whose
      * `UsageSample` rows were successfully persisted for this client. The
      * Phase-5 pull seeds its in-memory cursor from this on boot and advances

@@ -154,7 +154,11 @@ describe("createPolicyPushTransport", () => {
     const prober = transport.prober;
     expect(prober).toBeDefined();
     if (prober === undefined) throw new Error("expected a live prober");
-    const result = await prober.probe({ hostname: "mint-01", sshUser: "pct-agent" });
+    const result = await prober.probe({
+      hostname: "mint-01",
+      sshUser: "pct-agent",
+      sshTarget: null,
+    });
 
     expect(result.reachability).toBe("online");
     // The system-service components probed via `systemctl is-active` are `ok`.

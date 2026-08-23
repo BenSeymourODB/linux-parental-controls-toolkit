@@ -433,6 +433,44 @@ failed-attempt limiter" (#235).
   rotation is a one-click action in the dashboard that pushes a new key
   via the existing connection.
 
+## Reaching clients over SSH — target selection
+
+By default the dashboard dials each client at the **hostname** it reported
+when it enrolled. In a homelab where the dashboard container runs on a bridge
+network, that hostname may not resolve — the container has no visibility of the
+LAN's mDNS/`.local` names or the router's DHCP hostname table — and every push
+to that client fails as "unreachable" even though the box is up. (This is a
+candidate cause of the `v0.1.0-alpha.5` all-clients-unreachable incident.)
+
+To work around it, set a **per-client SSH-target override**: the host string
+the transport connects to, used in preference to the hostname.
+
+- **Where:** the client's card in the admin **Clients** view has an *SSH
+  target* control (in edit mode). It offers one-click candidates drawn from the
+  addresses captured at enrol — the client's self-reported IP(s) and the source
+  IP the server observed the enrol request come from — or you can type any
+  hostname or IPv4/IPv6 literal. "Use hostname" clears the override.
+- **API:** `PATCH /api/clients/:id` with `{ "sshTarget": "192.168.1.50" }` sets
+  it; `{ "sshTarget": null }` clears it back to the hostname. The change is
+  audited like any other client edit.
+- **Effect:** the resolved target is `ssh_target ?? hostname`, applied across
+  the **direct SSH transport** — the `timekpra` policy push, the health probe,
+  the ActivityWatch telemetry pull, and the force-close — so those all dial the
+  same host. The card shows the *effective* target so what you see is what it
+  connects to. (The **Ansible-driven** paths — the e2guardian/AppArmor filter
+  pushes and the periodic re-apply — still address clients by hostname via the
+  generated inventory; extending the override to them is tracked as a
+  follow-up.)
+- **Default is unchanged:** with no override, behaviour is exactly as before
+  (dial the hostname), so existing clients need no action.
+- **Stale addresses:** self-reported IPs go stale under DHCP. Prefer a
+  DHCP reservation or a static address for a box you pin by IP; the post-enrol
+  connectivity check verifies against the *effective* target and can flag when
+  hostname resolution is the failure class.
+
+License boundary: unchanged — the transport still invokes `timekpra` as a
+subprocess over SSH; the override only changes which host string it dials.
+
 ## Backup and restore
 
 The entire deployable state lives under `/data`, and most of it is
