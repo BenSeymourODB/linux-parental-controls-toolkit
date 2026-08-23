@@ -105,8 +105,11 @@ setup.
    deployment" → **A) External AdGuard** shows the `secrets:` wiring.
 
 3. Restart the container. On boot the dashboard validates that it can reach
-   the configured instance's REST API; a failure is surfaced in the admin
-   UI rather than crashing the process.
+   the configured instance's REST API. A failure is caught and logged (and
+   reported by the `GET /api/dns` status endpoint) rather than crashing the
+   process — so check the dashboard logs / that endpoint if external DNS
+   isn't taking effect. (A dedicated admin-UI surface for DNS status and
+   per-client blocklists is still in progress — see #97.)
 
 ## Switching modes later
 

@@ -19,8 +19,9 @@ There are two independent safety nets:
 
 `scripts/pct-data-backup.sh` snapshots `policy.sqlite` through SQLite's
 online backup API (safe even while the dashboard is running) and packs the
-non-regenerable state into one owner-only `tar.gz`. The host needs
-`sqlite3` and `tar` on its `PATH`.
+non-regenerable state into one owner-only `tar.gz`. The host needs `tar`
+and `gzip` on its `PATH` (and `sqlite3` whenever a `policy.sqlite` is
+present to snapshot).
 
 ```bash
 # Archive defaults to ./pct-data-backup-<UTC>.tar.gz

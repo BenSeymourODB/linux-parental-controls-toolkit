@@ -52,13 +52,17 @@ stored server-side — copy it now; it is never shown again.
 ## Step 2 — Run the installer on the client
 
 On the client, run the install one-liner the dashboard serves, passing the
-token. Interactive:
+server URL and the token as arguments (after `-s --`, so they reach the
+script and not `bash`):
 
 ```bash
-curl -fsSL https://<server>/install-client.sh | sudo bash
+curl -fsSL https://<server>/install-client.sh | sudo bash -s -- \
+    --server-url https://parentalcontrols.lan \
+    --enrolment-token <one-time token from step 1> \
+    --supervised-user alice
 ```
 
-…or non-interactively:
+…or download it first and run it locally:
 
 ```bash
 sudo bash install-client.sh \
@@ -66,6 +70,11 @@ sudo bash install-client.sh \
     --enrolment-token <one-time token from step 1> \
     --supervised-user alice
 ```
+
+The installer does **not** prompt — the server URL, token, and supervised
+user come from these flags (or the `PCT_SERVER_URL` /
+`PCT_ENROLMENT_TOKEN` / `PCT_SUPERVISED_USERS` environment variables), and a
+run without them aborts with a clear "missing …" message.
 
 The installer (an idempotent orchestrator) will:
 
