@@ -117,6 +117,10 @@ describe("debFilename", () => {
   it("builds the arch-independent .deb name", () => {
     expect(debFilename(PKG, "0.5.7-1")).toBe("timekpr-next_0.5.7-1_all.deb");
   });
+
+  it("strips a Debian epoch (the filename never carries it)", () => {
+    expect(debFilename(PKG, "1:0.5.7-1")).toBe("timekpr-next_0.5.7-1_all.deb");
+  });
 });
 
 describe("selectDebUrl", () => {

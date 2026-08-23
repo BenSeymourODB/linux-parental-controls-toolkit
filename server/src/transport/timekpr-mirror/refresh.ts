@@ -153,7 +153,9 @@ function resolveDeps(deps: RefreshDeps): ResolvedDeps {
     writeDeb: deps.writeDeb ?? ((path, contents) => writeFileSync(path, contents)),
     writeSentinel: deps.writeSentinel ?? ((path, value) => writeFileSync(path, `${value}\n`)),
     sleep: deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
-    retryAttempts: deps.retryAttempts ?? DEFAULT_RETRY_ATTEMPTS,
+    // Clamp to ≥ 1 so a single attempt always runs — otherwise `withRetry` would
+    // never enter its loop and throw an `undefined` "last error".
+    retryAttempts: Math.max(1, deps.retryAttempts ?? DEFAULT_RETRY_ATTEMPTS),
     retryBaseMs: deps.retryBaseMs ?? DEFAULT_RETRY_BASE_MS,
   };
 }

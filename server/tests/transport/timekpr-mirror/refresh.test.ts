@@ -248,4 +248,18 @@ describe("refreshTimekprMirror", () => {
       ),
     ).rejects.toThrow("connection reset");
   });
+
+  it("clamps a non-positive retryAttempts to a single attempt", async () => {
+    // retryAttempts: 0 must still run once (clamped) and surface the real error,
+    // never an `undefined` "last error" from a loop that never entered.
+    const fetchImpl: DownloadFetch = async () => {
+      throw new Error("connection reset");
+    };
+    await expect(
+      refreshTimekprMirror(
+        { dataDir: DATA_DIR, package: PKG },
+        { fetch: fetchImpl, sleep: async () => undefined, retryAttempts: 0, ...memFs().deps },
+      ),
+    ).rejects.toThrow("connection reset");
+  });
 });

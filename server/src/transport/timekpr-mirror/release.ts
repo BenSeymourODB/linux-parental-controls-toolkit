@@ -134,9 +134,21 @@ export function selectPinnedPublication(
   return match;
 }
 
+/**
+ * The version token apt uses in a `.deb` filename: any Debian *epoch* (`N:`
+ * prefix) is stripped, since the epoch is metadata that never appears in the
+ * on-disk filename. `timekpr-next` carries no epoch today, but keying the
+ * filename off the raw version would mis-match the librarian file the moment
+ * upstream ever added one — so strip it defensively.
+ */
+function debFileVersion(version: string): string {
+  const colon = version.indexOf(":");
+  return colon === -1 ? version : version.slice(colon + 1);
+}
+
 /** The expected `.deb` filename for an `Architecture: all` package version. */
 export function debFilename(packageName: string, version: string): string {
-  return `${packageName}_${version}_all.deb`;
+  return `${packageName}_${debFileVersion(version)}_all.deb`;
 }
 
 /**
