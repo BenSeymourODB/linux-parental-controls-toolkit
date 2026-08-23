@@ -60,6 +60,15 @@
   let loading = $state(true);
   let error = $state<string | null>(null);
 
+  // Future-dated preview (#281): the calendar date to preview the policy *as of*,
+  // or "" for today. When set it is sent as the request's `date`; the server
+  // resolves it to local noon of that day in the user's timezone, so a date-scoped
+  // rule dormant today but active that week shows up in the diff. Today's date
+  // (local) is the picker's floor — previewing the past isn't a useful "what would
+  // a push do" question.
+  const todayIso = localTodayIso();
+  let previewDate = $state<string>("");
+
   // The persisted baseline for the selected user (the proposed payload is
   // derived from it + the admin's what-if edits).
   let budgets = $state<BudgetResponse[]>([]);
@@ -131,6 +140,7 @@
     previewError = null;
     pushResult = null;
     pushError = null;
+    previewDate = ""; // a fresh user starts previewing "today"
     try {
       const [loadedBudgets, loadedSchedules] = await Promise.all([
         listBudgets(selectedUserId),
@@ -212,6 +222,8 @@
       const result = await previewPolicyPush(selectedUserId, {
         budgets: proposedBudgets(),
         schedules: proposedSchedules(),
+        // Preview as of the picked future date, if any — otherwise "today".
+        ...(previewDate !== "" ? { date: previewDate } : {}),
         ...(probe ? { probe: true } : {}),
       });
       if (seq === previewSeq) preview = result;
@@ -255,6 +267,19 @@
 
   function onMinutesChange(id: number, value: string): void {
     minutesById = { ...minutesById, [id]: value };
+    schedulePreview();
+  }
+
+  /** Change the "preview as of" date (empty string ⇒ back to today) and re-preview. */
+  function onPreviewDateChange(value: string): void {
+    previewDate = value;
+    schedulePreview();
+  }
+
+  /** Clear the future date, returning the preview to today. */
+  function clearPreviewDate(): void {
+    if (previewDate === "") return;
+    previewDate = "";
     schedulePreview();
   }
 
@@ -314,6 +339,29 @@
     if (err instanceof ApiError) return err.message;
     return err instanceof Error ? err.message : "Something went wrong";
   }
+
+  /** Today's local calendar date as `YYYY-MM-DD` — the date picker's floor. */
+  function localTodayIso(): string {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, "0");
+    const d = String(now.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
+
+  /** A human-readable label for the picked date, e.g. `Sat, Mar 20, 2027`. */
+  function previewDateLabel(iso: string): string {
+    // Parse as local midnight (append no time ⇒ UTC in some engines), so build
+    // the Date from parts to keep the displayed day stable across timezones.
+    const [y, m, d] = iso.split("-").map(Number);
+    if (y === undefined || m === undefined || d === undefined) return iso;
+    return new Date(y, m - 1, d).toLocaleDateString(undefined, {
+      weekday: "short",
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    });
+  }
 </script>
 
 <section>
@@ -353,6 +401,40 @@
       {#if loadingPolicy}
         <p class="muted">Loading policy…</p>
       {:else}
+        <!-- Future-dated preview (#281): preview the policy as it resolves on a
+             chosen day, surfacing date-scoped rules dormant today. -->
+        <div class="datebar">
+          <label for="preview-date">Preview as of</label>
+          <input
+            id="preview-date"
+            type="date"
+            min={todayIso}
+            value={previewDate}
+            oninput={(e) => onPreviewDateChange(e.currentTarget.value)}
+          />
+          <span class="as-of-status" role="status" aria-live="polite">
+            {#if previewDate !== ""}
+              <span class="as-of" data-testid="preview-as-of"
+                >showing {previewDateLabel(previewDate)}</span
+              >
+            {:else}
+              <span class="as-of muted-as-of">showing today</span>
+            {/if}
+          </span>
+          {#if previewDate !== ""}
+            <button type="button" class="clear-date" onclick={clearPreviewDate}>
+              Back to today
+            </button>
+          {/if}
+        </div>
+        {#if previewDate !== ""}
+          <p class="date-caveat" data-testid="preview-date-caveat">
+            Shows the <strong>recurring</strong> schedule &amp; budget push resolved for that day.
+            One-off exceptions and time grants that fall on this date are pushed separately and
+            aren't included here.
+          </p>
+        {/if}
+
         <div class="editor">
           <div class="card">
             <h2>Overall time budgets</h2>
@@ -588,6 +670,52 @@
     border: 1px solid #d1d5db;
     border-radius: 0.4rem;
     background: #fff;
+  }
+  .datebar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+  }
+  .datebar label {
+    font-weight: 600;
+    color: #374151;
+    font-size: 0.9rem;
+  }
+  .datebar input[type="date"] {
+    padding: 0.4rem 0.5rem;
+    border: 1px solid #d1d5db;
+    border-radius: 0.4rem;
+    background: #fff;
+  }
+  .as-of {
+    font-size: 0.82rem;
+    color: #374151;
+  }
+  .muted-as-of {
+    color: #6b7280;
+  }
+  .date-caveat {
+    margin: -0.5rem 0 1rem;
+    color: #6b7280;
+    font-size: 0.78rem;
+    max-width: 44rem;
+  }
+  .date-caveat strong {
+    color: #374151;
+  }
+  .clear-date {
+    background: transparent;
+    color: #2563eb;
+    border: 1px solid #bfdbfe;
+    border-radius: 0.4rem;
+    padding: 0.25rem 0.55rem;
+    font-size: 0.78rem;
+    cursor: pointer;
+  }
+  .clear-date:hover {
+    background: #eff6ff;
   }
   .editor {
     display: grid;
