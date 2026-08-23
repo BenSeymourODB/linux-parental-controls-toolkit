@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import { clientComponentValues } from "../../../src/transport/health/index.js";
 import type { QueuedActionRow } from "../../../src/transport/queue/index.js";
 import {
+  clientCapabilitySchema,
   clientHealthSchema,
   componentHealthSchema,
   toQueuedActionSummary,
@@ -79,6 +80,10 @@ describe("health DTO contract", () => {
       serverVersion: "0.1.0-alpha.5",
       versionStatus: "up_to_date",
       components: [{ component: "timekpr-next", status: "ok", detail: "active" }],
+      capabilitiesReported: true,
+      capabilities: [
+        { capability: "per_app_close", label: "Per-app force-close", supported: true },
+      ],
       queue: { pending: 1, failed: 0, actions: [toQueuedActionSummary(row)] },
     });
     expect(parsed.success).toBe(true);
@@ -102,6 +107,8 @@ describe("health DTO contract", () => {
       serverVersion: null,
       versionStatus: "unknown",
       components: [],
+      capabilitiesReported: false,
+      capabilities: [],
       queue: { pending: 0, failed: 0, actions: [] },
     });
     expect(parsed.success).toBe(true);
@@ -125,7 +132,29 @@ describe("health DTO contract", () => {
       serverVersion: null,
       versionStatus: "ancient",
       components: [],
+      capabilitiesReported: false,
+      capabilities: [],
       queue: { pending: 0, failed: 0, actions: [] },
+    });
+    expect(parsed.success).toBe(false);
+  });
+});
+
+describe("clientCapabilitySchema", () => {
+  it("round-trips a capability matrix row", () => {
+    const parsed = clientCapabilitySchema.safeParse({
+      capability: "session_budget",
+      label: "Session budget",
+      supported: false,
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it("requires the supported flag to be a boolean", () => {
+    const parsed = clientCapabilitySchema.safeParse({
+      capability: "session_budget",
+      label: "Session budget",
+      supported: "yes",
     });
     expect(parsed.success).toBe(false);
   });
