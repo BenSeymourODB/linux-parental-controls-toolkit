@@ -47,8 +47,14 @@ export const createGrantSchema = z
     target: positiveIdSchema.optional(),
     /** Seconds granted; must be a positive integer (table CHECK: > 0). */
     seconds: positiveIdSchema,
-    /** ISO-8601 datetime; must be in the future (checked in the route). */
-    expires_at: z.string().datetime(),
+    /**
+     * ISO-8601 datetime; must be in the future (checked in the route).
+     * `offset: true` accepts a timezone **offset** (e.g. `-04:00`), not just
+     * `Z`, so the documented contract value from `docs/architecture.md` / ADR
+     * 0014 (`2026-06-05T23:59:59-04:00`) — the natural end-of-day expiry a
+     * calendar integrator emits in local time — is accepted, not 400'd.
+     */
+    expires_at: z.string().datetime({ offset: true }),
     /** The integrator-owned idempotency key; unique across the ledger. */
     source_ref: z.string().trim().min(1).max(512),
     /** Optional free-text reason for the audit trail / ledger UI (#116). */

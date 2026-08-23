@@ -125,6 +125,17 @@ describe("integration grant endpoint", () => {
     expect(res.json().reason).toBeNull();
   });
 
+  it("accepts an expires_at carrying a timezone offset (the documented contract shape)", async () => {
+    // ADR 0014 / docs/architecture.md show `...T23:59:59-04:00` (an offset, not
+    // Z). The endpoint must accept it, not 400 it.
+    const res = await postGrant(
+      overallBody({ expires_at: "2999-06-05T23:59:59-04:00", source_ref: "calendar:offset:1" }),
+    );
+    expect(res.statusCode).toBe(201);
+    // Echoed back normalised to UTC Z form (stored as a Unix timestamp).
+    expect(res.json().expires_at).toBe(new Date("2999-06-05T23:59:59-04:00").toISOString());
+  });
+
   it("records activity- and group-scoped grants against an existing target", async () => {
     const activityId = createActivity(harness.db, { kind: "app", matcher: "firefox" }).id;
     const groupId = createActivityGroup(harness.db, { name: "Games" }).id;
@@ -234,5 +245,18 @@ describe("integration grant endpoint", () => {
     expect(res.statusCode).toBe(404);
     expect(res.json().error.code).toBe("not_found");
     expect(countGrants()).toBe(0);
+  });
+
+  it("404s an unknown group target", async () => {
+    const res = await postGrant(overallBody({ scope: "group", target: 999999, source_ref: "x" }));
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error.code).toBe("not_found");
+    expect(countGrants()).toBe(0);
+  });
+
+  it("400s an unknown field in the body (strict)", async () => {
+    const res = await postGrant(overallBody({ surprise: true }));
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.code).toBe("validation_error");
   });
 });

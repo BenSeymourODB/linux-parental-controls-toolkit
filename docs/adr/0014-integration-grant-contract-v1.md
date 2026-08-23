@@ -168,6 +168,15 @@ Each is a separate Phase-10 issue that builds on the row this endpoint writes.
 - The immutable/additive ledger properties are preserved: this endpoint only
   ever inserts (or reads back an existing row); revocation stays a separate
   `revoked_at` write, never an in-place edit.
+- **`source_ref` uniqueness is global, not per-integration.** The
+  `UNIQUE(source_ref)` index and the replay lookup span the whole ledger, not a
+  `(token, source_ref)` pair. With a single integrator and self-namespaced keys
+  (the `calendar:…` prefix in the example) this is a non-issue, but if a second
+  integrator ever reused a `source_ref` string an earlier one used, its grant
+  would be swallowed as a "replay" and it would receive the other integration's
+  row. When a second integrator is onboarded, either require namespaced
+  `source_ref`s by contract or make the uniqueness `(token_id, source_ref)` — a
+  point to settle alongside the NDWC confirmation below.
 - **NDWC confirmation is still owed.** This ADR is the dashboard's v1 proposal;
   the reciprocal agreement with next-digital-wall-calendar (especially that it
   will store and send the dashboard `User.id` as `user_ref`, and how it
