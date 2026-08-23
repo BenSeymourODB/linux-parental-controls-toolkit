@@ -25,7 +25,7 @@ import {
   type ClientProber,
   type ClientProbeResult,
 } from "../../transport/health/index.js";
-import { CLIENT_CAPABILITY_CATALOG } from "../../events/index.js";
+import { CLIENT_CAPABILITY_CATALOG } from "../../events/capabilities.js";
 import { listForClient } from "../../transport/queue/index.js";
 import { mapWithConcurrency, timerDeadline, type DeadlineFactory } from "../../util/concurrency.js";
 import {
@@ -70,6 +70,7 @@ function capabilityMatrix(advertised: readonly string[] | null): ClientCapabilit
   return CLIENT_CAPABILITY_CATALOG.map((descriptor) => ({
     capability: descriptor.capability,
     label: descriptor.label,
+    description: descriptor.description,
     supported: supported.has(descriptor.capability),
   }));
 }

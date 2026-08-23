@@ -106,8 +106,18 @@ describe("ClientsView capability matrix (#400)", () => {
       health({
         capabilitiesReported: true,
         capabilities: [
-          { capability: "session_budget", label: "Session budget", supported: true },
-          { capability: "per_app_close", label: "Per-app force-close", supported: false },
+          {
+            capability: "session_budget",
+            label: "Session budget",
+            description: "Locks the session when the overall budget runs out.",
+            supported: true,
+          },
+          {
+            capability: "per_app_close",
+            label: "Per-app force-close",
+            description: "Kills an app when its quota is exhausted.",
+            supported: false,
+          },
         ],
       }),
     ]);
@@ -137,8 +147,18 @@ describe("ClientsView capability matrix (#400)", () => {
       health({
         capabilitiesReported: true,
         capabilities: [
-          { capability: "session_budget", label: "Session budget", supported: false },
-          { capability: "per_app_close", label: "Per-app force-close", supported: false },
+          {
+            capability: "session_budget",
+            label: "Session budget",
+            description: "Locks the session when the overall budget runs out.",
+            supported: false,
+          },
+          {
+            capability: "per_app_close",
+            label: "Per-app force-close",
+            description: "Kills an app when its quota is exhausted.",
+            supported: false,
+          },
         ],
       }),
     ]);

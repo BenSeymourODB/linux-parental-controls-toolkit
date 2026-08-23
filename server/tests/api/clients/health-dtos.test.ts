@@ -82,7 +82,12 @@ describe("health DTO contract", () => {
       components: [{ component: "timekpr-next", status: "ok", detail: "active" }],
       capabilitiesReported: true,
       capabilities: [
-        { capability: "per_app_close", label: "Per-app force-close", supported: true },
+        {
+          capability: "per_app_close",
+          label: "Per-app force-close",
+          description: "Kills an app when its quota is exhausted.",
+          supported: true,
+        },
       ],
       queue: { pending: 1, failed: 0, actions: [toQueuedActionSummary(row)] },
     });
@@ -145,6 +150,7 @@ describe("clientCapabilitySchema", () => {
     const parsed = clientCapabilitySchema.safeParse({
       capability: "session_budget",
       label: "Session budget",
+      description: "Locks the session when the overall budget runs out.",
       supported: false,
     });
     expect(parsed.success).toBe(true);
@@ -154,6 +160,7 @@ describe("clientCapabilitySchema", () => {
     const parsed = clientCapabilitySchema.safeParse({
       capability: "session_budget",
       label: "Session budget",
+      description: "Locks the session when the overall budget runs out.",
       supported: "yes",
     });
     expect(parsed.success).toBe(false);

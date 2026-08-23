@@ -145,6 +145,8 @@ describe("capability matrix (#400)", () => {
     expect(health?.capabilities.length).toBeGreaterThan(0);
     expect(health?.capabilities.every((c) => c.supported === false)).toBe(true);
     expect(health?.capabilities.every((c) => c.label.length > 0)).toBe(true);
+    // The catalogue description is carried through for the chip tooltip.
+    expect(health?.capabilities.every((c) => c.description.length > 0)).toBe(true);
   });
 
   it("flags only the advertised capabilities as supported", async () => {

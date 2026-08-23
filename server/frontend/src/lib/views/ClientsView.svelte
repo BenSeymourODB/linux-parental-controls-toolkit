@@ -551,8 +551,8 @@
                     class:unsupported={!cap.supported}
                     data-supported={cap.supported ? "true" : "false"}
                     title={cap.supported
-                      ? `Supported by this client: ${cap.label}`
-                      : `Not supported by this client: ${cap.label}`}
+                      ? cap.description
+                      : `${cap.description} (not supported by this client)`}
                   >
                     <span class="cap-mark" aria-hidden="true">{cap.supported ? "✓" : "—"}</span>
                     <span class="cap-name">{cap.label}</span>

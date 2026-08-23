@@ -43,6 +43,8 @@ export const clientCapabilitySchema = z.object({
   capability: z.string(),
   /** Admin-facing label from the server catalogue. */
   label: z.string(),
+  /** One-line explanation of the primitive, from the server catalogue (the chip tooltip). */
+  description: z.string(),
   /** Did this client advertise the capability on its last handshake? */
   supported: z.boolean(),
 });
