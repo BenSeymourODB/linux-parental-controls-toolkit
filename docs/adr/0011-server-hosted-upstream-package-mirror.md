@@ -2,7 +2,11 @@
 
 - **Status:** Accepted (2026-07-06)
 - **Issue:** [#389](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/389)
-- **Phase:** 14 (Fleet updates & lifecycle management, epic [#163](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/163))
+- **Phase:** 3 (Client install script) for the MVP — pulled forward from
+  Phase 14 on 2026-08-20 because Launchpad latency and distro staleness are
+  *enrolment-time* problems that bite on every install. The signed-apt-index
+  end state remains Phase 14 (Fleet updates & lifecycle management, epic
+  [#163](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/163)).
 - **Relates to:** ADR issue [#167](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/167)
   (client update *channel* — this ADR revisits its "GPL tools stay upstream"
   decision rule for the specific case of `timekpr-next`).

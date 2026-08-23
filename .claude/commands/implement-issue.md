@@ -52,9 +52,12 @@ This repo sequences work by **roadmap phase**, not by a dense custom
 project board:
 
 - [`docs/roadmap.md`](../../docs/roadmap.md) — phased delivery plan. Phase
-  order (0 → 11) is the primary ordering.
-- Phase labels on issues: `phase-1` … `phase-11`. An issue's label tells
-  you which milestone it belongs to.
+  order (0 → 14) is the primary ordering.
+- Phase labels on issues: `phase-1` … `phase-14`, plus the lettered
+  sub-phases `phase-8b` / `phase-8c` (which sort with `phase-8`). An issue's
+  label tells you which milestone it belongs to. A phase whose own issues are
+  all closed can still gain new work when something is deliberately pulled
+  forward — the label is the ordering, not a claim about what's finished.
 - GitHub's native **"Blocked by"** links and any `decision-needed` label.
 - Roadmap project board: <https://github.com/users/BenSeymourODB/projects/2>.
   The board is the visual tracker; the phase label + roadmap doc are the
