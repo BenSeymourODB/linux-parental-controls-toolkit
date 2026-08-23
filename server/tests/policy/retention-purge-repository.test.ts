@@ -1,12 +1,11 @@
 /**
  * Unit tests for the retention purge-run ledger repository (#137):
- * `recordPurgeRun`, `getLatestPurgeRun`, `listPurgeRuns`. The `items` JSON
- * column must round-trip, and reads must be newest-first (ties broken by id).
+ * `recordPurgeRun` and `listPurgeRuns`. The `items` JSON column must
+ * round-trip, and reads must be newest-first (ties broken by id).
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
-  getLatestPurgeRun,
   listPurgeRuns,
   recordPurgeRun,
   type RecordPurgeRunInput,
@@ -59,9 +58,8 @@ describe("recordPurgeRun", () => {
   });
 });
 
-describe("getLatestPurgeRun / listPurgeRuns", () => {
-  it("returns undefined / empty when no run has ever executed", () => {
-    expect(getLatestPurgeRun(db)).toBeUndefined();
+describe("listPurgeRuns", () => {
+  it("returns empty when no run has ever executed", () => {
     expect(listPurgeRuns(db, 10)).toEqual([]);
   });
 
@@ -79,7 +77,8 @@ describe("getLatestPurgeRun / listPurgeRuns", () => {
     expect(rows[0]?.id).toBeGreaterThan(rows[1]?.id ?? 0);
     expect(rows[2]?.at).toEqual(new Date("2026-06-18T03:00:00.000Z"));
 
-    expect(getLatestPurgeRun(db)?.id).toBe(rows[0]?.id);
+    // The "last-run summary" is simply the first element.
+    expect(listPurgeRuns(db, 1)).toEqual([rows[0]]);
   });
 
   it("caps the result at the requested limit", () => {

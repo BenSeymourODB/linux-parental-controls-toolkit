@@ -1417,21 +1417,9 @@ export function recordPurgeRun(db: PolicyDb, input: RecordPurgeRunInput): Retent
 }
 
 /**
- * The most recent purge run (newest `at`, ties broken by newest `id`), or
- * `undefined` when no purge has ever run — the "last-run summary" read.
- */
-export function getLatestPurgeRun(db: PolicyDb): RetentionPurgeRunRow | undefined {
-  return db
-    .select()
-    .from(retentionPurgeRuns)
-    .orderBy(desc(retentionPurgeRuns.at), desc(retentionPurgeRuns.id))
-    .limit(1)
-    .get();
-}
-
-/**
- * Recent purge runs, newest first, capped at `limit`. The first element is the
- * same row {@link getLatestPurgeRun} returns.
+ * Recent purge runs, newest first (by `at`, ties broken by newest `id`), capped
+ * at `limit`. `listPurgeRuns(db, 1)[0]` is the "last-run summary" the admin page
+ * and the `GET /retention/purge/runs` route read.
  */
 export function listPurgeRuns(db: PolicyDb, limit: number): RetentionPurgeRunRow[] {
   return db

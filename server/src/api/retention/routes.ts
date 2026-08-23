@@ -24,8 +24,9 @@
  * comes from `settings` (`PCT_RETENTION_DEFAULT_DAYS`); only per-category
  * overrides are persisted.
  *
- * The Svelte admin view that consumes this contract is deferred to its own
- * issue (it depends on the `/admin/*` shell, #53).
+ * The Svelte admin view that consumes this contract is `RetentionView`
+ * (`/admin` retention page): the windows editor (#214) plus the data-purge
+ * panel (#137, last-run summary + preview + run-now).
  *
  * License boundary: none touched — plain TypeScript + zod + Drizzle.
  */

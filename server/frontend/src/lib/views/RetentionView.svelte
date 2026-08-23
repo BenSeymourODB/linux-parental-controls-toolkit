@@ -193,6 +193,9 @@
   function applyEntry(updated: RetentionEntryResponse): void {
     entries = entries.map((row) => (row.category === updated.category ? updated : row));
     drafts = { ...drafts, [updated.category]: draftFor(updated, defaultDays ?? 0) };
+    // A window just changed, so any pending preview was computed against the old
+    // cutoffs — drop it rather than show stale counts.
+    preview = null;
   }
 
   /** The current effective window, human-readable. */
@@ -241,6 +244,11 @@
   /** An ISO instant rendered in the viewer's locale. */
   function formatInstant(iso: string): string {
     return new Date(iso).toLocaleString();
+  }
+
+  /** A per-category cutoff for a breakdown row: the date, or "kept forever". */
+  function cutoffLabel(cutoff: string | null): string {
+    return cutoff === null ? "kept forever" : `older than ${formatInstant(cutoff)}`;
   }
 
   /** Render any thrown value as a UI-safe message. */
@@ -390,7 +398,11 @@
         </div>
         <ul class="purge-breakdown">
           {#each lastRun.items as item (item.category)}
-            <li><span>{metaFor(item.category).label}</span><span>{item.deleted}</span></li>
+            <li>
+              <span>{metaFor(item.category).label}</span>
+              <span class="muted cutoff">{cutoffLabel(item.cutoff)}</span>
+              <span>{item.deleted}</span>
+            </li>
           {/each}
         </ul>
       </div>
@@ -408,7 +420,11 @@
         </div>
         <ul class="purge-breakdown">
           {#each preview.items as item (item.category)}
-            <li><span>{metaFor(item.category).label}</span><span>{item.wouldDelete}</span></li>
+            <li>
+              <span>{metaFor(item.category).label}</span>
+              <span class="muted cutoff">{cutoffLabel(item.cutoff)}</span>
+              <span>{item.wouldDelete}</span>
+            </li>
           {/each}
         </ul>
       </div>
@@ -455,13 +471,19 @@
     padding: 0;
     display: grid;
     gap: 0.15rem;
-    max-width: 22rem;
+    max-width: 28rem;
   }
   .purge-breakdown li {
-    display: flex;
-    justify-content: space-between;
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    gap: 0.75rem;
+    align-items: baseline;
     font-size: 0.85rem;
     color: #4b5563;
+  }
+  .purge-breakdown .cutoff {
+    font-size: 0.78rem;
+    text-align: right;
   }
   .hint {
     margin: 0.25rem 0 1rem;
