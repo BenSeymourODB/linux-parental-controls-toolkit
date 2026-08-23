@@ -26,7 +26,7 @@
  */
 import type { Platform } from "../../policy/enums.js";
 import type { ClientRow } from "../../policy/repository.js";
-import type { BudgetInput } from "../../policy/resolve.js";
+import type { BudgetInput, ExceptionInput } from "../../policy/resolve.js";
 import type { ScheduleRule } from "../../policy/schedule-precedence.js";
 
 /**
@@ -59,6 +59,14 @@ export interface PolicyEnforcementContext {
   readonly budgets: readonly BudgetInput[];
   /** The reference instant the week and "today" are resolved against. */
   readonly now: Date;
+  /**
+   * The user's active date-specific overrides (#399), in precedence order.
+   * Optional — the standing push omits it (the recurring grid stays
+   * exception-free, ADR 0012 §3); the date-override enforcement push supplies
+   * the user's own + inherited group exceptions so the runner folds them into
+   * the allowed-hours grid it pushes.
+   */
+  readonly exceptions?: readonly ExceptionInput[];
 }
 
 /**

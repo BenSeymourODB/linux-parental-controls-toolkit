@@ -28,6 +28,7 @@ import type { Settings } from "../../config.js";
 import type { PolicyDb } from "../../policy/db.js";
 import { getClient } from "../../policy/repository.js";
 import { AuditingTransport, DrizzleAuditSink, type AuditableTransport } from "../audit/index.js";
+import { startDateOverridePush, EXCEPTION_PUSH_KIND } from "../exception-push/index.js";
 import { SshClientProber, type ClientProber } from "../health/index.js";
 import {
   compositeExecutor,
@@ -237,14 +238,43 @@ export function createPolicyPushTransport(
       ),
   });
 
-  // The drainer replays both kinds: standing policy pushes and queued same-day
-  // adjustments. The dispatcher above only ever pushes `policy.push`, so it
-  // keeps driving that executor directly.
+  // The date-override enforcement push (#399) shares the standing push machinery
+  // but resolves with the user's active date-specific exceptions folded into the
+  // allowed-hours grid (`includeExceptions`). It re-reads the override state on
+  // every run, so a queued override replayed after its window closed resolves to
+  // the standing grid (the revert). Same platform registry / attribution as the
+  // system push above.
+  const exceptionExecutor = createPolicyPushExecutor({
+    db,
+    registry,
+    defaultTz: settings.defaultTz,
+    log,
+    includeExceptions: true,
+    ...(options.now !== undefined ? { now: options.now } : {}),
+  });
+
+  // The drainer replays three kinds: standing policy pushes, queued same-day
+  // adjustments, and date-specific override pushes. The dispatcher above only
+  // ever pushes `policy.push`, so it keeps driving that executor directly.
   const drainExecutor = compositeExecutor({
     [POLICY_PUSH_KIND]: executor,
     [TIME_TODAY_KIND]: timeTodayExecutor,
+    [EXCEPTION_PUSH_KIND]: exceptionExecutor,
   });
   const drainer = startOfflineQueueDrainer({ db, probe, executor: drainExecutor, log });
+
+  // The date-override reconcile scheduler (#399): each tick it pushes the
+  // exception-inclusive weekly grid for users with an active override (and
+  // reverts once it lapses) through `exceptionExecutor` + the offline queue.
+  // Started here (like the drainer) only because the live SSH transport exists.
+  const overridePush = startDateOverridePush({
+    db,
+    executor: exceptionExecutor,
+    defaultTz: settings.defaultTz,
+    log,
+    pattern: settings.exceptionPush.cron,
+    ...(options.now !== undefined ? { now: options.now } : {}),
+  });
 
   // The same-day "Add time today" lever (#257): a synchronous, audited
   // `--settimeleft` over the audited SSH `timekpra` client, attributed to the
@@ -308,6 +338,7 @@ export function createPolicyPushTransport(
     pushPolicyNow,
     prober,
     dispose: (): void => {
+      overridePush.stop();
       drainer.stop();
       ssh.disposeAll();
     },

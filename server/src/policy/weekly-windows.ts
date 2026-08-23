@@ -11,16 +11,29 @@
  * weekday, ready to hand to {@link TimekprClient.setWeeklyAllowedHours} /
  * `buildWeeklyAllowedHoursCommands`.
  *
- * Only the **recurring** layer is resolved: no budgets, no grants, no
- * date-specific overrides. `timekpra` allowed-hours is a *static weekly* grid;
- * date-specific overrides (#142) adjust the daily *limit*, not this grid, and
- * are a later, separately-composed layer.
+ * By default only the **recurring** layer is resolved: no budgets, no grants,
+ * no date-specific overrides — the exception-free grid the standing `timekpra`
+ * push consumes and the clean baseline a date-specific override reverts to. A
+ * one-off calendar date is not a weekly-recurring pattern, so exceptions stay
+ * out of that grid (ADR 0012 §3).
+ *
+ * The optional {@link WeeklyWindowsInput.exceptions} is the one exception to
+ * that: it lets the date-override enforcement push (#399) resolve the seven days
+ * of a *specific reference week* with the user's active overrides folded in,
+ * producing the exception-inclusive grid to push when an override's window
+ * arrives (and, once the override ages out, the same call with no active
+ * exception yields the standing grid again — the revert). It is keyed by ISO
+ * weekday like the recurring grid, so its caller reconciles it daily to keep
+ * any weekday-slot aliasing (this Tuesday vs. next Tuesday) from outliving the
+ * override — see `transport/exception-push`. Omit it (the default `[]`) for the
+ * standing push and every existing caller: the result is byte-identical to the
+ * recurring-only grid.
  *
  * License boundary: none touched — pure TypeScript over the policy model and a
  * type-only import of the transport's weekly shape.
  */
 import { isoWeekday, localCalendarDate } from "./budget-window.js";
-import { effectivePolicy } from "./resolve.js";
+import { effectivePolicy, type ExceptionInput } from "./resolve.js";
 import type { ScheduleRule } from "./schedule-precedence.js";
 import type { TimeWindow, WeeklyAllowedWindows } from "../transport/timekpr/allowed-hours.js";
 import type { IsoWeekday } from "../transport/timekpr/commands.js";
@@ -40,6 +53,13 @@ export interface WeeklyWindowsInput {
   readonly tz: string;
   /** Any instant within the target week; its seven local days are resolved. */
   readonly reference: Date;
+  /**
+   * Date-specific overrides (#142/#399), in precedence order, to fold into each
+   * day of the resolved week. Optional — omit (default `[]`) for the recurring
+   * standing grid; the date-override push passes the user's active exceptions so
+   * an override's day resolves to its overridden `allowedWindows`.
+   */
+  readonly exceptions?: readonly ExceptionInput[];
 }
 
 /** The seven ISO weekdays, Monday (1) … Sunday (7), in order. */
@@ -71,6 +91,7 @@ function addCalendarDays(date: CalendarDate, days: number): CalendarDate {
  */
 export function resolveWeeklyAllowedWindows(input: WeeklyWindowsInput): WeeklyAllowedWindows {
   const { schedules, tz, reference } = input;
+  const exceptions = input.exceptions ?? [];
   const today = localCalendarDate(reference, tz);
   const referenceWeekday = isoWeekday(today.year, today.month, today.day);
   const monday = addCalendarDays(today, -(referenceWeekday - 1));
@@ -78,7 +99,7 @@ export function resolveWeeklyAllowedWindows(input: WeeklyWindowsInput): WeeklyAl
   const byWeekday = new Map<IsoWeekday, readonly TimeWindow[]>();
   for (const [offset, weekday] of ISO_WEEKDAYS.entries()) {
     const date = addCalendarDays(monday, offset);
-    const effective = effectivePolicy({ date, tz, schedules, budgets: [], grants: [] });
+    const effective = effectivePolicy({ date, tz, schedules, budgets: [], grants: [], exceptions });
     byWeekday.set(weekday, effective.allowedWindows);
   }
   return byWeekday;

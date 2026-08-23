@@ -27,7 +27,11 @@
  *
  * License boundary: none touched — pure TypeScript over the policy model.
  */
-import { overallDailySecondsForWeekday, type BudgetInput } from "../../policy/resolve.js";
+import {
+  overallDailySecondsForWeekday,
+  type BudgetInput,
+  type ExceptionInput,
+} from "../../policy/resolve.js";
 import type { ScheduleRule } from "../../policy/schedule-precedence.js";
 import { resolveWeeklyAllowedWindows } from "../../policy/weekly-windows.js";
 import type { TimeWindow, WeeklyAllowedWindows } from "../timekpr/allowed-hours.js";
@@ -58,6 +62,16 @@ export interface PolicyPushResolveInput {
   readonly budgets: readonly BudgetInput[];
   /** The reference instant the week and "today" are resolved against. */
   readonly now: Date;
+  /**
+   * Date-specific overrides (#399), in precedence order. Optional — omit
+   * (default `[]`) for the standing recurring push, which keeps exceptions out
+   * of the weekly grid (ADR 0012 §3). The date-override enforcement push passes
+   * the user's active exceptions so an override's day is folded into the
+   * allowed-hours grid it pushes. Exceptions never change the seconds limits
+   * (`perWeekdaySeconds` / weekly / monthly) — an additive time amount is a
+   * `Grant`, not an exception — so only {@link ResolvedPolicyPush.weekly} differs.
+   */
+  readonly exceptions?: readonly ExceptionInput[];
 }
 
 /** The concrete `timekpra` push inputs for one user on one client. */
@@ -103,7 +117,12 @@ function rollingOverallSeconds(
 export function resolvePolicyPush(input: PolicyPushResolveInput): ResolvedPolicyPush {
   const { tz, schedules, budgets, now } = input;
 
-  const weekly = resolveWeeklyAllowedWindows({ schedules, tz, reference: now });
+  const weekly = resolveWeeklyAllowedWindows({
+    schedules,
+    tz,
+    reference: now,
+    exceptions: input.exceptions ?? [],
+  });
 
   // ALL_ISO_WEEKDAYS is Monday..Sunday — the same order as the seven-day
   // `--settimelimits` list, so this maps position-for-position.
