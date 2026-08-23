@@ -126,3 +126,8 @@ export type {
   AdGuardManagedStatusResponse,
   QueueSummaryResponse,
 } from "../../../../src/api/system/dtos.js";
+export type {
+  DnsStatusResponse,
+  DnsBlocklistPreviewResponse,
+  DnsBlocklistApplyResponse,
+} from "../../../../src/api/dns/dtos.js";
