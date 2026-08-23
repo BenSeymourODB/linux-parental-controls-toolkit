@@ -70,3 +70,20 @@ export {
   type AdGuardFilteringStatus,
   type AdGuardStatus,
 } from "./schemas.js";
+export {
+  applyDnsBlocklist,
+  buildDnsBlocklistPlan,
+  composeUserRules,
+  formatBlockRule,
+  reconcileManagedClients,
+  stripManagedRules,
+  MANAGED_BLOCK_BEGIN,
+  MANAGED_BLOCK_END,
+  type BuildDnsBlocklistPlanOptions,
+  type DnsApplySummary,
+  type DnsBlocklistClient,
+  type DnsBlocklistPlan,
+  type DnsClientBlocklist,
+  type DnsReconcileSummary,
+  type DnsSkippedClient,
+} from "./blocklist.js";
