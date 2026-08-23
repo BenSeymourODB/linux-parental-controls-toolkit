@@ -700,6 +700,9 @@ pct_install_client() {
       # --skip-enrol to silence the warning, or delete + re-enrol with a fresh
       # token for a true re-registration.)
       pct_warn "continuing without re-enrol; provision + baseline were still reconciled. Use --skip-enrol on an already-enrolled host, or delete the client and mint a fresh token to re-register."
+      # The connectivity self-test (#354) is deliberately NOT run here: it needs
+      # the per-client bearer token, which only a fresh enrol response carries
+      # (a 409 returns none). Re-verify from the dashboard Clients page instead.
     else
       # A real failure (bad/expired token, network) — pct_orch_enrol already
       # explained why; propagate so the run aborts.

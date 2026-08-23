@@ -48,6 +48,11 @@ const DEFAULT_PROBE_CONCURRENCY = 4;
 /** Default per-list probe deadline in ms (≈1.5× the SSH readyTimeout). */
 const DEFAULT_PROBE_DEADLINE_MS = 15_000;
 
+/** Type-guard: is `value` one of the classified {@link SshUnreachableReason}s? */
+function isSshUnreachableReason(value: string): value is SshUnreachableReason {
+  return (sshUnreachableReasonValues as readonly string[]).includes(value);
+}
+
 /**
  * Narrow the persisted `last_verify_reason` (stored as plain text so `policy/`
  * keeps no `transport/` dependency, #354) back to the typed
@@ -56,9 +61,7 @@ const DEFAULT_PROBE_DEADLINE_MS = 15_000;
  * corruption — reported as `null` rather than trusted onto the enum.
  */
 function toVerifyReason(value: string | null): SshUnreachableReason | null {
-  return value !== null && (sshUnreachableReasonValues as readonly string[]).includes(value)
-    ? (value as SshUnreachableReason)
-    : null;
+  return value !== null && isSshUnreachableReason(value) ? value : null;
 }
 
 /** Every catalogue component reported `unknown` with one shared detail. */
