@@ -66,6 +66,36 @@ describe("getClientHealth", () => {
     expect(health?.components[0]?.detail).toMatch(/#39/);
   });
 
+  it("defaults the verification fields to null before any verification runs (#354)", async () => {
+    const health = await getClientHealth(db, client.id);
+    expect(health?.lastVerifiedAt).toBeNull();
+    expect(health?.lastVerifyReachable).toBeNull();
+    expect(health?.lastVerifyReason).toBeNull();
+  });
+
+  it("surfaces a persisted failed verification outcome + its class (#354)", async () => {
+    repo.recordClientVerification(db, client.id, {
+      reachable: false,
+      reason: "auth",
+      at: PROBE_AT,
+    });
+    const health = await getClientHealth(db, client.id);
+    expect(health?.lastVerifiedAt).toBe("2026-06-19T12:00:00.000Z");
+    expect(health?.lastVerifyReachable).toBe(false);
+    expect(health?.lastVerifyReason).toBe("auth");
+  });
+
+  it("surfaces a persisted reachable verification with a null reason (#354)", async () => {
+    repo.recordClientVerification(db, client.id, {
+      reachable: true,
+      reason: null,
+      at: PROBE_AT,
+    });
+    const health = await getClientHealth(db, client.id);
+    expect(health?.lastVerifyReachable).toBe(true);
+    expect(health?.lastVerifyReason).toBeNull();
+  });
+
   it("reports a live probe and bumps last_seen when the client is reachable", async () => {
     const prober = new FakeProber(onlineResult);
     const health = await getClientHealth(db, client.id, prober);

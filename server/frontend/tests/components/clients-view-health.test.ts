@@ -75,6 +75,9 @@ function health(overrides: Partial<ClientHealthResponse> = {}): ClientHealthResp
     reachability: "online",
     reachabilityReason: null,
     lastSeen: "2026-06-20T10:00:00.000Z",
+    lastVerifiedAt: null,
+    lastVerifyReachable: null,
+    lastVerifyReason: null,
     enrolledAt: "2026-06-01T00:00:00.000Z",
     probedAt: "2026-06-20T10:00:00.000Z",
     updateRequired: false,
@@ -112,6 +115,48 @@ describe("ClientsView health list + queue", () => {
     expect(screen.getByText("Timekpr-nExT")).toBeInTheDocument(); // friendly label
     // Health loaded fine → no "unavailable" notice.
     expect(screen.queryByText(/Health data unavailable/)).not.toBeInTheDocument();
+  });
+
+  it("shows 'never verified' before any connectivity check has run (#354)", async () => {
+    listClients.mockResolvedValue([client()]);
+    listClientHealth.mockResolvedValue([health({ lastVerifiedAt: null })]);
+
+    render(ClientsView);
+
+    expect(await screen.findByText("mint-box")).toBeInTheDocument();
+    expect(screen.getByText("never verified")).toBeInTheDocument();
+  });
+
+  it("badges a reachable verification (#354)", async () => {
+    listClients.mockResolvedValue([client()]);
+    listClientHealth.mockResolvedValue([
+      health({
+        lastVerifiedAt: "2026-06-20T10:05:00.000Z",
+        lastVerifyReachable: true,
+        lastVerifyReason: null,
+      }),
+    ]);
+
+    render(ClientsView);
+
+    expect(await screen.findByText("mint-box")).toBeInTheDocument();
+    expect(screen.getByText("reachable")).toBeInTheDocument();
+  });
+
+  it("badges a failed verification with its class (#354)", async () => {
+    listClients.mockResolvedValue([client()]);
+    listClientHealth.mockResolvedValue([
+      health({
+        lastVerifiedAt: "2026-06-20T10:05:00.000Z",
+        lastVerifyReachable: false,
+        lastVerifyReason: "dns",
+      }),
+    ]);
+
+    render(ClientsView);
+
+    expect(await screen.findByText("mint-box")).toBeInTheDocument();
+    expect(screen.getByText(/failed \(dns\)/)).toBeInTheDocument();
   });
 
   it("titles the card on the friendly name and shows hostname + IPs (#355)", async () => {

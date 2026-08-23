@@ -15,7 +15,9 @@
 #      token + the dashboard SSH public key
 #        -> POST <server>/api/clients/enrol (#77)
 #   4. authorize that SSH key for pct-agent and persist the bearer token
-#   5. run the post-install self-test (#80) if it is installed
+#   5. verify the dashboard can reach this client over SSH (#354)
+#        -> POST <server>/api/clients/<id>/verify-connection
+#   6. run the post-install self-test (#80) if it is installed
 #
 # License boundary (docs/licensing-analysis.md): this is pure bash orchestration.
 # The GPL tools come from the distribution's package manager / the projects' own
@@ -371,6 +373,16 @@ pct_orch_json_number() {
   fi
 }
 
+# Extract a top-level JSON boolean field's value ("true"/"false") from stdin, or
+# the empty string if absent. Used for the verify-connection `reachable` field.
+pct_orch_json_bool() {
+  local field="$1" json
+  json="$(cat)"
+  if [[ "$json" =~ \"$field\"[[:space:]]*:[[:space:]]*(true|false) ]]; then
+    printf '%s' "${BASH_REMATCH[1]}"
+  fi
+}
+
 # POST the enrolment request and echo the raw JSON response on stdout. Logs go to
 # stderr so the caller can capture the body cleanly. Under dry-run the request is
 # printed (never sending the token) and the response is taken from
@@ -506,6 +518,101 @@ pct_orch_authorize_key() {
   pct_authorize_ssh_key "$ssh_pubkey"
 }
 
+# A one-line remediation hint for a classified verify-connection failure (#354),
+# mirroring the dashboard card's #353 hints — each root cause has a different fix.
+# `$2` is the client hostname, interpolated only into the dns hint.
+pct_orch_verify_hint() {
+  local failure_class="$1" hostname="$2"
+  case "$failure_class" in
+  dns)
+    printf "the dashboard cannot resolve '%s' from inside its container — enrol with an IP/FQDN, or add extra_hosts/dns to the dashboard's compose file" "$hostname"
+    ;;
+  connection_refused)
+    printf 'sshd is not answering on this client — check: systemctl status ssh'
+    ;;
+  timeout)
+    printf 'the host never answered — a firewall is blocking SSH, or the recorded address is stale'
+    ;;
+  auth)
+    printf "the dashboard's SSH key is not authorized for %s — re-check that user's ~/.ssh/authorized_keys" "$PCT_SSH_USER"
+    ;;
+  handshake)
+    printf 'the SSH handshake failed — an SSH version/config mismatch on this client'
+    ;;
+  *)
+    printf ''
+    ;;
+  esac
+}
+
+# Report a verify-connection response body (#354): a loud pass/fail verdict with
+# a class-specific remediation hint on failure. Never aborts — a failed verify is
+# a warning, not a rollback (the client is enrolled; the offline queue already
+# handles an unreachable client).
+pct_orch_report_verification() {
+  local response="$1" hostname="$2" reachable failure_class detail hint
+  reachable="$(printf '%s' "$response" | pct_orch_json_bool reachable)"
+  detail="$(printf '%s' "$response" | pct_orch_json_string detail)"
+  if [ "$reachable" = "true" ]; then
+    pct_ok "the dashboard reached this client over SSH — the server→client path works"
+    return 0
+  fi
+  failure_class="$(printf '%s' "$response" | pct_orch_json_string failureClass)"
+  pct_warn "the dashboard could NOT reach this client over SSH (${failure_class:-unknown}) — it is enrolled, but no push/probe/telemetry can flow until this is fixed"
+  hint="$(pct_orch_verify_hint "$failure_class" "$hostname")"
+  [ -n "$hint" ] && pct_warn "  → ${hint}"
+  [ -n "$detail" ] && pct_log "  detail: ${detail}"
+}
+
+# Prove the *dashboard can reach this client over SSH* (#354) — the direction
+# every push, probe, and telemetry pull uses, which enrolment (client→server
+# HTTP) never exercises. Runs after the dashboard's key is authorized, using the
+# per-client bearer token. Warns loudly on failure but never aborts the install.
+pct_orch_verify_connection() {
+  local server="$1" client_id="$2" bearer="$3" hostname="$4"
+  local url="${server%/}/api/clients/${client_id}/verify-connection"
+  pct_step "Verify the dashboard can reach this client over SSH"
+
+  if pct_is_dry_run; then
+    printf '%s %s\n' "$PCT_DRYRUN_PREFIX" \
+      "${PCT_CURL} -X POST ${url} (Authorization: Bearer <redacted>)" >&2
+    pct_orch_report_verification \
+      "${PCT_FAKE_VERIFY_RESPONSE:-{\"reachable\":true,\"detail\":\"dry-run\",\"verifiedAt\":\"1970-01-01T00:00:00.000Z\"}}" \
+      "$hostname"
+    return 0
+  fi
+
+  local body_file http
+  body_file="$(mktemp)"
+  if ! http="$(printf 'header = "Authorization: Bearer %s"\n' "$bearer" |
+    "$PCT_CURL" --config - \
+      --silent --show-error --max-time 40 \
+      --output "$body_file" --write-out '%{http_code}' \
+      --request POST \
+      --header "Content-Type: application/json" \
+      "$url")"; then
+    rm -f "$body_file"
+    pct_warn "could not reach the dashboard to run the connectivity self-test (${url}); the client is enrolled — verify later from the Clients page"
+    return 0
+  fi
+
+  case "$http" in
+  2??)
+    pct_orch_report_verification "$(cat "$body_file")" "$hostname"
+    ;;
+  503)
+    pct_warn "the dashboard can't run the SSH self-test yet (its SSH key isn't provisioned); expected before first-run keygen (#39) — verify later from the Clients page"
+    ;;
+  429)
+    pct_warn "the dashboard rate-limited the connectivity self-test; try again shortly or verify from the Clients page"
+    ;;
+  *)
+    pct_warn "the connectivity self-test returned HTTP ${http}; the client is enrolled — verify later from the Clients page"
+    ;;
+  esac
+  rm -f "$body_file"
+}
+
 # Step 7 (final): hand off to the post-install self-test (#80) if it is present.
 # It is a separate deliverable; until it lands the orchestrator notes it and
 # completes successfully rather than failing the install.
@@ -582,6 +689,10 @@ pct_install_client() {
       # Step: authorize the dashboard SSH key + persist the client bearer token.
       pct_orch_authorize_key "$ssh_pubkey"
       pct_orch_persist_credentials "$server_url" "$client_id" "$bearer"
+      # Step: prove the dashboard can reach us over SSH now that its key is
+      # authorized (#354). Enrolment only proved client→server; this closes the
+      # loop before the admin walks away thinking the install "worked".
+      pct_orch_verify_connection "$server_url" "$client_id" "$bearer" "$hostname"
     elif [ "$status" -eq "$PCT_ENROL_ALREADY_CODE" ]; then
       # Already enrolled (409): the account, sudoers, authorized key, and
       # baseline tools have still been reconciled above, so this is a successful
@@ -589,6 +700,9 @@ pct_install_client() {
       # --skip-enrol to silence the warning, or delete + re-enrol with a fresh
       # token for a true re-registration.)
       pct_warn "continuing without re-enrol; provision + baseline were still reconciled. Use --skip-enrol on an already-enrolled host, or delete the client and mint a fresh token to re-register."
+      # The connectivity self-test (#354) is deliberately NOT run here: it needs
+      # the per-client bearer token, which only a fresh enrol response carries
+      # (a 409 returns none). Re-verify from the dashboard Clients page instead.
     else
       # A real failure (bad/expired token, network) — pct_orch_enrol already
       # explained why; propagate so the run aborts.

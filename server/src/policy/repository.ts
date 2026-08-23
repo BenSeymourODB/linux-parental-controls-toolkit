@@ -210,6 +210,49 @@ export function recordClientLastSeen(db: PolicyDb, id: number, at: Date): Client
   return db.update(clients).set({ lastSeen: at }).where(eq(clients.id, id)).returning().get();
 }
 
+/** The outcome of a post-enrol connectivity verification (#354) to persist. */
+export interface ClientVerificationOutcome {
+  /** Whether the server reached the client over SSH on this run. */
+  readonly reachable: boolean;
+  /**
+   * The classified SSH failure cause when `reachable` is `false`, else `null`.
+   * A plain string here (an `SshUnreachableReason` at the call site) so the
+   * `policy/` layer keeps no dependency on `transport/`.
+   */
+  readonly reason: string | null;
+  /** When the verification ran. */
+  readonly at: Date;
+}
+
+/**
+ * Record a post-enrol connectivity-verification outcome (#354): a real
+ * server→client SSH round-trip triggered by the installer. Writes the three
+ * `last_verify_*` columns and, when the client was reachable, also bumps
+ * `last_seen` to `at` — a successful verification *is* a live sighting, so it
+ * should refresh the passive liveness signal too. Returns the updated row, or
+ * `undefined` if no client with `id` exists.
+ *
+ * System-observed columns (not admin-editable), written directly like
+ * {@link recordClientLastSeen} rather than through {@link updateClient}.
+ */
+export function recordClientVerification(
+  db: PolicyDb,
+  id: number,
+  outcome: ClientVerificationOutcome,
+): ClientRow | undefined {
+  return db
+    .update(clients)
+    .set({
+      lastVerifiedAt: outcome.at,
+      lastVerifyReachable: outcome.reachable,
+      lastVerifyReason: outcome.reachable ? null : outcome.reason,
+      ...(outcome.reachable ? { lastSeen: outcome.at } : {}),
+    })
+    .where(eq(clients.id, id))
+    .returning()
+    .get();
+}
+
 /**
  * Refresh a client's reported `agent_version` + `versions_reported_at` from the
  * value the bridge sends in its event-stream `hello` (#165/#101 heartbeat,
