@@ -56,7 +56,7 @@ export const helloFrameSchema = z.object({
   /** The integer frame-protocol version this client speaks. */
   eventProtocol: z.number().int().positive(),
   /** Additive feature flags the client supports (§4). */
-  capabilities: z.array(z.string().min(1).max(100)).max(64),
+  capabilities: z.array(z.string().min(1).max(100)).max(64).default([]),
 });
 
 /** The client's opening `hello` frame. */

@@ -193,13 +193,16 @@ describe("WsClient", () => {
     );
   });
 
-  it("forwards event frames once the handshake is accepted", () => {
+  it("forwards event frames once the handshake is accepted (and clears the handshake timer)", () => {
     const onAccept = vi.fn();
-    const { client, sockets, frames } = setup({ onAccept });
+    const { client, sockets, frames, timers } = setup({ onAccept });
     client.start();
     sockets[0]?.emitOpen();
     sockets[0]?.emitMessage(acceptFrame);
     expect(onAccept).toHaveBeenCalledTimes(1);
+    // The handshake timeout must not fire after a successful accept.
+    const handshakeTimer = timers.scheduled.find((s) => s.ms === DEFAULT_HANDSHAKE_TIMEOUT_MS);
+    expect(handshakeTimer?.cleared).toBe(true);
     sockets[0]?.emitMessage(JSON.stringify(sampleFrame(9)));
     expect(frames).toEqual([sampleFrame(9)]);
   });
@@ -239,6 +242,9 @@ describe("WsClient", () => {
       expect.stringContaining("not reconnecting"),
     );
     expect(sockets[0]?.terminated).toBe(true);
+    // The handshake timeout must not fire after a refuse either.
+    const handshakeTimer = timers.scheduled.find((s) => s.ms === DEFAULT_HANDSHAKE_TIMEOUT_MS);
+    expect(handshakeTimer?.cleared).toBe(true);
 
     // Even the server-driven close after a refuse must not schedule a reconnect.
     sockets[0]?.emitClose();
@@ -316,6 +322,18 @@ describe("WsClient", () => {
     sockets[2]?.emitOpen(); // success resets the counter (also sends hello)
     sockets[2]?.emitClose(); // attempt 0 again -> 999
     expect(timers.reconnectDelays()).toEqual([999, 1999, 999]);
+  });
+
+  it("start() while a reconnect is pending cancels it (no duplicate connect loop)", () => {
+    const { client, sockets, timers } = setup();
+    client.start();
+    sockets[0]?.emitClose(); // schedules a reconnect
+    const pending = timers.scheduled.find((s) => s.ms === 999);
+    expect(pending?.cleared).toBe(false);
+
+    client.start(); // restart must cancel the pending reconnect and connect fresh
+    expect(pending?.cleared).toBe(true);
+    expect(sockets).toHaveLength(2);
   });
 
   it("stop() cancels a pending reconnect and does not reconnect", () => {

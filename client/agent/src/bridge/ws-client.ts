@@ -162,10 +162,19 @@ export class WsClient {
     this.#handshakeTimeoutMs = options.handshakeTimeoutMs ?? DEFAULT_HANDSHAKE_TIMEOUT_MS;
   }
 
-  /** Open the connection. Subsequent drops reconnect automatically. */
+  /**
+   * Open the connection. Subsequent drops reconnect automatically. Safe to call
+   * again after {@link stop} or a refuse to restart; if called while a reconnect
+   * is already pending it cancels that pending attempt first so a restart never
+   * leaves two connect loops racing.
+   */
   start(): void {
     this.#stopped = false;
     this.#refused = false;
+    if (this.#reconnectTimer !== null) {
+      this.#timers.clear(this.#reconnectTimer);
+      this.#reconnectTimer = null;
+    }
     this.#connect();
   }
 

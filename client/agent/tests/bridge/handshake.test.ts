@@ -104,10 +104,13 @@ describe("handshake — parsing the server reply", () => {
   });
 });
 
-describe("handshake — drift guard against the server contract", () => {
-  // These payloads are copied from server/src/events/protocol.ts. If the server
-  // contract changes, one of these assertions fails, forcing the client copy to
-  // be re-synced (mirrors tests/bridge/protocol.test.ts for the event envelope).
+describe("handshake — client schema pinned to the server-contract copy", () => {
+  // The bridge cannot import server/src, so these payloads are copied verbatim
+  // from server/src/events/protocol.ts to pin the *client's* schema shapes to
+  // that contract. This cannot detect a server-side rename by itself (nothing
+  // here imports the server schema); it fixes the client copy so a hand-edit
+  // that diverges from the copied samples fails — the same limitation and intent
+  // as tests/bridge/protocol.test.ts for the event envelope.
   it("the hello shape matches the server's helloFrameSchema fields", () => {
     const serverShapedHello = {
       type: "hello",
