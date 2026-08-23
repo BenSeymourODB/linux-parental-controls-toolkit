@@ -456,10 +456,33 @@ describe("NotificationsView", () => {
     });
   });
 
+  it("marks an inherited activity-scoped group budget as '(inherited)' too (#403)", async () => {
+    // A UserGroup can carry an activity-scoped budget; the same inherited
+    // marking applies, keyed by "activity:<id>".
+    listBudgets.mockResolvedValue([]);
+    listResolvedBudgets.mockResolvedValue([
+      resolvedBudget({ scope: "activity", targetId: 3, source: { kind: "group", groupId: 5 } }),
+    ]);
+    listActivities.mockResolvedValue([activity({ id: 3, matcher: "firefox" })]);
+
+    render(NotificationsView);
+    await selectUser();
+    await fireEvent.click(await screen.findByRole("button", { name: "Add override" }));
+
+    expect(
+      await screen.findByRole("option", { name: "Activity — firefox (inherited)" }),
+    ).toBeInTheDocument();
+  });
+
   it("offers a budget the user both owns and inherits once, unmarked (own wins) (#403)", async () => {
     listBudgets.mockResolvedValue([budget({ id: 1, scope: "group", targetId: 2 })]);
     listResolvedBudgets.mockResolvedValue([
-      // Same (scope, target) also reachable via a group — but the user owns it.
+      // Same (scope, target) also carried as a group slot. In real server output
+      // the resolver's own-wins precedence would return this target as a
+      // `source.kind: "user"` slot, so `inheritedKeys` wouldn't contain it; this
+      // fixture forces the group slot to exercise the client's defensive
+      // `!ownKeys.has(key)` guard directly (belt-and-braces if the server ever
+      // emits both).
       resolvedBudget({ scope: "group", targetId: 2, source: { kind: "group", groupId: 5 } }),
     ]);
     listActivityGroups.mockResolvedValue([group({ id: 2, name: "Games" })]);
