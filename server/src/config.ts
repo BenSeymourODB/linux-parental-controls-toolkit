@@ -471,13 +471,9 @@ const settingsSchema = z
        * responsive to a same-day "adjust bedtime tonight" override without
        * dialling every override-affected client more often than needed.
        */
-      cron: z
-        .string()
-        .min(1)
-        .default("*/15 * * * *")
-        .refine(isValidCronPattern, {
-          message: "must be a valid cron pattern (e.g. */15 * * * *)",
-        }),
+      cron: z.string().min(1).default("*/15 * * * *").refine(isValidCronPattern, {
+        message: "must be a valid cron pattern (e.g. */15 * * * *)",
+      }),
     }),
     /**
      * Automatic pre-migration policy-store snapshot (#166). Before the
