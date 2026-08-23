@@ -241,11 +241,19 @@ export {
   pinSessionUserSchema,
   pinSessionResponseSchema,
   appMeResponseSchema,
+  appOverallStatusSchema,
+  appActivityStatusSchema,
+  appNextTransitionSchema,
+  appStatusResponseSchema,
   type SetUserPinRequest,
   type UserPinStatusResponse,
   type PinLoginRequest,
   type PinSessionResponse,
   type AppMeResponse,
+  type AppOverallStatus,
+  type AppActivityStatus,
+  type AppNextTransition,
+  type AppStatusResponse,
 } from "./app/index.js";
 
 // Event-stream taxonomy (#100): the `/api/events/stream` wire contract — the
