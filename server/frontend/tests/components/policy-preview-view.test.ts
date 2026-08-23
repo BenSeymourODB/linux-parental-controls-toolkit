@@ -333,6 +333,44 @@ describe("PolicyPreviewView", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("users load failed");
   });
 
+  // --- future-dated preview (`date`, #281) ---
+
+  it("omits `date` on the default (today) preview", async () => {
+    render(PolicyPreviewView);
+    await selectUser();
+
+    await waitFor(() => expect(previewPolicyPush).toHaveBeenCalled());
+    expect(lastProposed().date).toBeUndefined();
+    expect(screen.queryByTestId("preview-as-of")).not.toBeInTheDocument();
+  });
+
+  it("re-previews as of a picked future date", async () => {
+    render(PolicyPreviewView);
+    await selectUser();
+    await waitFor(() => expect(previewPolicyPush).toHaveBeenCalled());
+
+    await fireEvent.input(screen.getByLabelText("Preview as of"), {
+      target: { value: "2027-03-17" },
+    });
+
+    await waitFor(() => expect(lastProposed().date).toBe("2027-03-17"));
+    expect(screen.getByTestId("preview-as-of")).toBeInTheDocument();
+  });
+
+  it("returns to today when the picked date is cleared", async () => {
+    render(PolicyPreviewView);
+    await selectUser();
+    await fireEvent.input(screen.getByLabelText("Preview as of"), {
+      target: { value: "2027-03-17" },
+    });
+    await waitFor(() => expect(lastProposed().date).toBe("2027-03-17"));
+
+    await fireEvent.click(screen.getByRole("button", { name: "Back to today" }));
+
+    await waitFor(() => expect(lastProposed().date).toBeUndefined());
+    expect(screen.queryByTestId("preview-as-of")).not.toBeInTheDocument();
+  });
+
   // --- "Push saved policy now" (#304) ---
 
   it("pushes the saved policy for the selected user and renders per-client results", async () => {
