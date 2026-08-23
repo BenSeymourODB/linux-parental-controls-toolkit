@@ -6,8 +6,9 @@
  * lifecycle + authentication service ({@link ./tokens.js}), and the Fastify
  * guard factory ({@link ./guard.js}). Re-exported here as the module's public
  * surface, matching the barrel pattern used across `api/*` and `transport/*`.
- * Importing this barrel also registers the `fastify` module augmentation
- * declared in `./guard.js` (`app.requireIntegrationToken`, `request.integration`).
+ * Re-exporting `./guard.js` also brings its `fastify` module augmentation
+ * (`app.requireIntegrationToken`, `request.integration`) into scope wherever
+ * this barrel is imported.
  *
  * License boundary: none touched — plain TypeScript, `node:crypto` (via
  * `auth/secret-token.ts`), Fastify, and Drizzle.
