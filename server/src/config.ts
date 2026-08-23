@@ -457,6 +457,29 @@ const settingsSchema = z
       ),
     }),
     /**
+     * Phase-13 date-specific override enforcement push (#399): the croner
+     * cadence at which the `transport/exception-push` scheduler pushes a user's
+     * active date-specific overrides to their client's `timekpra` allowed-hours
+     * (and reverts once they expire). Wired in `createPolicyPushTransport`
+     * alongside the offline-queue drainer, so — like `reapply` — it is
+     * parsed-and-ready and only started when the live SSH transport exists (#39).
+     */
+    exceptionPush: z.object({
+      /**
+       * croner pattern for the override-reconcile pass (`PCT_EXCEPTION_PUSH_CRON`).
+       * Validated here so a typo fails fast. Defaults to every 15 minutes —
+       * responsive to a same-day "adjust bedtime tonight" override without
+       * dialling every override-affected client more often than needed.
+       */
+      cron: z
+        .string()
+        .min(1)
+        .default("*/15 * * * *")
+        .refine(isValidCronPattern, {
+          message: "must be a valid cron pattern (e.g. */15 * * * *)",
+        }),
+    }),
+    /**
      * Automatic pre-migration policy-store snapshot (#166). Before the
      * in-process migrator runs on boot (`policy/db.ts`), an existing
      * `policy.sqlite` with pending migrations is snapshotted via `VACUUM INTO`
@@ -590,6 +613,9 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
     reapply: {
       cron: env.PCT_REAPPLY_CRON,
       playbooks: env.PCT_REAPPLY_PLAYBOOKS,
+    },
+    exceptionPush: {
+      cron: env.PCT_EXCEPTION_PUSH_CRON,
     },
     preMigrationBackup: {
       enabled: env.PCT_PRE_MIGRATION_BACKUP,

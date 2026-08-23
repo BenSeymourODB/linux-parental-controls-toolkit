@@ -27,6 +27,7 @@ describe("loadSettings", () => {
     expect(settings.enforcement).toEqual({ cooldownSeconds: 300, initialLookbackSeconds: 900 });
     expect(settings.retention).toEqual({ defaultDays: 365 });
     expect(settings.reapply).toEqual({ cron: "0 * * * *", playbooks: [] });
+    expect(settings.exceptionPush).toEqual({ cron: "*/15 * * * *" });
     expect(settings.clientHealth).toEqual({ probeConcurrency: 4, probeDeadlineMs: 15000 });
     expect(settings.preMigrationBackup).toEqual({ enabled: true, retain: 5 });
     expect(settings.serverVersion).toBeUndefined();
@@ -515,6 +516,16 @@ describe("loadSettings", () => {
       expect(() => loadSettings({ PCT_REAPPLY_PLAYBOOKS: "../escape.yml" })).toThrow(SettingsError);
       expect(() => loadSettings({ PCT_REAPPLY_PLAYBOOKS: "ok.yml,sub/dir.yml" })).toThrow(
         /bare playbook file name/,
+      );
+    });
+
+    it("honours PCT_EXCEPTION_PUSH_CRON and rejects an invalid pattern", () => {
+      expect(loadSettings({ PCT_EXCEPTION_PUSH_CRON: "*/5 * * * *" }).exceptionPush).toEqual({
+        cron: "*/5 * * * *",
+      });
+      expect(() => loadSettings({ PCT_EXCEPTION_PUSH_CRON: "not a cron" })).toThrow(SettingsError);
+      expect(() => loadSettings({ PCT_EXCEPTION_PUSH_CRON: "not a cron" })).toThrow(
+        /valid cron pattern/,
       );
     });
   });
