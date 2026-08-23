@@ -79,10 +79,14 @@ e2guardian does today.
   domains are authored in the existing Activities/Schedules editors, keeping the
   policy store the single source of truth. There is no second, DNS-only place to
   type domains.
-- Rules take effect through the global `user_rules` with a `$client=` scope; the
-  managed clients inherit global filtering (no per-client filtering toggle is set),
-  so a deployment must have AdGuard filtering enabled globally for DNS denies to
-  bite — surfaced through the active-mode health the view already shows.
+- Rules take effect through the global `user_rules` with a `$client=` scope. The
+  managed clients are created and kept with `use_global_settings: true` so they
+  inherit the instance's global filtering — set **explicitly**, because AdGuard's
+  add-client API defaults an omitted `use_global_settings` to `false` (the Go
+  zero value), which would disable filtering for the client and make the pushed
+  rules a silent no-op. A deployment must still have AdGuard filtering enabled
+  globally for DNS denies to bite — surfaced through the active-mode health the
+  view already shows.
 - A device whose IP changes drifts out of coverage until re-enrolment updates
   `reportedIps` — dynamic-IP reconciliation is #356's concern, called out in the
   view.

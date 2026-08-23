@@ -63,12 +63,24 @@ function deviceDenying(
   return clientId;
 }
 
+/** Build a stored client row from an add/update input, carrying use_global_settings. */
+function rowFromInput(input: AdGuardClientInput): AdGuardClient {
+  const ugs = input.use_global_settings;
+  return {
+    name: input.name,
+    ids: [...input.ids],
+    ...(typeof ugs === "boolean" ? { use_global_settings: ugs } : {}),
+  };
+}
+
 /** A recording in-memory {@link DnsBlocklistClient}. */
 class FakeDnsClient implements DnsBlocklistClient {
   readonly clientPrefix = PREFIX;
   rows: AdGuardClient[];
   userRules: string[];
   readonly calls = { added: [] as string[], updated: [] as string[], deleted: [] as string[] };
+  readonly addInputs: AdGuardClientInput[] = [];
+  readonly updateInputs: AdGuardClientInput[] = [];
   setRulesCount = 0;
 
   constructor(init: { clients?: AdGuardClient[]; userRules?: string[] } = {}) {
@@ -81,15 +93,15 @@ class FakeDnsClient implements DnsBlocklistClient {
   }
 
   async addClient(input: AdGuardClientInput): Promise<void> {
-    this.rows.push({ name: input.name, ids: input.ids });
+    this.rows.push(rowFromInput(input));
     this.calls.added.push(input.name);
+    this.addInputs.push(input);
   }
 
   async updateClient(name: string, data: AdGuardClientInput): Promise<void> {
-    this.rows = this.rows.map((row) =>
-      row.name === name ? { name: data.name, ids: data.ids } : row,
-    );
+    this.rows = this.rows.map((row) => (row.name === name ? rowFromInput(data) : row));
     this.calls.updated.push(name);
+    this.updateInputs.push(data);
   }
 
   async deleteClient(name: string): Promise<void> {
@@ -215,6 +227,27 @@ describe("buildDnsBlocklistPlan", () => {
     ]);
     db.$client.close();
   });
+
+  it("merges an IP-less same-name row into the enforced client rather than stranding its domains", () => {
+    const db = testDb();
+    // Same friendly name; one device has an address, the other does not.
+    deviceDenying(db, {
+      hostname: "h1",
+      friendlyName: "Shared",
+      ips: ["1.1.1.1"],
+      domains: ["a.com"],
+    });
+    deviceDenying(db, { hostname: "h2", friendlyName: "Shared", domains: ["b.com"] });
+
+    const plan = buildDnsBlocklistPlan(db, { clientPrefix: PREFIX });
+
+    // b.com is unioned into the addressable client; the name is not also skipped.
+    expect(plan.clients).toEqual([
+      { name: "pct:Shared", ids: ["1.1.1.1"], domains: ["a.com", "b.com"] },
+    ]);
+    expect(plan.skipped).toEqual([]);
+    db.$client.close();
+  });
 });
 
 describe("formatBlockRule", () => {
@@ -285,9 +318,9 @@ describe("reconcileManagedClients", () => {
   it("adds missing, updates drifted IPs, deletes stale, and leaves unchanged + foreign alone", async () => {
     const fake = new FakeDnsClient({
       clients: [
-        { name: "pct:keep", ids: ["1.1.1.1"] }, // unchanged
-        { name: "pct:drift", ids: ["9.9.9.9"] }, // ids change
-        { name: "pct:stale", ids: ["8.8.8.8"] }, // not in plan → delete
+        { name: "pct:keep", ids: ["1.1.1.1"], use_global_settings: true }, // unchanged
+        { name: "pct:drift", ids: ["9.9.9.9"], use_global_settings: true }, // ids change
+        { name: "pct:stale", ids: ["8.8.8.8"], use_global_settings: true }, // not in plan → delete
         { name: "home-router", ids: ["192.168.1.1"] }, // foreign → never touched
       ],
     });
@@ -306,11 +339,31 @@ describe("reconcileManagedClients", () => {
     expect(fake.calls.added).toEqual(["pct:new"]);
     expect(fake.calls.updated).toEqual(["pct:drift"]);
     expect(fake.calls.deleted).toEqual(["pct:stale"]);
+    // New clients are created inheriting global filtering, so the rules bite.
+    expect(fake.addInputs).toEqual([
+      { name: "pct:new", ids: ["3.3.3.3"], use_global_settings: true },
+    ]);
     expect(fake.rows.map((r) => r.name).sort()).toEqual([
       "home-router",
       "pct:drift",
       "pct:keep",
       "pct:new",
+    ]);
+  });
+
+  it("self-heals an existing managed client that is not inheriting global filtering", async () => {
+    // Same name + same ids, but use_global_settings is not true → must be updated.
+    const fake = new FakeDnsClient({ clients: [{ name: "pct:keep", ids: ["1.1.1.1"] }] });
+    const plan: DnsBlocklistPlan = {
+      clients: [{ name: "pct:keep", ids: ["1.1.1.1"], domains: ["a.com"] }],
+      skipped: [],
+    };
+
+    const summary = await reconcileManagedClients(fake, plan);
+
+    expect(summary).toEqual({ added: 0, updated: 1, deleted: 0, unchanged: 0 });
+    expect(fake.updateInputs).toEqual([
+      { name: "pct:keep", ids: ["1.1.1.1"], use_global_settings: true },
     ]);
   });
 });
@@ -335,7 +388,9 @@ describe("applyDnsBlocklist", () => {
       rulesChanged: true,
       clients: { added: 1, updated: 0, deleted: 0, unchanged: 0 },
     });
-    expect(fake.rows).toEqual([{ name: "pct:Alice", ids: ["192.168.1.50"] }]);
+    expect(fake.rows).toEqual([
+      { name: "pct:Alice", ids: ["192.168.1.50"], use_global_settings: true },
+    ]);
     expect(fake.userRules).toEqual([
       "||foreign.com^",
       MANAGED_BLOCK_BEGIN,

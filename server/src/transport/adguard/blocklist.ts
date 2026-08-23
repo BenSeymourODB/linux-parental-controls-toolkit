@@ -123,6 +123,8 @@ interface PlanAccumulator {
   label: string;
   ids: Set<string>;
   domains: Set<string>;
+  /** Every dashboard `Client.id` that resolved to this name (for merge + skip reporting). */
+  clientIds: number[];
 }
 
 /** The human label for a device: its friendly name if set, else its hostname. */
@@ -134,11 +136,14 @@ function labelForClient(friendlyName: string | null, hostname: string): string {
  * Build the per-device DNS blocklist plan from the policy store.
  *
  * Every dashboard `Client` with at least one always-on `domain` deny among its
- * supervised users is considered; users' denies are unioned per device. A device
- * with reported IPs becomes an enforceable {@link DnsClientBlocklist}; one
- * without is {@link DnsSkippedClient} (DNS can only target an address). Devices
+ * supervised users is considered; users' denies are unioned per device. Devices
  * that share a name (same friendly name / hostname) are merged — their IPs and
- * domains unioned — so the plan is deterministic and never drops data.
+ * domains unioned — so the plan is deterministic and never drops data. Only after
+ * merging is the enforce-vs-skip decision made, per name: a merged device with
+ * any reported IP becomes an enforceable {@link DnsClientBlocklist}; one with
+ * none is a {@link DnsSkippedClient} (DNS can only target an address). Deciding
+ * after the merge means an IP-less row never strands the domains of a same-named
+ * row that *does* have an address.
  *
  * Output is fully sorted (clients by name, ids and domains within each), so
  * re-running against unchanged policy yields an identical plan and the push is
@@ -150,7 +155,6 @@ export function buildDnsBlocklistPlan(
 ): DnsBlocklistPlan {
   const { clientPrefix } = options;
   const byName = new Map<string, PlanAccumulator>();
-  const skipped: DnsSkippedClient[] = [];
 
   for (const client of listClients(db)) {
     const domains = new Set<string>();
@@ -163,31 +167,35 @@ export function buildDnsBlocklistPlan(
     const name = `${clientPrefix}${label}`;
     const ids = (client.reportedIps ?? []).filter((ip) => ip.trim().length > 0);
 
-    if (ids.length === 0) {
-      skipped.push({
-        clientId: client.id,
-        name,
-        label,
-        reason: "no_reported_ips",
-        domains: [...domains].sort(),
-      });
-      continue;
-    }
-
-    const entry = byName.get(name) ?? { label, ids: new Set<string>(), domains: new Set<string>() };
+    const entry = byName.get(name) ?? {
+      label,
+      ids: new Set<string>(),
+      domains: new Set<string>(),
+      clientIds: [],
+    };
     for (const ip of ids) entry.ids.add(ip);
     for (const domain of domains) entry.domains.add(domain);
+    entry.clientIds.push(client.id);
     byName.set(name, entry);
   }
 
-  const clients = [...byName.entries()]
-    .map(([name, entry]) => ({
-      name,
-      ids: [...entry.ids].sort(),
-      domains: [...entry.domains].sort(),
-    }))
-    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  const clients: DnsClientBlocklist[] = [];
+  const skipped: DnsSkippedClient[] = [];
+  for (const [name, entry] of byName) {
+    if (entry.ids.size > 0) {
+      clients.push({ name, ids: [...entry.ids].sort(), domains: [...entry.domains].sort() });
+    } else {
+      skipped.push({
+        clientId: Math.min(...entry.clientIds),
+        name,
+        label: entry.label,
+        reason: "no_reported_ips",
+        domains: [...entry.domains].sort(),
+      });
+    }
+  }
 
+  clients.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   skipped.sort((a, b) => a.clientId - b.clientId);
   return { clients, skipped };
 }
@@ -267,6 +275,13 @@ function sameIds(a: readonly string[], b: readonly string[]): boolean {
  * the plan. Foreign clients are never touched (the client's `pct:` guard enforces
  * this, and we only ever list/delete managed ones). On update the existing client
  * config is round-tripped so AdGuard fields the dashboard does not manage survive.
+ *
+ * Managed clients are created/kept with `use_global_settings: true` so they
+ * inherit the instance's global filtering — the only way the `$client=`-scoped
+ * rules in `user_rules` actually apply to their queries. AdGuard's add API
+ * defaults an omitted `use_global_settings` to `false` (Go zero value), which
+ * would silently disable filtering for the client and make the pushed rules a
+ * no-op, so it is set explicitly (ADR 0015).
  */
 export async function reconcileManagedClients(
   client: DnsBlocklistClient,
@@ -284,10 +299,15 @@ export async function reconcileManagedClients(
   for (const [name, ids] of desired) {
     const current = existingByName.get(name);
     if (current === undefined) {
-      await client.addClient({ name, ids: [...ids] });
+      await client.addClient({ name, ids: [...ids], use_global_settings: true });
       added += 1;
-    } else if (!sameIds(current.ids, ids)) {
-      await client.updateClient(name, { ...current, name, ids: [...ids] });
+    } else if (!sameIds(current.ids, ids) || current.use_global_settings !== true) {
+      await client.updateClient(name, {
+        ...current,
+        name,
+        ids: [...ids],
+        use_global_settings: true,
+      });
       updated += 1;
     } else {
       unchanged += 1;

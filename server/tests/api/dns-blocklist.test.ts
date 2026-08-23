@@ -218,6 +218,33 @@ describe("GET /api/dns/blocklist", () => {
     expect(body.detail).toBeNull();
     expect(body.clients).toHaveLength(1);
   });
+
+  it("is not applyable when the instance is unreachable (client wired, health not ok)", async () => {
+    const adguard = createAdGuardService(external(), {
+      fetch: () => Promise.reject(new Error("ECONNREFUSED")),
+      readSecretFile: () => Promise.resolve("token"),
+    });
+    const built = await harnessWith(adguard);
+    harness = built.harness;
+    seedDevice(built.db, {
+      hostname: "mint-01",
+      friendlyName: "Alice",
+      ips: ["192.168.1.50"],
+      domains: ["youtube.com"],
+    });
+
+    const res = await harness.app.inject({
+      method: "GET",
+      url: "/api/dns/blocklist",
+      headers: { cookie: built.cookie },
+    });
+
+    const body = res.json();
+    expect(body.applyable).toBe(false);
+    expect(body.detail).toBeTypeOf("string");
+    // The plan is still computed so the admin can see what *would* be pushed.
+    expect(body.clients).toHaveLength(1);
+  });
 });
 
 describe("POST /api/dns/blocklist/apply", () => {
@@ -278,5 +305,62 @@ describe("POST /api/dns/blocklist/apply", () => {
     expect(state.clients).toEqual([{ name: "pct:Alice", ids: ["192.168.1.50"] }]);
     expect(state.userRules).toContain("||foreign.com^");
     expect(state.userRules).toContain("||youtube.com^$client='pct:Alice'");
+  });
+
+  it("deletes stale pct: clients and leaves foreign clients untouched", async () => {
+    const state: AdGuardState = {
+      clients: [
+        { name: "pct:old-device", ids: ["9.9.9.9"] }, // managed but no longer in policy
+        { name: "home-router", ids: ["192.168.1.1"] }, // foreign — must survive
+      ],
+      userRules: ["||foreign.com^"],
+    };
+    const adguard = createAdGuardService(external(), {
+      fetch: routingFetch(state),
+      readSecretFile: () => Promise.resolve("token"),
+    });
+    const built = await harnessWith(adguard);
+    harness = built.harness;
+    seedDevice(built.db, {
+      hostname: "mint-01",
+      friendlyName: "Alice",
+      ips: ["192.168.1.50"],
+      domains: ["youtube.com"],
+    });
+
+    const res = await harness.app.inject({
+      method: "POST",
+      url: "/api/dns/blocklist/apply",
+      headers: { cookie: built.cookie },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().clients).toEqual({ added: 1, updated: 0, deleted: 1, unchanged: 0 });
+    const names = state.clients.map((c) => c.name).sort();
+    expect(names).toEqual(["home-router", "pct:Alice"]);
+  });
+
+  it("returns 409 when the instance is unreachable (not applyable)", async () => {
+    const adguard = createAdGuardService(external(), {
+      fetch: () => Promise.reject(new Error("ECONNREFUSED")),
+      readSecretFile: () => Promise.resolve("token"),
+    });
+    const built = await harnessWith(adguard);
+    harness = built.harness;
+    seedDevice(built.db, {
+      hostname: "mint-01",
+      friendlyName: "Alice",
+      ips: ["192.168.1.50"],
+      domains: ["youtube.com"],
+    });
+
+    const res = await harness.app.inject({
+      method: "POST",
+      url: "/api/dns/blocklist/apply",
+      headers: { cookie: built.cookie },
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.code).toBe("dns_not_applyable");
   });
 });

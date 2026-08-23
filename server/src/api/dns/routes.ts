@@ -15,6 +15,7 @@
 import type { FastifyInstance } from "fastify";
 
 import {
+  AdGuardError,
   applyDnsBlocklist,
   buildDnsBlocklistPlan,
   DEFAULT_CLIENT_PREFIX,
@@ -52,9 +53,13 @@ export function registerDnsRoutes(scope: FastifyInstance): void {
       // The prefix comes from the wired client when there is one; otherwise the
       // default, so a preview in `disabled` mode still shows the intended names.
       const client = scope.adguard.getClient();
+      const status = scope.adguard.status;
       const clientPrefix = client?.clientPrefix ?? DEFAULT_CLIENT_PREFIX;
       const plan = buildDnsBlocklistPlan(scope.db, { clientPrefix });
-      return toDnsBlocklistPreviewResponse(scope.adguard.status, plan, client !== null);
+      // Applyable = a REST client is wired *and* the instance is healthy; an
+      // unreachable/unhealthy instance would only fail mid-push, so surface it
+      // as not-applyable here rather than letting apply 500 later.
+      return toDnsBlocklistPreviewResponse(status, plan, client !== null && status.health === "ok");
     },
   );
 
@@ -63,14 +68,29 @@ export function registerDnsRoutes(scope: FastifyInstance): void {
     { preHandler: scope.requireAdmin },
     async (): Promise<DnsBlocklistApplyResponse> => {
       const client = scope.adguard.getClient();
-      if (client === null) {
+      const status = scope.adguard.status;
+      if (client === null || status.health !== "ok") {
         throw new ApiError(
           409,
           "dns_not_applyable",
-          `Cannot apply DNS blocklists: ${notApplyableDetail(scope.adguard.status)}`,
+          `Cannot apply DNS blocklists: ${notApplyableDetail(status)}`,
         );
       }
-      return toDnsBlocklistApplyResponse(await applyDnsBlocklist(client, scope.db));
+      try {
+        return toDnsBlocklistApplyResponse(await applyDnsBlocklist(client, scope.db));
+      } catch (err) {
+        // The instance was healthy at last probe but the push still failed
+        // (it went away mid-apply, auth rotated, …). Map the transport error to
+        // a clean 502 rather than an opaque 500.
+        if (err instanceof AdGuardError) {
+          throw new ApiError(
+            502,
+            "dns_push_failed",
+            `AdGuard rejected the blocklist push: ${err.message}`,
+          );
+        }
+        throw err;
+      }
     },
   );
 }
