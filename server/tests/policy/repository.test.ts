@@ -150,6 +150,63 @@ describe("policy repository — clients", () => {
     repo.setClientUpdateRequired(db, 999, true);
     expect(repo.listClients(db)).toHaveLength(1);
   });
+
+  it("records a reachable verification, bumping last_seen (#354)", () => {
+    const id = repo.createClient(db, { hostname: "mint-vok", sshUser: "pct-agent" }).id;
+    const before = repo.getClient(db, id);
+    expect(before?.lastVerifiedAt).toBeNull();
+    expect(before?.lastVerifyReachable).toBeNull();
+    expect(before?.lastVerifyReason).toBeNull();
+    expect(before?.lastSeen).toBeNull();
+
+    const at = new Date("2026-08-23T10:00:00.000Z");
+    const row = repo.recordClientVerification(db, id, { reachable: true, reason: null, at });
+    expect(row?.lastVerifiedAt).toEqual(at);
+    expect(row?.lastVerifyReachable).toBe(true);
+    expect(row?.lastVerifyReason).toBeNull();
+    // A successful verification is a live sighting, so it refreshes last_seen too.
+    expect(row?.lastSeen).toEqual(at);
+  });
+
+  it("records an unreachable verification with its reason, leaving last_seen untouched (#354)", () => {
+    const id = repo.createClient(db, { hostname: "mint-vfail", sshUser: "pct-agent" }).id;
+    const seenAt = new Date("2026-08-20T00:00:00.000Z");
+    repo.touchClientLastSeen(db, id, seenAt);
+
+    const at = new Date("2026-08-23T11:00:00.000Z");
+    const row = repo.recordClientVerification(db, id, { reachable: false, reason: "auth", at });
+    expect(row?.lastVerifiedAt).toEqual(at);
+    expect(row?.lastVerifyReachable).toBe(false);
+    expect(row?.lastVerifyReason).toBe("auth");
+    // A failed verification is NOT a sighting: last_seen stays where it was.
+    expect(row?.lastSeen).toEqual(seenAt);
+  });
+
+  it("clears a stale failure reason when a later verification succeeds (#354)", () => {
+    const id = repo.createClient(db, { hostname: "mint-vrecover", sshUser: "pct-agent" }).id;
+    repo.recordClientVerification(db, id, {
+      reachable: false,
+      reason: "dns",
+      at: new Date("2026-08-23T11:00:00.000Z"),
+    });
+    const recovered = repo.recordClientVerification(db, id, {
+      reachable: true,
+      reason: null,
+      at: new Date("2026-08-23T12:00:00.000Z"),
+    });
+    expect(recovered?.lastVerifyReachable).toBe(true);
+    expect(recovered?.lastVerifyReason).toBeNull();
+  });
+
+  it("returns undefined for a missing client (#354)", () => {
+    expect(
+      repo.recordClientVerification(db, 999, {
+        reachable: true,
+        reason: null,
+        at: new Date(),
+      }),
+    ).toBeUndefined();
+  });
 });
 
 describe("policy repository — user/client links", () => {

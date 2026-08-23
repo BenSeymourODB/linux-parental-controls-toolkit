@@ -17,6 +17,20 @@ export {
   type EnrolmentTokenResponse,
 } from "./dtos.js";
 
+// Post-enrol connectivity verification (#354): the client-bearer-authenticated
+// verify-connection route + its response DTO.
+export {
+  registerClientVerifyRoutes,
+  VERIFY_RATE_LIMIT_MAX_ATTEMPTS,
+  VERIFY_RATE_LIMIT_WINDOW_MS,
+  type ClientVerifyRoutesDeps,
+} from "./verify-routes.js";
+export {
+  verifyConnectionResponseSchema,
+  sshUnreachableReasonSchema,
+  type VerifyConnectionResponse,
+} from "./verify-dtos.js";
+
 // Client health/status surface (#81): the read-only health routes + the DTOs
 // the admin "Clients" page consumes.
 export { registerClientHealthRoutes, type ClientHealthRoutesDeps } from "./health-routes.js";

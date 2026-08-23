@@ -204,6 +204,27 @@ export const clients = sqliteTable(
      * (pushing an agent update) is the Phase-14 update mechanism.
      */
     updateRequired: integer("update_required", { mode: "boolean" }).notNull().default(false),
+    /**
+     * The post-enrol connectivity verification outcome (#354): a real
+     * server→client SSH round-trip (`POST /api/clients/:id/verify-connection`),
+     * distinct from the passive `last_seen` liveness signal. Enrolment only
+     * proves the client can reach the dashboard; these columns record whether
+     * the *dashboard can reach the client over SSH* — the direction every push,
+     * probe, and telemetry pull uses — so the admin can tell "enrolled but never
+     * verified" from "verified once, currently offline".
+     *
+     * `last_verified_at` is `NULL` until the first verification runs.
+     * `last_verify_reachable` is the boolean verdict of the most recent run.
+     * `last_verify_reason` carries the classified SSH failure cause (#353 —
+     * `dns` / `connection_refused` / `timeout` / `auth` / `handshake` /
+     * `unknown`) when the last run failed, and `NULL` when it succeeded or has
+     * never run. Stored as plain text so the `policy/` layer keeps no dependency
+     * on `transport/`; the write path is the only writer and is typed against
+     * the {@link SshUnreachableReason} enum.
+     */
+    lastVerifiedAt: integer("last_verified_at", { mode: "timestamp" }),
+    lastVerifyReachable: integer("last_verify_reachable", { mode: "boolean" }),
+    lastVerifyReason: text("last_verify_reason"),
   },
   (table) => [
     uniqueIndex("clients_hostname_unique").on(table.hostname),
