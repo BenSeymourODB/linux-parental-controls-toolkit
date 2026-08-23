@@ -18,7 +18,7 @@ import { registerAppAuthRoutes } from "./app/index.js";
 import { registerAuditRoutes } from "./audit/index.js";
 import { registerClientEnrolmentRoutes, registerClientHealthRoutes } from "./clients/index.js";
 import { registerDnsRoutes } from "./dns/index.js";
-import { registerIntegrationRoutes } from "./integrations/index.js";
+import { registerIntegrationGrantRoutes, registerIntegrationRoutes } from "./integrations/index.js";
 import { registerMetaRoute } from "./meta.js";
 import {
   registerEffectiveRoutes,
@@ -161,6 +161,10 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (scope, opt
   // bearer tokens, and the `scope.requireIntegrationToken` guard the inbound
   // `/api/integrations/*` endpoints (#113) authenticate with.
   registerIntegrationRoutes(scope);
+  // Inbound integration grants (#113, ADR 0014): external integrators record
+  // screen-time grants via a `grants:write` bearer token. Must follow
+  // `registerIntegrationRoutes`, which decorates `scope.requireIntegrationToken`.
+  registerIntegrationGrantRoutes(scope);
 };
 
 /** Mount the JSON API under `/api` on the given app. */
