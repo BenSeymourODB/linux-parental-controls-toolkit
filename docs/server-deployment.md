@@ -453,10 +453,14 @@ the transport connects to, used in preference to the hostname.
 - **API:** `PATCH /api/clients/:id` with `{ "sshTarget": "192.168.1.50" }` sets
   it; `{ "sshTarget": null }` clears it back to the hostname. The change is
   audited like any other client edit.
-- **Effect:** the resolved target is `ssh_target ?? hostname`, applied uniformly
-  to every SSH path (policy push, health probe, telemetry pull, force-close), so
-  the whole transport dials the same host. The card shows the *effective* target
-  so what you see is what it connects to.
+- **Effect:** the resolved target is `ssh_target ?? hostname`, applied across
+  the **direct SSH transport** — the `timekpra` policy push, the health probe,
+  the ActivityWatch telemetry pull, and the force-close — so those all dial the
+  same host. The card shows the *effective* target so what you see is what it
+  connects to. (The **Ansible-driven** paths — the e2guardian/AppArmor filter
+  pushes and the periodic re-apply — still address clients by hostname via the
+  generated inventory; extending the override to them is tracked as a
+  follow-up.)
 - **Default is unchanged:** with no override, behaviour is exactly as before
   (dial the hostname), so existing clients need no action.
 - **Stale addresses:** self-reported IPs go stale under DHCP. Prefer a
