@@ -137,11 +137,13 @@ export function sshHostForClient(
  * here rather than read from the row. The `clients` table carries no port, so
  * the credentials' port (or 22) is used. The host is resolved through
  * {@link sshHostForClient} so a per-client `sshTarget` override (#406) wins over
- * the bare hostname; `sshTarget` is optional here so callers holding only a
- * partial row still type-check.
+ * the bare hostname. `sshTarget` is a **required** field on the param (not
+ * optional) so every SSH path is forced to thread it through: a caller that
+ * loads a narrowed client row without `ssh_target` fails to type-check rather
+ * than silently dialing the bare hostname (#406 review).
  */
 export function targetFromClient(
-  client: Pick<ClientRow, "hostname" | "sshUser"> & { sshTarget?: string | null },
+  client: Pick<ClientRow, "hostname" | "sshUser" | "sshTarget">,
   credentials: SshCredentials,
 ): SshTarget {
   const target: SshTarget = {

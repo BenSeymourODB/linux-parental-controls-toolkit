@@ -51,6 +51,12 @@ export interface TelemetryClient {
   hostname: string;
   /** The `pct-agent` login the dashboard connects as. */
   sshUser: string;
+  /**
+   * The per-client SSH-target override (#406), or `null` for none. Threaded
+   * into {@link targetFromClient} so the telemetry pull dials the same
+   * (possibly overridden) host as the rest of the SSH transport.
+   */
+  sshTarget: string | null;
 }
 
 /** Context handed to a {@link TelemetryConsumer} once the tunnel is open. */

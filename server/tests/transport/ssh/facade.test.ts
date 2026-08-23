@@ -588,7 +588,7 @@ describe("SshTransport disposal", () => {
 describe("targetFromClient", () => {
   it("maps a clients row to a target with key-based credentials", () => {
     const result = targetFromClient(
-      { hostname: "mint-01", sshUser: "pct-agent" },
+      { hostname: "mint-01", sshUser: "pct-agent", sshTarget: null },
       { privateKey: "KEY" },
     );
 
@@ -597,7 +597,7 @@ describe("targetFromClient", () => {
 
   it("carries an explicit port and passphrase when supplied", () => {
     const result = targetFromClient(
-      { hostname: "mint-01", sshUser: "pct-agent" },
+      { hostname: "mint-01", sshUser: "pct-agent", sshTarget: null },
       { privateKey: "KEY", port: 2222, passphrase: "secret" },
     );
 
