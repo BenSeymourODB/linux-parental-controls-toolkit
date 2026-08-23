@@ -412,17 +412,28 @@
             value={previewDate}
             oninput={(e) => onPreviewDateChange(e.currentTarget.value)}
           />
+          <span class="as-of-status" role="status" aria-live="polite">
+            {#if previewDate !== ""}
+              <span class="as-of" data-testid="preview-as-of"
+                >showing {previewDateLabel(previewDate)}</span
+              >
+            {:else}
+              <span class="as-of muted-as-of">showing today</span>
+            {/if}
+          </span>
           {#if previewDate !== ""}
-            <span class="as-of" data-testid="preview-as-of"
-              >showing {previewDateLabel(previewDate)}</span
-            >
             <button type="button" class="clear-date" onclick={clearPreviewDate}>
               Back to today
             </button>
-          {:else}
-            <span class="as-of muted-as-of">showing today</span>
           {/if}
         </div>
+        {#if previewDate !== ""}
+          <p class="date-caveat" data-testid="preview-date-caveat">
+            Shows the <strong>recurring</strong> schedule &amp; budget push resolved for that day.
+            One-off exceptions and time grants that fall on this date are pushed separately and
+            aren't included here.
+          </p>
+        {/if}
 
         <div class="editor">
           <div class="card">
@@ -684,6 +695,15 @@
   }
   .muted-as-of {
     color: #6b7280;
+  }
+  .date-caveat {
+    margin: -0.5rem 0 1rem;
+    color: #6b7280;
+    font-size: 0.78rem;
+    max-width: 44rem;
+  }
+  .date-caveat strong {
+    color: #374151;
   }
   .clear-date {
     background: transparent;

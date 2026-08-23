@@ -371,6 +371,41 @@ describe("PolicyPreviewView", () => {
     expect(screen.queryByTestId("preview-as-of")).not.toBeInTheDocument();
   });
 
+  it("resets the picked date to today when a different user is selected", async () => {
+    listUsers.mockResolvedValue([user({ id: 1 }), user({ id: 2, displayName: "Bob" })]);
+    render(PolicyPreviewView);
+    await selectUser(1);
+    await fireEvent.input(screen.getByLabelText("Preview as of"), {
+      target: { value: "2027-03-17" },
+    });
+    await waitFor(() => expect(lastProposed().date).toBe("2027-03-17"));
+
+    await selectUser(2);
+
+    // The new user's preview resolves for today — the date picker was reset.
+    await waitFor(() => {
+      const call = previewPolicyPush.mock.calls.at(-1)!;
+      expect(call[0]).toBe(2);
+      expect(call[1].date).toBeUndefined();
+    });
+    expect(screen.queryByTestId("preview-as-of")).not.toBeInTheDocument();
+  });
+
+  it("shows the recurring-only caveat while a date is picked", async () => {
+    render(PolicyPreviewView);
+    await selectUser();
+    await fireEvent.input(screen.getByLabelText("Preview as of"), {
+      target: { value: "2027-03-17" },
+    });
+
+    expect(await screen.findByTestId("preview-date-caveat")).toBeInTheDocument();
+
+    await fireEvent.click(screen.getByRole("button", { name: "Back to today" }));
+    await waitFor(() =>
+      expect(screen.queryByTestId("preview-date-caveat")).not.toBeInTheDocument(),
+    );
+  });
+
   // --- "Push saved policy now" (#304) ---
 
   it("pushes the saved policy for the selected user and renders per-client results", async () => {

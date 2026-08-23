@@ -96,8 +96,14 @@ const NOON_OFFSET_MS = 12 * 60 * 60 * 1000;
  */
 function referenceInstant(body: PolicyPreviewRequest, tz: string): Date {
   if (body.date !== undefined) {
-    const [year, month, day] = body.date.split("-").map(Number) as [number, number, number];
-    return new Date(localDayBounds(year, month, day, tz).start.getTime() + NOON_OFFSET_MS);
+    // `z.iso.date()` has already guaranteed three real numeric parts, but a
+    // runtime destructure (not an `as` tuple cast, banned by CLAUDE.md) is what
+    // satisfies `noUncheckedIndexedAccess`; the guard below is unreachable and
+    // degrades to "today" only to keep the types honest.
+    const [year, month, day] = body.date.split("-").map(Number);
+    if (year !== undefined && month !== undefined && day !== undefined) {
+      return new Date(localDayBounds(year, month, day, tz).start.getTime() + NOON_OFFSET_MS);
+    }
   }
   return body.now === undefined ? new Date() : new Date(body.now);
 }

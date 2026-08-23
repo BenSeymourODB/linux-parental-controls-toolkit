@@ -554,6 +554,28 @@ describe("POST /api/users/:userId/policy-preview", () => {
     expect(body.changes.some((c: { field: string }) => c.field === "allowed-hours")).toBe(true);
   });
 
+  it("resolves `date` correctly across a DST transition (local noon stays in-day)", async () => {
+    // America/New_York springs forward on Sun 2027-03-14 (02:00→03:00). The
+    // local-noon reference (`localDayBounds().start` = local midnight, +12h) must
+    // still land on 2027-03-14 despite the missing hour, so a rule scoped to that
+    // month resolves as active. This exercises the DST-safety the +12h offset buys
+    // (a midnight reference could be nudged across a day boundary; noon cannot).
+    const userId = await createUser("Dana", "America/New_York");
+    const rule = dateScopedDenyRule({
+      effectiveFrom: "2027-03-01T05:00:00.000Z", // 2027-03-01 00:00 EST
+      effectiveTo: "2027-04-01T04:00:00.000Z", // 2027-04-01 00:00 EDT (exclusive)
+    });
+    const res = await auth({
+      method: "POST",
+      url: `/api/users/${userId}/policy-preview`,
+      payload: { budgets: [], schedules: [rule], date: "2027-03-14" },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.hasChanges).toBe(true);
+    expect(body.changes.some((c: { field: string }) => c.field === "allowed-hours")).toBe(true);
+  });
+
   it("lets `date` take precedence over `now`", async () => {
     const userId = await createUser("Alice"); // tz null → UTC
     // `now` is today (rule dormant); `date` is inside the window (rule live).
