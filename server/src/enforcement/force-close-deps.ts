@@ -176,6 +176,7 @@ export function createForceCloseDeps(options: CreateForceCloseDepsOptions): Forc
         osUserRef: usersOnClients.osUserRef,
         hostname: clients.hostname,
         sshUser: clients.sshUser,
+        sshTarget: clients.sshTarget,
       })
       .from(usersOnClients)
       .innerJoin(clients, eq(usersOnClients.clientId, clients.id))
@@ -184,7 +185,12 @@ export function createForceCloseDeps(options: CreateForceCloseDepsOptions): Forc
       .map((row) => ({
         clientId: row.clientId,
         osUserRef: row.osUserRef,
-        sshTarget: targetFromClient({ hostname: row.hostname, sshUser: row.sshUser }, credentials),
+        // Honour the per-client SSH-target override (#406) so a force-close
+        // dials the same host the policy push does.
+        sshTarget: targetFromClient(
+          { hostname: row.hostname, sshUser: row.sshUser, sshTarget: row.sshTarget },
+          credentials,
+        ),
       }));
   }
 
