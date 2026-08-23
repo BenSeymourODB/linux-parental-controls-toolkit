@@ -536,6 +536,33 @@
             {/if}
           </div>
 
+          <div class="capabilities">
+            <div class="section-title">Capabilities</div>
+            {#if h === null || !h.capabilitiesReported}
+              <p class="muted small">
+                Not reported yet — a client advertises its capabilities on its first event-stream
+                handshake.
+              </p>
+            {:else}
+              <ul class="cap-list">
+                {#each h.capabilities as cap (cap.capability)}
+                  <li
+                    class="cap"
+                    class:unsupported={!cap.supported}
+                    data-supported={cap.supported ? "true" : "false"}
+                    title={cap.supported
+                      ? `Supported by this client: ${cap.label}`
+                      : `Not supported by this client: ${cap.label}`}
+                  >
+                    <span class="cap-mark" aria-hidden="true">{cap.supported ? "✓" : "—"}</span>
+                    <span class="cap-name">{cap.label}</span>
+                    <span class="cap-state">{cap.supported ? "supported" : "unsupported"}</span>
+                  </li>
+                {/each}
+              </ul>
+            {/if}
+          </div>
+
           <div class="queue">
             <div class="queue-head">
               <span class="section-title">Queued changes</span>
@@ -784,6 +811,47 @@
   }
   .dot.unknown {
     background: #9ca3af;
+  }
+  .capabilities {
+    border-top: 1px solid #f3f4f6;
+    padding-top: 0.5rem;
+  }
+  .cap-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .cap {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.25rem 0;
+    font-size: 0.85rem;
+  }
+  .cap-mark {
+    width: 1rem;
+    flex: none;
+    text-align: center;
+    font-weight: 700;
+    color: #16a34a;
+  }
+  .cap-name {
+    font-weight: 500;
+  }
+  .cap-state {
+    margin-left: auto;
+    font-size: 0.75rem;
+    color: #6b7280;
+  }
+  /* An unsupported capability is greyed out — the control this client can't honour. */
+  .cap.unsupported {
+    color: #9ca3af;
+  }
+  .cap.unsupported .cap-mark {
+    color: #9ca3af;
+  }
+  .cap.unsupported .cap-name {
+    font-weight: 400;
   }
   .queue {
     border-top: 1px solid #f3f4f6;
