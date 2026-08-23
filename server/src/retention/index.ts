@@ -13,3 +13,10 @@ export {
   type RetentionPurgePreview,
   type RetentionPurgePreviewItem,
 } from "./service.js";
+export {
+  createRetentionPurgeScheduler,
+  DEFAULT_RETENTION_PURGE_PATTERN,
+  RETENTION_PURGE_LOG_COMPONENT,
+  type RetentionPurgeSchedulerOptions,
+  type RetentionPurgeSchedulerHandle,
+} from "./scheduler.js";

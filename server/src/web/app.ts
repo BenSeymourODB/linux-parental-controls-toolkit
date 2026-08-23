@@ -17,6 +17,7 @@ import { loadSettings, type Settings } from "../config.js";
 import { type EventStreamOptions } from "../events/index.js";
 import { type PolicyDb } from "../policy/db.js";
 import type { EnforcementPipelineHandle } from "../enforcement/index.js";
+import type { RetentionPurgeSchedulerHandle } from "../retention/index.js";
 import { type AnsibleVenvSupervisor } from "../setup/ansible-venv.js";
 import {
   type AdGuardHealthPollHandle,
@@ -77,6 +78,15 @@ declare module "fastify" {
      * after `listen`, and `buildApp`'s `onClose` hook stops it.
      */
     enforcementPipeline: EnforcementPipelineHandle | null;
+    /**
+     * The Phase-11 scheduled retention purge (#137): the croner job that
+     * enforces the configured retention windows and records each run. Always
+     * present (a purge is pure DB maintenance, needing no SSH). **Constructed**
+     * here but **not** started by `buildApp` (so building the app — including
+     * every test — starts no timer); `main.ts` calls `start()` after `listen`,
+     * and `buildApp`'s `onClose` teardown stops it.
+     */
+    retentionPurge: RetentionPurgeSchedulerHandle;
   }
 }
 
@@ -140,6 +150,13 @@ export interface BuildAppOptions {
    * start/stop without a live SSH transport.
    */
   enforcementPipeline?: EnforcementPipelineHandle | null;
+  /**
+   * Inject the {@link RetentionPurgeSchedulerHandle} (#137). When omitted,
+   * {@link buildApp} builds it from settings and never starts its timer (that
+   * is `main.ts`'s job after `listen`). Tests inject a fake to assert boot
+   * start/stop, or a real one over an in-memory DB.
+   */
+  retentionPurge?: RetentionPurgeSchedulerHandle;
 }
 
 /**
@@ -180,6 +197,10 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   // Constructed by the composition root; main.ts calls start() after listen and
   // services.teardown stops it. Decorated here so main.ts reads it off the app.
   app.decorate("enforcementPipeline", services.enforcementPipeline);
+  // The Phase-11 scheduled retention purge (#137). Constructed by the
+  // composition root; main.ts calls start() after listen and services.teardown
+  // stops it. Decorated here so main.ts reads it off the app.
+  app.decorate("retentionPurge", services.retentionPurge);
 
   // Dispose the resources the composition root owns (owned policy-push + db, a
   // non-null managed supervisor, and the enforcement pipeline). See
