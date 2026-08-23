@@ -50,7 +50,8 @@
  * License boundary: none touched — pure TypeScript + Drizzle over the policy
  * store; no GPL linkage, no subprocess/REST boundary, no image change.
  */
-import { and, inArray, isNotNull, lt } from "drizzle-orm";
+import { and, count, inArray, isNotNull, lt, type SQL } from "drizzle-orm";
+import type { SQLiteTable } from "drizzle-orm/sqlite-core";
 
 import type { PolicyDb } from "./db.js";
 import type { RetentionCategory } from "./enums.js";
@@ -336,5 +337,130 @@ export function purgeExpiredRecords(
     purgeGrants(db, policy, now, opts),
     purgeAuditLog(db, policy, now, opts),
     purgeDateOverrides(db, policy, now, opts),
+  ];
+}
+
+// --- Dry-run counting (#137) -----------------------------------------------
+//
+// The read-only counterpart to the purge routines above: how many rows *would*
+// be purged, without deleting anything. The scheduled job's preview mode and
+// the `POST /api/retention/purge/preview` endpoint use it for operator
+// confidence before a real run. Each count reuses the exact same per-category
+// cutoff (`RetentionPolicy.cutoffFor`) and predicate (`<ts> < cutoff`) as the
+// matching purge routine, so a preview and the run it precedes agree by
+// construction (`keepForever` ⇒ cutoff `null` ⇒ nothing counted).
+
+/** What a dry-run reports for one retention category. */
+export interface CountCategoryResult {
+  /** The category counted. */
+  readonly category: RetentionCategory;
+  /**
+   * The cutoff instant that would be applied — records strictly older than
+   * this would be deleted. `null` when the category is kept forever.
+   */
+  readonly cutoff: Date | null;
+  /** How many rows a purge would delete across every table in the category. */
+  readonly wouldDelete: number;
+}
+
+/**
+ * `COUNT(*)` of rows in `table` matching `where` (each category's cutoff
+ * predicate). `where` is `SQL | undefined` because `and(...)` narrows to
+ * `undefined` when every operand is — never the case here, but it keeps the
+ * call sites cast-free, and a `undefined` predicate would count every row
+ * (harmless: it is never passed).
+ */
+function countOlderThan(db: PolicyDb, table: SQLiteTable, where: SQL | undefined): number {
+  return db.select({ value: count() }).from(table).where(where).get()?.value ?? 0;
+}
+
+/** Count `usage_samples` rows whose interval ended before the category cutoff. */
+export function countUsageSamples(
+  db: PolicyDb,
+  policy: RetentionPolicy,
+  now: Date,
+): CountCategoryResult {
+  const cutoff = policy.cutoffFor("usage_samples", now);
+  if (cutoff === null) {
+    return { category: "usage_samples", cutoff, wouldDelete: 0 };
+  }
+  return {
+    category: "usage_samples",
+    cutoff,
+    wouldDelete: countOlderThan(db, usageSamples, lt(usageSamples.endedAt, cutoff)),
+  };
+}
+
+/** Count expired `grants` (those past `expires_at`). */
+export function countGrants(db: PolicyDb, policy: RetentionPolicy, now: Date): CountCategoryResult {
+  const cutoff = policy.cutoffFor("grant_ledger", now);
+  if (cutoff === null) {
+    return { category: "grant_ledger", cutoff, wouldDelete: 0 };
+  }
+  return {
+    category: "grant_ledger",
+    cutoff,
+    wouldDelete: countOlderThan(db, grants, lt(grants.expiresAt, cutoff)),
+  };
+}
+
+/** Count `audit_log` entries recorded before the category cutoff. */
+export function countAuditLog(
+  db: PolicyDb,
+  policy: RetentionPolicy,
+  now: Date,
+): CountCategoryResult {
+  const cutoff = policy.cutoffFor("audit_log", now);
+  if (cutoff === null) {
+    return { category: "audit_log", cutoff, wouldDelete: 0 };
+  }
+  return {
+    category: "audit_log",
+    cutoff,
+    wouldDelete: countOlderThan(db, auditLog, lt(auditLog.at, cutoff)),
+  };
+}
+
+/** Count date-scoped overrides wholly in the past (the four-table sum). */
+export function countDateOverrides(
+  db: PolicyDb,
+  policy: RetentionPolicy,
+  now: Date,
+): CountCategoryResult {
+  const cutoff = policy.cutoffFor("date_overrides", now);
+  if (cutoff === null) {
+    return { category: "date_overrides", cutoff, wouldDelete: 0 };
+  }
+  const wouldDelete =
+    countOlderThan(db, exceptions, lt(exceptions.expiresAt, cutoff)) +
+    countOlderThan(db, groupExceptions, lt(groupExceptions.expiresAt, cutoff)) +
+    countOlderThan(
+      db,
+      schedules,
+      and(isNotNull(schedules.effectiveTo), lt(schedules.effectiveTo, cutoff)),
+    ) +
+    countOlderThan(
+      db,
+      groupSchedules,
+      and(isNotNull(groupSchedules.effectiveTo), lt(groupSchedules.effectiveTo, cutoff)),
+    );
+  return { category: "date_overrides", cutoff, wouldDelete };
+}
+
+/**
+ * Count what {@link purgeExpiredRecords} would delete, per category, in the same
+ * {@link RetentionCategory} declaration order — the dry-run counterpart of the
+ * purge, with no writes.
+ */
+export function countExpiredRecords(
+  db: PolicyDb,
+  policy: RetentionPolicy,
+  now: Date,
+): CountCategoryResult[] {
+  return [
+    countUsageSamples(db, policy, now),
+    countGrants(db, policy, now),
+    countAuditLog(db, policy, now),
+    countDateOverrides(db, policy, now),
   ];
 }

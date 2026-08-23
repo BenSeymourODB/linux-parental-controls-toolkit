@@ -148,6 +148,13 @@
       "when": 1786107375358,
       "tag": "20260807125615_unknown_vargas",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "6",
+      "when": 1787470141391,
+      "tag": "20260823072901_cultured_sersi",
+      "breakpoints": true
     }
   ]
 }

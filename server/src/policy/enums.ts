@@ -165,3 +165,16 @@ export const retentionCategoryValues = [
 ] as const;
 export const retentionCategorySchema = z.enum(retentionCategoryValues);
 export type RetentionCategory = z.infer<typeof retentionCategorySchema>;
+
+/**
+ * What triggered a recorded retention purge run (#137, `retention_purge_runs`).
+ *
+ * - `scheduled` — the croner-driven periodic purge (`retention.purgeCron`).
+ * - `manual` — an admin "run now" from `POST /api/retention/purge`.
+ *
+ * Dry-run *previews* are never recorded (a preview is a read, not a run), so
+ * there is no `preview` trigger.
+ */
+export const retentionPurgeTriggerValues = ["scheduled", "manual"] as const;
+export const retentionPurgeTriggerSchema = z.enum(retentionPurgeTriggerValues);
+export type RetentionPurgeTrigger = z.infer<typeof retentionPurgeTriggerSchema>;
