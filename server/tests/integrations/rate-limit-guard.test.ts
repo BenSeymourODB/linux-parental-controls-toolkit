@@ -39,6 +39,11 @@ describe("integration guard — per-token rate limiting (#115)", () => {
     app.get("/ping", { preHandler: guard() }, async (request) => ({
       id: request.integration?.id,
     }));
+    // A scope-guarded route, to prove the rate limit is applied *before* the
+    // scope check (a wrong-scope flood is still throttled).
+    app.get("/needs-grants", { preHandler: guard("grants:write") }, async (request) => ({
+      id: request.integration?.id,
+    }));
     await app.ready();
   });
 
@@ -51,6 +56,14 @@ describe("integration guard — per-token rate limiting (#115)", () => {
     return app.inject({
       method: "GET",
       url: "/ping",
+      headers: { authorization: `Bearer ${secret}` },
+    });
+  }
+
+  function pingGrants(secret: string) {
+    return app.inject({
+      method: "GET",
+      url: "/needs-grants",
       headers: { authorization: `Bearer ${secret}` },
     });
   }
@@ -99,6 +112,28 @@ describe("integration guard — per-token rate limiting (#115)", () => {
     const afterReset = await ping(token.secret);
     expect(afterReset.statusCode).toBe(200);
     expect(afterReset.headers["ratelimit-remaining"]).toBe("1");
+  });
+
+  it("throttles a wrong-scope caller: budget is spent, and the limit wins over the scope check", async () => {
+    // A token that authenticates but lacks `grants:write`.
+    const token = issueIntegrationToken(db, { name: "readonly", scopes: ["policy:read"] });
+
+    // Under the limit, the scope check runs and rejects 403 — but the request
+    // still counted (remaining decrements), proving rate-limit sits before scope.
+    const first = await pingGrants(token.secret);
+    expect(first.statusCode).toBe(403);
+    expect(first.json().error.code).toBe("insufficient_scope");
+    expect(first.headers["ratelimit-remaining"]).toBe("1");
+
+    const second = await pingGrants(token.secret);
+    expect(second.statusCode).toBe(403);
+    expect(second.headers["ratelimit-remaining"]).toBe("0");
+
+    // Now over the limit: the rate limiter rejects 429 *before* the scope check,
+    // so a wrong-scope flood is throttled rather than endlessly 403-ing.
+    const third = await pingGrants(token.secret);
+    expect(third.statusCode).toBe(429);
+    expect(third.json().error.code).toBe("rate_limited");
   });
 
   it("does not spend a token's budget on an unauthenticated request", async () => {

@@ -131,4 +131,19 @@ describe("integration-token guard", () => {
     expect(res.statusCode).toBe(200);
     expect(res.json().name).toBe("readonly");
   });
+
+  it("emits no RateLimit-* headers when the guard is built without a limiter", async () => {
+    // This suite constructs the guard with no limiter (`makeRequireIntegrationToken(db)`),
+    // so throttling is disabled — the documented opt-out. No rate-limit metadata leaks.
+    const issued = issueIntegrationToken(db, { name: "readonly", scopes: ["policy:read"] });
+    const res = await app.inject({
+      method: "GET",
+      url: "/needs-auth",
+      headers: bearer(issued.secret),
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["ratelimit-limit"]).toBeUndefined();
+    expect(res.headers["ratelimit-remaining"]).toBeUndefined();
+    expect(res.headers["retry-after"]).toBeUndefined();
+  });
 });

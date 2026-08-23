@@ -439,8 +439,9 @@ failed-attempt limiter" (#235).
   window keyed by the authenticated token: `PCT_INTEGRATIONS_RATE_LIMIT_MAX`
   requests (default 120) per `PCT_INTEGRATIONS_RATE_LIMIT_WINDOW_SECONDS`
   (default 60). An over-limit request gets `429 rate_limited` with a
-  `Retry-After` header; every response carries `RateLimit-Limit` /
-  `RateLimit-Remaining` / `RateLimit-Reset`. Raise the limit for a chatty
+  `Retry-After` header; every **authenticated** response carries
+  `RateLimit-Limit` / `RateLimit-Remaining` / `RateLimit-Reset` (an
+  unauthenticated `401` carries none). Raise the limit for a chatty
   integrator, or lower it to tighten a shared LAN. This is per-IP-independent —
   it throttles the credential, not the source address.
 
