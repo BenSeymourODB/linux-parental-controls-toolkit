@@ -125,7 +125,12 @@ describe("startDateOverridePush", () => {
     expect(actions).toHaveLength(0);
   });
 
-  it("does not re-push while the override is unchanged (change-detection)", async () => {
+  it("re-asserts an active override on every tick (self-heals an out-of-band clobber)", async () => {
+    // A standing policy push can overwrite the device's allowed-hours grid with
+    // the exception-free version (it shares this push's coalesce key) — and the
+    // scheduler can't observe that. So while an override is materially active it
+    // must re-push every tick, not just on change, or a `deny` override would be
+    // silently and permanently lost. Two active ticks → two pushes.
     const { userId } = linkedUser();
     createException(db, { userId, targetKind: "overall", action: "deny", ...WED_WINDOW });
 
@@ -134,8 +139,8 @@ describe("startDateOverridePush", () => {
     await h.tick();
     await h.tick();
 
-    // First tick pushes; the second sees the same desired grid and skips.
-    expect(actions).toHaveLength(1);
+    expect(actions).toHaveLength(2);
+    expect(actions.every((a) => a.kind === EXCEPTION_PUSH_KIND)).toBe(true);
   });
 
   it("reverts exactly once after the override's week rolls past, then stays quiet", async () => {
@@ -166,6 +171,27 @@ describe("startDateOverridePush", () => {
     await start(executor, () => NEXT_MON).tick();
 
     // Exactly one (revert) push — proving restart reconciliation.
+    expect(actions).toHaveLength(1);
+    expect(actions[0]?.kind).toBe(EXCEPTION_PUSH_KIND);
+  });
+
+  it("reverts an override that expired beyond the lookback on the first pass (long outage)", async () => {
+    const { userId } = linkedUser();
+    // Expired ~15 days before `now` — outside the 8-day steady-state lookback, so
+    // only the first-pass "any exception row" sweep reconciles the stale device slot.
+    createException(db, {
+      userId,
+      targetKind: "overall",
+      action: "deny",
+      effectiveFrom: new Date("2026-06-01T00:00:00Z"),
+      expiresAt: new Date("2026-06-02T00:00:00Z"),
+    });
+
+    const { executor, actions } = recordingExecutor();
+    const h = start(executor, () => WED);
+    await h.tick(); // first pass: revert the long-stale override
+    await h.tick(); // steady state: out of lookback, untracked → quiet
+
     expect(actions).toHaveLength(1);
     expect(actions[0]?.kind).toBe(EXCEPTION_PUSH_KIND);
   });

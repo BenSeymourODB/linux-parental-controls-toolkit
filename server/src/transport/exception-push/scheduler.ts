@@ -14,11 +14,19 @@
  * reference week and pushes it — via the same offline queue + audited
  * `timekpra` client the standing push uses (a distinct `policy.push.exceptions`
  * kind whose executor re-reads the override state on every run). Because the
- * grid is keyed by ISO weekday, the tick reconciles daily so a weekday slot an
- * override touched (this Tuesday) can never outlive the override onto the next
- * same weekday (next Tuesday) — the reconcile restores the standing slot well
- * within the seven-day horizon, and an override that has expired resolves back
- * to the standing grid (the revert) automatically.
+ * grid is keyed by ISO weekday, the reconcile restores an override-touched
+ * weekday slot to standing once the override's week rolls past — well within the
+ * seven-day aliasing horizon for a mid-week override. (A Monday override is the
+ * edge: its revert can only fire once the reference instant reaches the *next*
+ * Monday, so the stale slot can linger for up to one cron interval into that
+ * aliasing Monday before the tick reverts it.) An override that has expired
+ * resolves back to the standing grid (the revert) automatically.
+ *
+ * While an override is materially active the tick **re-asserts it every pass**,
+ * not only on change: the desired grid can be clobbered on the device
+ * out-of-band by a standing policy push (which resolves the exception-free grid
+ * and shares this push's coalesce key), and the scheduler cannot observe that,
+ * so idempotent re-pushing bounds any such clobber to at most one cron interval.
  *
  * Modelled on `transport/reapply/scheduler.ts` and the offline-queue drainer:
  * all remote/DB/clock seams are injected, overlapping runs are suppressed
@@ -37,7 +45,6 @@ import type { FastifyBaseLogger } from "fastify";
 import type { PolicyDb } from "../../policy/db.js";
 import { gatherUserExceptions, gatherUserScheduleRules } from "../../policy/group-resolution.js";
 import { getUser, listUserLinks, listUsers } from "../../policy/repository.js";
-import type { ExceptionInput } from "../../policy/resolve.js";
 import { resolveWeeklyAllowedWindows } from "../../policy/weekly-windows.js";
 import type { WeeklyAllowedWindows } from "../timekpr/allowed-hours.js";
 import { pushOrEnqueue, type ActionExecutor, type NewQueuedAction } from "../queue/index.js";
@@ -60,11 +67,13 @@ export const EXCEPTION_PUSH_LOG_COMPONENT = "transport/exception-push";
 export const DEFAULT_EXCEPTION_PUSH_PATTERN = "*/15 * * * *";
 
 /**
- * How far back an expired exception still makes a user a reconcile candidate.
- * A weekly grid keyed by ISO weekday aliases across weeks, so a slot an override
- * touched must be reconciled back to standing before that weekday recurs — eight
- * days gives a full day of margin over the seven-day horizon, and covers a
- * revert that a process restart would otherwise miss.
+ * How far back an expired exception still makes a user a **steady-state**
+ * reconcile candidate. A weekly grid keyed by ISO weekday aliases across weeks,
+ * so a slot an override touched must be reconciled back to standing before that
+ * weekday recurs — eight days gives a full day of margin over the seven-day
+ * horizon. (A restart reconciles *any* user with an exception row regardless of
+ * age — see the first-pass branch in `reconcileUser` — so a long outage past
+ * this window still self-heals once on the next start.)
  */
 export const DEFAULT_EXCEPTION_LOOKBACK_MS = 8 * 24 * 60 * 60 * 1000;
 
@@ -130,12 +139,17 @@ export function startDateOverridePush(options: DateOverridePushOptions): DateOve
   const child = log.child({ component: EXCEPTION_PUSH_LOG_COMPONENT });
 
   /**
-   * The exception-inclusive grid signature we last initiated a push for, per
-   * user. Present only for users with a currently-material override; pruned once
-   * an override lapses and the revert has been pushed, so it stays bounded to
-   * actively-overridden users (lost on restart — the first tick reconciles).
+   * Users we are currently enforcing an override for. Used only to fire the
+   * revert push exactly once when an override lapses (a tracked user whose grid
+   * has fallen back to standing), so the set stays bounded to actively-overridden
+   * users. It is deliberately **not** a change-detection cache: while an override
+   * is materially active we re-push every tick (see {@link reconcileUser}) so an
+   * out-of-band clobber — e.g. a standing policy push for an unrelated budget
+   * edit, which resolves the exception-free grid and shares this push's coalesce
+   * key — self-heals within one cron interval rather than being lost until the
+   * override changes. Lost on restart; the first tick reconciles.
    */
-  const pushedSignature = new Map<number, string>();
+  const tracking = new Set<number>();
   let firstPass = true;
 
   /** Fan a desired-state push out to every client the user is on. */
@@ -167,45 +181,56 @@ export function startDateOverridePush(options: DateOverridePushOptions): DateOve
     }
   }
 
-  /** Reconcile one user's override state; returns whether a push was issued. */
+  /** Reconcile one user's override state for this pass. */
   async function reconcileUser(userId: number, reference: Date): Promise<void> {
     const exceptions = gatherUserExceptions(db, userId);
-    const relevant: ExceptionInput[] = exceptions.filter(
-      (e) => e.expiresAt.getTime() >= reference.getTime() - lookbackMs,
-    );
-    const tracked = pushedSignature.has(userId);
-    // Nothing to enforce and nothing outstanding to revert.
-    if (relevant.length === 0 && !tracked) return;
+    const tracked = tracking.has(userId);
+
+    // Candidate gate. On the first pass after start (empty tracking set) reconcile
+    // every user with *any* exception row, so a restart reverts even an override
+    // that expired during a long outage (the device may still hold its stale
+    // weekly-grid slot). In steady state, a user is a candidate only if they have
+    // an exception recent enough to still matter (within the lookback) or one we
+    // are already enforcing (so the revert still fires).
+    if (firstPass) {
+      if (exceptions.length === 0) return;
+    } else {
+      const recent = exceptions.some(
+        (e) => e.expiresAt.getTime() >= reference.getTime() - lookbackMs,
+      );
+      if (!recent && !tracked) return;
+    }
 
     const tz = getUser(db, userId)?.tz ?? defaultTz;
     const schedules = gatherUserScheduleRules(db, userId);
-    const desiredSig = weeklySignature(
-      resolveWeeklyAllowedWindows({ schedules, tz, reference, exceptions: relevant }),
-    );
-    const standingSig = weeklySignature(resolveWeeklyAllowedWindows({ schedules, tz, reference }));
-    const materiallyActive = desiredSig !== standingSig;
-    const prev = pushedSignature.get(userId);
+    // Build both grids for the current reference week. All exceptions are passed
+    // to the resolver, which date-gates each to the days it actually covers, so
+    // an expired override contributes nothing and the grid falls back to standing.
+    const overrideGrid = resolveWeeklyAllowedWindows({ schedules, tz, reference, exceptions });
+    const standingGrid = resolveWeeklyAllowedWindows({ schedules, tz, reference });
+    const materiallyActive = weeklySignature(overrideGrid) !== weeklySignature(standingGrid);
 
     let shouldPush: boolean;
-    if (firstPass) {
-      // Reconcile every candidate after a restart: re-assert active overrides and
-      // revert any that expired (device may still hold a stale override grid).
+    if (materiallyActive) {
+      // Re-assert every tick (not just on change): the desired grid can be
+      // clobbered on the device out-of-band by a standing push, which this
+      // scheduler cannot observe, so idempotently re-pushing bounds any clobber
+      // to at most one cron interval. Cheap — only actively-overridden users.
       shouldPush = true;
-    } else if (materiallyActive) {
-      shouldPush = desiredSig !== prev;
     } else {
-      // Desired == standing: push only to revert an override we previously pushed.
-      shouldPush = prev !== undefined && prev !== desiredSig;
+      // Grid has fallen back to standing: push the revert exactly once, when we
+      // were enforcing an override or are doing the first-pass restart sweep.
+      shouldPush = tracked || firstPass;
     }
     if (!shouldPush) return;
 
     await pushToClients(userId);
     if (materiallyActive) {
-      pushedSignature.set(userId, desiredSig);
+      tracking.add(userId);
       child.info({ userId }, "date-specific override pushed");
     } else {
       // Reverted to standing — nothing left to track for this user.
-      pushedSignature.delete(userId);
+      tracking.delete(userId);
       child.info({ userId }, "date-specific override reverted to standing policy");
     }
   }

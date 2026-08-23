@@ -96,15 +96,21 @@ either ordering self-heals on the next scheduler tick.
 2. For each candidate compute `desiredSig` = a stable signature of the
    **exception-inclusive** weekly grid, and `standingSig` = the exception-free
    grid, for the current reference week in the user's effective tz.
-3. **Change-detection** against an in-memory `pushedSignature: Map<userId, sig>`:
-   - First tick after start: push every candidate's desired grid (reconcile after
-     a restart — re-assert active overrides *and* revert any that expired during
-     downtime).
-   - Otherwise push only when `desiredSig !== pushedSignature.get(userId)`.
-   - Skip pushing a user who has never been pushed *and* whose desired grid equals
-     standing (a no-op exception — nothing to enforce).
-   - After a push, if `desiredSig === standingSig` the revert is complete → drop
-     the user from the map (keeps it bounded to actively-overridden users).
+3. **Decision**, tracking only the set of currently-overridden users (to fire
+   the revert once), **not** a change-detection cache:
+   - While an override is **materially active** (`overrideGrid !== standingGrid`)
+     push **every tick**. A standing policy push can clobber the device's grid
+     out-of-band (it resolves the exception-free grid and shares this push's
+     coalesce key) and the scheduler cannot observe that, so idempotent
+     re-pushing bounds any clobber to at most one cron interval — the correctness
+     the "push on change" optimisation would have silently broken for a `deny`.
+   - When the grid has fallen back to **standing**, push the revert exactly once
+     (a tracked user, or the first-pass sweep), then untrack.
+   - **First tick after start** reconciles every user with *any* exception row
+     (regardless of age): re-assert active overrides and revert any that expired
+     during downtime — including an outage longer than the steady-state lookback.
+   - Steady-state candidacy skips users whose exceptions are all older than the
+     lookback and who are not tracked.
 4. A push fans out to every `listUserLinks(db, userId)` client via
    `pushOrEnqueue(db, action, exceptionExecutor)` — online → pushed; unreachable
    (retriable) → queued for the drainer; non-Linux platform → the executor's
@@ -145,9 +151,11 @@ SSH key) ⇒ not started, mirroring the drainer.
 
 ## Deferred (tracked follow-ups, linked from the PR)
 - **Admin policy save during an active override** transiently clobbers the
-  override grid (the standing push is exception-free); the next scheduler tick
-  re-asserts it. Documented limitation; a tighter coupling (standing push
-  delegating to the override resolve while an override is active) is a follow-up.
+  override grid (the standing push is exception-free). The scheduler re-asserts
+  it automatically on the next tick (it re-pushes every pass while an override is
+  materially active), so this is a bounded ≤ one-cron-interval transient, not a
+  lost override. Shrinking that window (standing push delegating to the
+  override-inclusive resolve while an override is active) is tracked as **#421**.
 - **Per-activity / group `deny` quota reduction** — out of scope per ADR 0012
   (recurring schedules don't do it either); only `overall` overrides are enforced.
 - **Whole-week deny → full lockout** — the existing Phase 8c gap (zero daily

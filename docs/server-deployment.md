@@ -559,6 +559,30 @@ and offers a dry-run/preview and a manual "run now". Only the global default
 lives in the environment — restart to change it; per-category overrides are
 runtime config and need no restart.
 
+## Date-specific override enforcement
+
+A **date-specific override** (an `exception` — "no screen time on 2026-06-30", a
+"screen-free vacation week", or "allow games until 9pm tonight") shapes the
+effective policy in the dashboard, but the recurring Timekpr-nExT allowed-hours
+grid pushed to a client is a *static weekly* grid that cannot express a one-off
+calendar date ([`docs/adr/0012-date-specific-override-composition.md`](adr/0012-date-specific-override-composition.md)
+§3). A background scheduler bridges that gap: each pass it resolves the
+exception-inclusive weekly allowed-hours for every user with an active override
+and pushes it to their client(s) over the same SSH + `timekpra` transport (and
+offline queue) the standing policy push uses, then **reverts** to the standing
+recurring policy once the override lapses. Each push/revert is recorded in the
+transport audit log under the `exception.window` reason.
+
+- **`PCT_EXCEPTION_PUSH_CRON`** — the reconcile cadence (default `*/15 * * * *`,
+  every 15 minutes). It bounds how soon after an override opens, is authored
+  same-day, or lapses the device catches up. The scheduler runs only once the
+  dashboard's SSH key exists (first-run keygen); before that, overrides are
+  correct in the dashboard but not yet pushed, exactly like the standing push.
+- Exceptions change **allowed hours only**, never the daily/weekly/monthly time
+  limits (an additive time amount is a grant, not an exception). Today only
+  `overall`-scoped overrides have an on-device effect; `activity`/`group`-scoped
+  ones compose into the effective view but are not yet separately enforced.
+
 ## Upgrade path
 
 `docker pull` a newer image tag and restart. The server applies any new

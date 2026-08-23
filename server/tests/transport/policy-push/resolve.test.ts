@@ -170,6 +170,39 @@ describe("resolvePolicyPush", () => {
       expect(withOverride.weekly.get(3)).toEqual([]);
     });
 
+    it("widens a covered day past a standing bedtime deny via an extend override", () => {
+      // Standing: allow 09:00–17:00 every day, deny the rest (a bedtime cut-off).
+      const schedules: ScheduleRule[] = [
+        rule({
+          id: 1,
+          action: "allow",
+          recurrenceDays: 0b1111111,
+          recurrenceStartMinute: 9 * 60,
+          recurrenceEndMinute: 17 * 60,
+        }),
+        rule({ id: 2, ordinal: 1, action: "deny" }),
+      ];
+      // "allow games until 9pm this Wednesday" — the #364 extend-past-a-deny case.
+      const resolved = resolvePolicyPush({
+        tz: "UTC",
+        schedules,
+        budgets: [],
+        now: NOW,
+        exceptions: [
+          denyWednesday({
+            action: "extend",
+            effectiveFrom: new Date("2026-06-17T00:00:00Z"),
+            expiresAt: new Date("2026-06-17T21:00:00Z"),
+          }),
+        ],
+      });
+      // Wednesday reaches to 21:00; the other days keep the 09:00–17:00 grid.
+      expect(resolved.weekly.get(3)).toEqual([{ start: 0, end: 21 * 60 }]);
+      for (const weekday of [1, 2, 4, 5, 6, 7] as const) {
+        expect(resolved.weekly.get(weekday)).toEqual([{ start: 9 * 60, end: 17 * 60 }]);
+      }
+    });
+
     it("never changes the seconds limits (an exception carries no time amount)", () => {
       const budgets: BudgetInput[] = [
         { scope: "overall", targetId: null, window: "daily", secondsAllowed: 7200 },
