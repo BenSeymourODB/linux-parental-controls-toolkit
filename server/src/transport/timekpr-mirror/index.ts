@@ -28,3 +28,12 @@ export {
   type RefreshDeps,
   type RefreshResult,
 } from "./refresh.js";
+export {
+  DEFAULT_REFRESH_BACKOFF,
+  DEFAULT_REFRESH_PATTERN,
+  REFRESH_LOG_COMPONENT,
+  startTimekprMirrorRefresh,
+  type RefreshBackoff,
+  type TimekprMirrorRefreshHandle,
+  type TimekprMirrorRefreshOptions,
+} from "./scheduler.js";

@@ -376,6 +376,7 @@ describe("loadSettings", () => {
           mode: "managed",
           dataDir: "/data/apt/timekpr",
           package: "timekpr-next",
+          refreshCron: "0 3 * * *",
         });
       });
 
@@ -392,6 +393,7 @@ describe("loadSettings", () => {
           dataDir: "/srv/apt/timekpr",
           package: "timekpr-next-beta",
           version: "0.5.5",
+          refreshCron: "0 3 * * *",
         });
       });
 
@@ -402,6 +404,27 @@ describe("loadSettings", () => {
             PCT_TIMEKPR_MIRROR_PACKAGE: "timekpr-nope",
           }),
         ).toThrow(SettingsError);
+      });
+
+      it("honours an explicit refresh cron pattern (#392)", () => {
+        const settings = loadSettings({
+          PCT_TIMEKPR_MIRROR: "managed",
+          PCT_TIMEKPR_MIRROR_REFRESH_CRON: "30 4 * * 1",
+        });
+
+        expect(settings.timekprMirror).toMatchObject({
+          mode: "managed",
+          refreshCron: "30 4 * * 1",
+        });
+      });
+
+      it("rejects an invalid refresh cron pattern, naming the field (#392)", () => {
+        expect(() =>
+          loadSettings({
+            PCT_TIMEKPR_MIRROR: "managed",
+            PCT_TIMEKPR_MIRROR_REFRESH_CRON: "not a cron",
+          }),
+        ).toThrow(/valid cron pattern/);
       });
     });
   });
