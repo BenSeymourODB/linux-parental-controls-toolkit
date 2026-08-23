@@ -42,7 +42,12 @@ export interface WeeklyWindowsInput {
   readonly reference: Date;
 }
 
-/** The seven ISO weekdays, Monday (1) … Sunday (7), in order. */
+/**
+ * The seven ISO-8601 weekdays, Monday (1) … Sunday (7), in order — the scheme
+ * used throughout the schedule model. Note this is **not** JS's 0-indexed
+ * `Date.getDay()` (0 = Sunday, 6 = Saturday), so never index this array with a
+ * raw `getDay()` value.
+ */
 const ISO_WEEKDAYS = [1, 2, 3, 4, 5, 6, 7] as const satisfies readonly IsoWeekday[];
 
 /**
