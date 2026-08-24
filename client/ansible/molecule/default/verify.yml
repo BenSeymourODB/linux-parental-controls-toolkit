@@ -15,6 +15,12 @@
       - aw-server
       - aw-watcher-afk
       - aw-watcher-window
+    # --- privesc live assertion (#360) — must match prepare.yml -----------
+    poisoned_user: "{{ aw_supervised_users[0] }}"
+    poisoned_home: "/home/{{ aw_supervised_users[0] }}"
+    canary_dir: /opt/pct-privesc-canary
+    config_canary_marker: PCT-PRIVESC-CANARY-CONFIG-DO-NOT-OVERWRITE
+    unit_canary_marker: PCT-PRIVESC-CANARY-UNIT-DO-NOT-OVERWRITE
   tasks:
     - name: Read the version stamp
       ansible.builtin.slurp:
@@ -65,3 +71,71 @@
       loop: "{{ aw_unit_files.results }}"
       loop_control:
         label: "{{ item.item.0 }}/{{ item.item.1 }}"
+
+    # --- privesc live assertion (#360): the child→root symlink was NOT ------
+    # followed. prepare.yml planted `config.toml` and `aw-server.service` as
+    # symlinks into the root-owned canary; the #351 fix must have written the
+    # child's own files instead of clobbering/chowning the canary. Under the
+    # pre-fix playbook (root-run + follow: yes) these assertions fail.
+    - name: Stat the root-owned privesc canary files
+      ansible.builtin.stat:
+        path: "{{ canary_dir }}/{{ item }}"
+      register: aw_canary_stat
+      loop:
+        - config-canary
+        - unit-canary
+
+    - name: Assert each canary file still exists and is owned by root
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.uid == 0
+          - item.stat.gid == 0
+          - not item.stat.islnk
+        fail_msg: >-
+          privesc: {{ canary_dir }}/{{ item.item }} was chowned/replaced —
+          the symlink was followed (owner uid={{ item.stat.uid }})
+      loop: "{{ aw_canary_stat.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Read each canary file's content
+      ansible.builtin.slurp:
+        src: "{{ canary_dir }}/{{ item }}"
+      register: aw_canary_content
+      loop:
+        - config-canary
+        - unit-canary
+
+    - name: Assert the canary content is unchanged (not overwritten via the symlink)
+      ansible.builtin.assert:
+        that:
+          - (item.0.content | b64decode | trim) == item.1
+        fail_msg: >-
+          privesc: {{ canary_dir }}/{{ item.0.item }} content changed —
+          a converge write followed the symlink into the root-owned canary
+      loop: "{{ aw_canary_content.results | zip([config_canary_marker, unit_canary_marker]) | list }}"
+      loop_control:
+        label: "{{ item.0.item }}"
+
+    - name: Stat the child's poisoned dests after converge
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: aw_poisoned_dest_stat
+      loop:
+        - "{{ poisoned_home }}/.config/activitywatch/aw-server-rust/config.toml"
+        - "{{ poisoned_home }}/.config/systemd/user/aw-server.service"
+
+    - name: Assert each poisoned dest is now a real child-owned file, not a symlink
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.isreg
+          - not item.stat.islnk
+          - item.stat.pw_name == poisoned_user
+        fail_msg: >-
+          {{ item.item }} is not a regular {{ poisoned_user }}-owned file —
+          the fix did not land the write in the child's own tree
+      loop: "{{ aw_poisoned_dest_stat.results }}"
+      loop_control:
+        label: "{{ item.item }}"

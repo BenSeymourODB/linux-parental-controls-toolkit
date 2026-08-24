@@ -1,10 +1,21 @@
 ---
 # Stand up the supervised test users before the converge, mirroring what
 # `client/install-baseline-tools.sh` (#79) assumes already exists on a real
-# enrolled client.
+# enrolled client, then plant the hostile symlinks the live privesc assertion
+# (#360) checks the #351 fix defends against.
 - name: Prepare supervised users
   hosts: all
   become: true
+  vars:
+    # The supervised user whose home we poison. Data-driven off the scenario's
+    # group_vars so the two never disagree about who exists.
+    poisoned_user: "{{ aw_supervised_users[0] }}"
+    poisoned_home: "/home/{{ aw_supervised_users[0] }}"
+    # A root-owned tree the child must not be able to reach through a symlink.
+    # The sentinel files carry a known marker verify.yml asserts is unchanged.
+    canary_dir: /opt/pct-privesc-canary
+    config_canary_marker: PCT-PRIVESC-CANARY-CONFIG-DO-NOT-OVERWRITE
+    unit_canary_marker: PCT-PRIVESC-CANARY-UNIT-DO-NOT-OVERWRITE
   tasks:
     - name: Create the supervised test users
       ansible.builtin.user:
@@ -12,3 +23,78 @@
         shell: /bin/bash
         create_home: true
       loop: "{{ aw_supervised_users }}"
+
+    # --- privesc live assertion setup (#360) -------------------------------
+    # The #351 fix pins `become_user` + `follow: false` on every task that
+    # writes into a supervised (child) user's home. To prove that holds at
+    # converge time — not just in the static playbook text — we plant hostile
+    # LEAF symlinks at the two template dests the converge writes
+    # (`config.toml`, `aw-server.service`) pointing at a root-owned canary.
+    #
+    # Under the fix each template write runs AS the child (`become_user`) and
+    # does NOT follow the symlink (`follow: false`): it atomically replaces the
+    # symlink with a regular file in the child's own tree, leaving the canary
+    # untouched and root-owned. Under the pre-#351 playbook (root-run,
+    # `follow: yes`) the write would follow the link and clobber/chown the
+    # root-owned canary — a child→root escalation. verify.yml asserts the
+    # former.
+    #
+    # We deliberately do NOT poison a `state: directory` path (e.g.
+    # `~/.config/systemd/user → /etc`): with `follow: false` the `file` module
+    # fail-closes ("refusing to convert between symlink and directory"), which
+    # is the fix working correctly but reads as a failed converge to Molecule.
+    # The directory tasks' defences stay covered by the static guard
+    # (`server/tests/ansible/activitywatch-privesc.test.ts`).
+    - name: Create the root-owned privesc canary directory
+      ansible.builtin.file:
+        path: "{{ canary_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Write the root-owned canary sentinel files
+      ansible.builtin.copy:
+        dest: "{{ canary_dir }}/{{ item.name }}"
+        content: "{{ item.marker }}\n"
+        owner: root
+        group: root
+        mode: "0600"
+      loop:
+        - name: config-canary
+          marker: "{{ config_canary_marker }}"
+        - name: unit-canary
+          marker: "{{ unit_canary_marker }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Create the child-owned config parent dirs the converge manages
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ poisoned_user }}"
+        group: "{{ poisoned_user }}"
+        mode: "0755"
+        follow: false
+      become: true
+      become_user: "{{ poisoned_user }}"
+      loop:
+        - "{{ poisoned_home }}/.config/activitywatch/aw-server-rust"
+        - "{{ poisoned_home }}/.config/systemd/user"
+
+    - name: Plant the hostile leaf symlinks at the converge's template dests
+      ansible.builtin.file:
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+        state: link
+        follow: false
+        force: true
+      become: true
+      become_user: "{{ poisoned_user }}"
+      loop:
+        - src: "{{ canary_dir }}/config-canary"
+          dest: "{{ poisoned_home }}/.config/activitywatch/aw-server-rust/config.toml"
+        - src: "{{ canary_dir }}/unit-canary"
+          dest: "{{ poisoned_home }}/.config/systemd/user/aw-server.service"
+      loop_control:
+        label: "{{ item.dest }}"
