@@ -24,6 +24,7 @@ import type {
   ActivityResponse,
   BudgetResponse,
   NotificationPolicyResponse,
+  ResolvedBudgetResponse,
   UserResponse,
 } from "../../src/lib/api/contract.js";
 
@@ -33,6 +34,7 @@ const upsertNotificationPolicy =
   vi.fn<(userId: number, input: unknown) => Promise<NotificationPolicyResponse>>();
 const deleteNotificationPolicy = vi.fn<(userId: number) => Promise<void>>();
 const listBudgets = vi.fn<(userId?: number) => Promise<BudgetResponse[]>>();
+const listResolvedBudgets = vi.fn<(userId: number) => Promise<ResolvedBudgetResponse[]>>();
 const listActivities = vi.fn<() => Promise<ActivityResponse[]>>();
 const listActivityGroups = vi.fn<() => Promise<ActivityGroupResponse[]>>();
 
@@ -43,7 +45,10 @@ vi.mock("$lib/api/notifications", () => ({
     upsertNotificationPolicy(userId, input),
   deleteNotificationPolicy: (userId: number) => deleteNotificationPolicy(userId),
 }));
-vi.mock("$lib/api/budgets", () => ({ listBudgets: (userId?: number) => listBudgets(userId) }));
+vi.mock("$lib/api/budgets", () => ({
+  listBudgets: (userId?: number) => listBudgets(userId),
+  listResolvedBudgets: (userId: number) => listResolvedBudgets(userId),
+}));
 vi.mock("$lib/api/activities", () => ({ listActivities: () => listActivities() }));
 vi.mock("$lib/api/activity-groups", () => ({ listActivityGroups: () => listActivityGroups() }));
 
@@ -89,6 +94,20 @@ function activity(overrides: Partial<ActivityResponse> = {}): ActivityResponse {
   return { id: 1, kind: "app", matcher: "firefox", matchType: "exact", ...overrides };
 }
 
+// A resolved budget slot (#363). `source` decides own-vs-inherited; the default
+// is a group-inherited slot since that is the case #403 adds to the picker.
+function resolvedBudget(overrides: Partial<ResolvedBudgetResponse> = {}): ResolvedBudgetResponse {
+  return {
+    scope: "group",
+    targetId: 2,
+    window: "daily",
+    secondsAllowed: 3600,
+    recurrenceDays: null,
+    source: { kind: "group", groupId: 5 },
+    ...overrides,
+  };
+}
+
 function group(overrides: Partial<ActivityGroupResponse> = {}): ActivityGroupResponse {
   return { id: 1, name: "Games", ...overrides };
 }
@@ -99,6 +118,7 @@ beforeEach(() => {
   upsertNotificationPolicy.mockReset().mockResolvedValue(policy());
   deleteNotificationPolicy.mockReset().mockResolvedValue();
   listBudgets.mockReset().mockResolvedValue([]);
+  listResolvedBudgets.mockReset().mockResolvedValue([]);
   listActivities.mockReset().mockResolvedValue([]);
   listActivityGroups.mockReset().mockResolvedValue([]);
   vi.spyOn(globalThis, "confirm").mockReturnValue(true);
@@ -404,6 +424,99 @@ describe("NotificationsView", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Save cadence" }));
 
     expect(upsertNotificationPolicy).toHaveBeenCalledWith(1, { cadenceOverrides: null });
+  });
+
+  it("offers an inherited-only group budget as an '(inherited)'-marked, pickable option (#403)", async () => {
+    // The user owns no group:2 budget, but inherits one via a UserGroup.
+    listBudgets.mockResolvedValue([]);
+    listResolvedBudgets.mockResolvedValue([
+      resolvedBudget({ scope: "group", targetId: 2, source: { kind: "group", groupId: 5 } }),
+    ]);
+    listActivityGroups.mockResolvedValue([group({ id: 2, name: "Games" })]);
+    upsertNotificationPolicy.mockResolvedValue(
+      policy({ cadenceOverrides: { "group:2": { warningMinutes: [5] } } }),
+    );
+
+    render(NotificationsView);
+    await selectUser();
+    await waitFor(() => expect(listResolvedBudgets).toHaveBeenCalledWith(1));
+    await fireEvent.click(await screen.findByRole("button", { name: "Add override" }));
+
+    // The inherited group budget surfaces, labelled and flagged as inherited.
+    const option = await screen.findByRole("option", { name: "Group — Games (inherited)" });
+    expect(option).toBeInTheDocument();
+
+    // Picking it still keys/saves as the plain "group:<id>" grammar (no marker leaks).
+    await fireEvent.change(screen.getByLabelText("Budget"), { target: { value: "group:2" } });
+    await fireEvent.input(screen.getByLabelText("Warning minutes"), { target: { value: "5" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Save cadence" }));
+
+    expect(upsertNotificationPolicy).toHaveBeenCalledWith(1, {
+      cadenceOverrides: { "group:2": { warningMinutes: [5] } },
+    });
+  });
+
+  it("marks an inherited activity-scoped group budget as '(inherited)' too (#403)", async () => {
+    // A UserGroup can carry an activity-scoped budget; the same inherited
+    // marking applies, keyed by "activity:<id>".
+    listBudgets.mockResolvedValue([]);
+    listResolvedBudgets.mockResolvedValue([
+      resolvedBudget({ scope: "activity", targetId: 3, source: { kind: "group", groupId: 5 } }),
+    ]);
+    listActivities.mockResolvedValue([activity({ id: 3, matcher: "firefox" })]);
+
+    render(NotificationsView);
+    await selectUser();
+    await fireEvent.click(await screen.findByRole("button", { name: "Add override" }));
+
+    expect(
+      await screen.findByRole("option", { name: "Activity — firefox (inherited)" }),
+    ).toBeInTheDocument();
+  });
+
+  it("offers a budget the user both owns and inherits once, unmarked (own wins) (#403)", async () => {
+    listBudgets.mockResolvedValue([budget({ id: 1, scope: "group", targetId: 2 })]);
+    listResolvedBudgets.mockResolvedValue([
+      // Same (scope, target) also carried as a group slot. In real server output
+      // the resolver's own-wins precedence would return this target as a
+      // `source.kind: "user"` slot, so `inheritedKeys` wouldn't contain it; this
+      // fixture forces the group slot to exercise the client's defensive
+      // `!ownKeys.has(key)` guard directly (belt-and-braces if the server ever
+      // emits both).
+      resolvedBudget({ scope: "group", targetId: 2, source: { kind: "group", groupId: 5 } }),
+    ]);
+    listActivityGroups.mockResolvedValue([group({ id: 2, name: "Games" })]);
+
+    render(NotificationsView);
+    await selectUser();
+    await fireEvent.click(await screen.findByRole("button", { name: "Add override" }));
+
+    // Offered once, without the "(inherited)" suffix (the own budget wins).
+    expect(await screen.findByRole("option", { name: "Group — Games" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("option", { name: "Group — Games (inherited)" }),
+    ).not.toBeInTheDocument();
+    const groupOptions = screen
+      .getAllByRole("option")
+      .filter((option) => (option as HTMLOptionElement).value === "group:2");
+    expect(groupOptions).toHaveLength(1);
+  });
+
+  it("keeps the editor usable when the resolved-budgets load fails (best-effort) (#403)", async () => {
+    getNotificationPolicy.mockResolvedValue(
+      policy({ cadenceOverrides: { "activity:7": { warningMinutes: [10] } } }),
+    );
+    listResolvedBudgets.mockRejectedValue(new ApiError(500, "server_error", "boom"));
+
+    render(NotificationsView);
+    await selectUser();
+
+    // A resolved-budgets failure degrades the picker exactly like an own-budget
+    // failure: Overall plus the hydrated stored key stay selectable.
+    const picker = (await screen.findByLabelText("Budget")) as HTMLSelectElement;
+    expect(picker.value).toBe("activity:7");
+    expect(screen.getByRole("option", { name: "Overall screen time" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Activity 7" })).toBeInTheDocument();
   });
 
   it("clears all overrides with an explicit null via Clear all", async () => {
