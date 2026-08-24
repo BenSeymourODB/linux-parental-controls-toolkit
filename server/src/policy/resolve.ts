@@ -205,6 +205,25 @@ function isAlwaysOn(rule: ScheduleRule): boolean {
 }
 
 /**
+ * The **date gate** alone (ADR 0005): does instant `at` fall inside the rule's
+ * `[effective_from, effective_to)` calendar range, with either bound open?
+ *
+ * The bounds are stored as instants fixed at local-day boundaries (ADR 0005),
+ * so this is a pure instant comparison — timezone-independent. Split out from
+ * {@link isRuleActiveAt} so a caller that must apply *only* the date gate — and
+ * evaluate the recurrence part elsewhere — shares the exact same semantics.
+ * e2guardian date-scoped denies (#385) are the motivating case: the daemon
+ * evaluates the recurrence window itself via its native `#time:` tag, so the
+ * renderer needs the calendar-range gate without the recurrence gate.
+ */
+export function withinEffectiveDateRange(rule: ScheduleRule, at: Date): boolean {
+  const t = at.getTime();
+  if (rule.effectiveFrom !== null && t < rule.effectiveFrom.getTime()) return false;
+  if (rule.effectiveTo !== null && t >= rule.effectiveTo.getTime()) return false;
+  return true;
+}
+
+/**
  * Is `rule` active at instant `T` in `tz`? Implements the predicate ADR 0005
  * defines (the one {@link import("./schedule-precedence.js")} leaves
  * injectable): the **date gate** (`effective_from ≤ T < effective_to`, either
@@ -217,11 +236,8 @@ function isAlwaysOn(rule: ScheduleRule): boolean {
  * but at day granularity for the recurrence window it projects.
  */
 export function isRuleActiveAt(rule: ScheduleRule, at: Date, tz: string): boolean {
-  const t = at.getTime();
-
   // Date gate: [effective_from, effective_to), either bound open.
-  if (rule.effectiveFrom !== null && t < rule.effectiveFrom.getTime()) return false;
-  if (rule.effectiveTo !== null && t >= rule.effectiveTo.getTime()) return false;
+  if (!withinEffectiveDateRange(rule, at)) return false;
 
   if (isAlwaysOn(rule)) return true;
 

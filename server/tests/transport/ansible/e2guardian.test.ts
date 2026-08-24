@@ -111,7 +111,7 @@ describe("buildE2guardianPlan", () => {
     db.$client.close();
   });
 
-  it("ignores allow/extend rules and date-scoped denies (no static or windowed filter)", () => {
+  it("ignores allow/extend rules and out-of-range date-scoped denies (no static or windowed filter)", () => {
     const db = testDb();
     const clientId = createClient(db, { hostname: "mint-01", sshUser: "pct-agent" }).id;
     const alice = addLinkedUser(db, clientId, "Alice", "alice", 1001);
@@ -125,8 +125,9 @@ describe("buildE2guardianPlan", () => {
       targetId: tiktok.id,
       action: "allow",
     });
-    // deny but date-scoped → e2guardian's #time: can't express a calendar range,
-    // so it is neither always-on nor a windowed deny here (deferred to #142).
+    // A date-scoped deny whose calendar range has not opened yet: resolved
+    // against an instant before `effective_from`, so it is inactive and renders
+    // no filter (#385). The active case is covered below.
     createSchedule(db, {
       userId: alice,
       targetKind: "activity",
@@ -135,8 +136,69 @@ describe("buildE2guardianPlan", () => {
       effectiveFrom: new Date("2026-01-01T00:00:00Z"),
     });
 
-    const plan = buildE2guardianPlan(db, clientId);
+    const plan = buildE2guardianPlan(db, clientId, { at: new Date("2025-12-01T00:00:00Z") });
     expect(plan.users).toEqual([]);
+    db.$client.close();
+  });
+
+  it("renders a date-scoped non-recurring deny as a static banned site while active (#385)", () => {
+    const db = testDb();
+    const clientId = createClient(db, { hostname: "mint-01", sshUser: "pct-agent" }).id;
+    const alice = addLinkedUser(db, clientId, "Alice", "alice", 1001);
+    const social = createActivity(db, { kind: "domain", matcher: "social.example" });
+    // "No social media until 2026-09-01" — a plain calendar range, no recurrence.
+    createSchedule(db, {
+      userId: alice,
+      targetKind: "activity",
+      targetId: social.id,
+      action: "deny",
+      effectiveTo: new Date("2026-09-01T00:00:00Z"),
+    });
+
+    const plan = buildE2guardianPlan(db, clientId, { at: new Date("2026-06-15T12:00:00Z") });
+    expect(plan.users[0]?.bannedSites).toEqual(["social.example"]);
+    expect(plan.users[0]?.windows).toEqual([]);
+    db.$client.close();
+  });
+
+  it("skips a date-scoped non-recurring deny before its range opens (#385)", () => {
+    const db = testDb();
+    const clientId = createClient(db, { hostname: "mint-01", sshUser: "pct-agent" }).id;
+    const alice = addLinkedUser(db, clientId, "Alice", "alice", 1001);
+    const social = createActivity(db, { kind: "domain", matcher: "social.example" });
+    createSchedule(db, {
+      userId: alice,
+      targetKind: "activity",
+      targetId: social.id,
+      action: "deny",
+      effectiveFrom: new Date("2026-09-01T00:00:00Z"),
+    });
+
+    // `at` before effective_from → not yet active.
+    const plan = buildE2guardianPlan(db, clientId, { at: new Date("2026-06-15T12:00:00Z") });
+    expect(plan.users).toEqual([]);
+    db.$client.close();
+  });
+
+  it("treats effective_to as exclusive — a deny is inactive exactly at its end instant (#385)", () => {
+    const db = testDb();
+    const clientId = createClient(db, { hostname: "mint-01", sshUser: "pct-agent" }).id;
+    const alice = addLinkedUser(db, clientId, "Alice", "alice", 1001);
+    const social = createActivity(db, { kind: "domain", matcher: "social.example" });
+    const end = new Date("2026-09-01T00:00:00Z");
+    createSchedule(db, {
+      userId: alice,
+      targetKind: "activity",
+      targetId: social.id,
+      action: "deny",
+      effectiveTo: end,
+    });
+
+    // Gate is [from, to): at === effective_to is already outside the range.
+    expect(buildE2guardianPlan(db, clientId, { at: end }).users).toEqual([]);
+    // One millisecond earlier is still inside.
+    const justBefore = buildE2guardianPlan(db, clientId, { at: new Date(end.getTime() - 1) });
+    expect(justBefore.users[0]?.bannedSites).toEqual(["social.example"]);
     db.$client.close();
   });
 
@@ -484,12 +546,14 @@ describe("buildE2guardianPlan — recurring time-window denies (#216)", () => {
     db.$client.close();
   });
 
-  it("skips a date-scoped recurring deny (deferred to #142)", () => {
+  it("renders a date-scoped recurring deny as a #time: window while its range is active (#385)", () => {
     const db = testDb();
     const clientId = createClient(db, { hostname: "mint-01", sshUser: "pct-agent" }).id;
     const alice = addLinkedUser(db, clientId, "Alice", "alice", 1001);
     const reddit = createActivity(db, { kind: "domain", matcher: "reddit.com" });
-    // Recurrence set AND date-scoped → excluded (e2guardian #time: can't express a date range).
+    // Recurrence set AND date-scoped: e2guardian's #time: expresses the weekday/
+    // time-of-day part, and the dashboard gates the calendar range by rendering
+    // the window only while `at` is inside [effective_from, effective_to).
     createSchedule(db, {
       userId: alice,
       targetKind: "activity",
@@ -499,9 +563,73 @@ describe("buildE2guardianPlan — recurring time-window denies (#216)", () => {
       recurrenceStartMinute: 16 * 60,
       recurrenceEndMinute: 18 * 60,
       effectiveFrom: new Date("2026-01-01T00:00:00Z"),
+      effectiveTo: new Date("2026-12-31T00:00:00Z"),
     });
 
-    expect(buildE2guardianPlan(db, clientId).users).toEqual([]);
+    const active = buildE2guardianPlan(db, clientId, { at: new Date("2026-06-15T12:00:00Z") });
+    expect(active.users[0]?.windows).toEqual([
+      { timeTag: "16 0 18 0 12345", sites: ["reddit.com"] },
+    ]);
+    expect(active.users[0]?.bannedSites).toEqual([]);
+    db.$client.close();
+  });
+
+  it("skips a date-scoped recurring deny once its range has closed (#385)", () => {
+    const db = testDb();
+    const clientId = createClient(db, { hostname: "mint-01", sshUser: "pct-agent" }).id;
+    const alice = addLinkedUser(db, clientId, "Alice", "alice", 1001);
+    const reddit = createActivity(db, { kind: "domain", matcher: "reddit.com" });
+    createSchedule(db, {
+      userId: alice,
+      targetKind: "activity",
+      targetId: reddit.id,
+      action: "deny",
+      recurrenceDays: 0b0011111,
+      recurrenceStartMinute: 16 * 60,
+      recurrenceEndMinute: 18 * 60,
+      effectiveFrom: new Date("2026-01-01T00:00:00Z"),
+      effectiveTo: new Date("2026-12-31T00:00:00Z"),
+    });
+
+    // `at` at/after effective_to → the range is closed (gate is [from, to)).
+    const closed = buildE2guardianPlan(db, clientId, { at: new Date("2027-01-01T00:00:00Z") });
+    expect(closed.users).toEqual([]);
+    db.$client.close();
+  });
+
+  it("collapses a date-scoped recurring deny into an identically-tagged recurring window (#385)", () => {
+    const db = testDb();
+    const clientId = createClient(db, { hostname: "mint-01", sshUser: "pct-agent" }).id;
+    const alice = addLinkedUser(db, clientId, "Alice", "alice", 1001);
+    const reddit = createActivity(db, { kind: "domain", matcher: "reddit.com" });
+    const tumblr = createActivity(db, { kind: "domain", matcher: "tumblr.com" });
+    // A plain recurring deny (always emitted) …
+    createSchedule(db, {
+      userId: alice,
+      targetKind: "activity",
+      targetId: reddit.id,
+      action: "deny",
+      recurrenceDays: 0b0011111,
+      recurrenceStartMinute: 16 * 60,
+      recurrenceEndMinute: 18 * 60,
+    });
+    // … and a date-scoped recurring deny sharing the same #time: tag, active now.
+    createSchedule(db, {
+      userId: alice,
+      targetKind: "activity",
+      targetId: tumblr.id,
+      action: "deny",
+      recurrenceDays: 0b0011111,
+      recurrenceStartMinute: 16 * 60,
+      recurrenceEndMinute: 18 * 60,
+      effectiveFrom: new Date("2026-01-01T00:00:00Z"),
+      effectiveTo: new Date("2026-12-31T00:00:00Z"),
+    });
+
+    const plan = buildE2guardianPlan(db, clientId, { at: new Date("2026-06-15T12:00:00Z") });
+    expect(plan.users[0]?.windows).toEqual([
+      { timeTag: "16 0 18 0 12345", sites: ["reddit.com", "tumblr.com"] },
+    ]);
     db.$client.close();
   });
 

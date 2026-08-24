@@ -24,6 +24,7 @@ export {
   type ActivityQuota,
   type EffectivePolicy,
   type EffectivePolicyInput,
+  withinEffectiveDateRange,
   isRuleActiveAt,
   ruleActiveAt,
   effectivePolicy,
