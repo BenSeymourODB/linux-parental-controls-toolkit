@@ -66,6 +66,12 @@ export function registerTimekprMirror(app: FastifyInstance, settings: Settings):
   // defence-in-depth containment check below.
   const dataDirPrefix = resolve(dataDir) + sep;
 
+  // Both routes read the mirror state / stat the file synchronously per request
+  // rather than caching at registration like install-script.ts: the refresh job
+  // (#392) replaces the cached .deb under dataDir at runtime, so a
+  // registration-time snapshot would go stale. Enrol + install traffic on a LAN
+  // is low-volume, so the per-request syscall is a fine trade for correctness.
+
   app.get(`${TIMEKPR_MIRROR_APT_PATH}/manifest.json`, async (_request, reply) => {
     const state = readMirrorState(stateConfig);
     if (state === null) {
@@ -92,6 +98,10 @@ export function registerTimekprMirror(app: FastifyInstance, settings: Settings):
       const filePath = join(dataDir, filename);
       // The pattern already forbids separators and a leading dot, so the join
       // cannot escape dataDir; assert containment anyway (defence in depth).
+      // Note this is a *lexical* check — it does not resolve symlinks, so a
+      // symlink planted inside dataDir could still point outside. That is out of
+      // scope: only the server process writes /data (no client or supervised
+      // user can), and CLAUDE.md caps client-side hardening here.
       if (!resolve(filePath).startsWith(dataDirPrefix)) {
         return reply.code(404).type("text/plain").send("not found");
       }

@@ -116,9 +116,11 @@ describe("GET /apt/timekpr/* (managed mode, cold start — nothing cached)", () 
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("404s the manifest before the first fetch", async () => {
+  it("404s the manifest before the first fetch, with a JSON body", async () => {
     const res = await app.inject({ method: "GET", url: "/apt/timekpr/manifest.json" });
     expect(res.statusCode).toBe(404);
+    expect(res.headers["content-type"]).toContain("application/json");
+    expect(res.json()).toEqual({ error: "no timekpr package is cached yet" });
   });
 
   it("404s a well-formed .deb name that is not cached yet", async () => {
