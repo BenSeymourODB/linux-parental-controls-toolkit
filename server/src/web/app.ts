@@ -28,6 +28,7 @@ import { type TimekprMirrorRefreshHandle } from "../transport/timekpr-mirror/ind
 import { buildAppServices } from "./app-services.js";
 import { registerFrontend } from "./frontend.js";
 import { registerInstallScript } from "./install-script.js";
+import { registerTimekprMirror } from "./timekpr-mirror.js";
 import { REQUEST_ID_HEADER, buildLoggerOptions, genRequestId, type LogStream } from "./logger.js";
 
 declare module "fastify" {
@@ -248,6 +249,12 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   // Serve the client install script at /install-client.sh. Skipped (with a
   // warning) when the bundled file is absent, so other routes are unaffected.
   registerInstallScript(app, settings);
+
+  // Serve the managed timekpr-next mirror at /apt/timekpr/* (#393). A no-op
+  // outside `managed` mode, so disabled/external deployments expose no mirror
+  // surface; in managed mode it streams whatever `.deb` the refresh job (#392)
+  // has cached under the data volume.
+  registerTimekprMirror(app, settings);
 
   // Serve the prerendered SvelteKit build at /admin and /app (#40). Skipped
   // (with a warning) when the build directory is absent, so /, /healthz, and

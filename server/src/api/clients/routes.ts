@@ -31,6 +31,7 @@ import {
   type EnrolResponse,
   type EnrolmentTokenResponse,
 } from "./dtos.js";
+import { resolveTimekprMirrorAdvertisement } from "./mirror-advertisement.js";
 import { enrolClient, mintEnrolmentToken } from "./service.js";
 
 /**
@@ -112,6 +113,10 @@ export function registerClientEnrolmentRoutes(scope: FastifyInstance, settings: 
         const result = enrolClient(scope.db, token, request.body, {
           sshPublicKeyPath: settings.sshPublicKeyPath,
           log: request.log,
+          // Tell the client where/how to get timekpr-next (#393): the
+          // server-configured mirror mode + the version currently cached. Read
+          // per request so a just-completed refresh is reflected immediately.
+          timekprMirror: resolveTimekprMirrorAdvertisement(settings.timekprMirror),
           // `request.ip` is the direct socket peer unless `trustProxy` is set
           // (#235), in which case Fastify derives the real client IP from a
           // trusted `X-Forwarded-For` — the documented reverse-proxy posture, so

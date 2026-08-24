@@ -16,7 +16,11 @@ import * as enrolmentRepo from "../../policy/enrolment.js";
 import * as repo from "../../policy/repository.js";
 import type { ComponentVersions } from "../../policy/schema.js";
 import { ApiError } from "../errors.js";
-import type { EnrolClientRequest, MintEnrolmentTokenRequest } from "./dtos.js";
+import type {
+  EnrolClientRequest,
+  MintEnrolmentTokenRequest,
+  TimekprMirrorAdvertisement,
+} from "./dtos.js";
 import { loadServerSshPublicKey } from "./ssh-identity.js";
 
 /** What {@link mintEnrolmentToken} hands back to the route (token shown once). */
@@ -40,6 +44,8 @@ export interface EnrolServiceResult {
   componentVersions: ComponentVersions | null;
   /** The client's OS family (#229) — `linux` today; the enrol request never sets it. */
   platform: Platform;
+  /** Where/how to get `timekpr-next` — the advertised mirror coordinates (#393). */
+  timekprMirror: TimekprMirrorAdvertisement;
 }
 
 /**
@@ -109,6 +115,12 @@ export interface EnrolOptions {
    * when the route couldn't determine one (e.g. a synthetic/injected call).
    */
   sourceIp?: string | null;
+  /**
+   * The `timekpr-next` mirror advertisement to return (#393), resolved by the
+   * route from `settings.timekprMirror` + the mirror's current on-disk state.
+   * Threaded in (rather than read here) so the service stays disk-free.
+   */
+  timekprMirror: TimekprMirrorAdvertisement;
 }
 
 /**
@@ -243,6 +255,7 @@ export function enrolClient(
     agentVersion: result.client.agentVersion,
     componentVersions: result.client.componentVersions,
     platform: result.client.platform,
+    timekprMirror: options.timekprMirror,
   };
 }
 

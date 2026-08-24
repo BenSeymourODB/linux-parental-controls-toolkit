@@ -20,6 +20,7 @@ export {
 } from "./release.js";
 export {
   VERSION_SENTINEL,
+  readVersionSentinel,
   refreshTimekprMirror,
   TimekprMirrorDownloadError,
   TimekprMirrorInvalidPackageError,
@@ -28,6 +29,12 @@ export {
   type RefreshDeps,
   type RefreshResult,
 } from "./refresh.js";
+export {
+  readMirrorState,
+  type MirrorState,
+  type MirrorStateConfig,
+  type MirrorStateDeps,
+} from "./state.js";
 export {
   DEFAULT_REFRESH_BACKOFF,
   DEFAULT_REFRESH_PATTERN,

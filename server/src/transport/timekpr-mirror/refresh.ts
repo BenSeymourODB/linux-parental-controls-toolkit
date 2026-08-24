@@ -136,7 +136,13 @@ interface ResolvedDeps {
   retryBaseMs: number;
 }
 
-function defaultReadSentinel(path: string): string | null {
+/**
+ * Read the version sentinel #392 writes beside the mirrored `.deb`, or `null`
+ * when it is absent/unreadable. Shared with the serving layer (#393,
+ * `state.ts`) so both halves agree on the single source of truth for "what
+ * version is currently cached".
+ */
+export function readVersionSentinel(path: string): string | null {
   try {
     return readFileSync(path, "utf8").trim();
   } catch {
@@ -148,7 +154,7 @@ function resolveDeps(deps: RefreshDeps): ResolvedDeps {
   return {
     fetch: deps.fetch ?? ((input, init) => fetch(input, init)),
     fileExists: deps.fileExists ?? existsSync,
-    readSentinel: deps.readSentinel ?? defaultReadSentinel,
+    readSentinel: deps.readSentinel ?? readVersionSentinel,
     makeDir: deps.makeDir ?? ((path) => void mkdirSync(path, { recursive: true })),
     writeDeb: deps.writeDeb ?? ((path, contents) => writeFileSync(path, contents)),
     writeSentinel: deps.writeSentinel ?? ((path, value) => writeFileSync(path, `${value}\n`)),
