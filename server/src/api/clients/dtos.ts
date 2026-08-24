@@ -162,6 +162,40 @@ export const enrolClientSchema = z.object({
   reportedIps: z.array(reportedIpSchema).max(16).optional(),
 });
 
+/**
+ * The managed `timekpr-next` mirror coordinates advertised to a client at enrol
+ * (#393, epic #389), mirroring the server's own `disabled | external | managed`
+ * config trichotomy so the client knows where to get the package without a
+ * `launchpad.net` round-trip (ADR 0011). The client baseline installer (#394)
+ * consumes this to point apt at the dashboard.
+ */
+export const timekprMirrorAdvertisementSchema = z.discriminatedUnion("mode", [
+  /** No mirror: the client installs from the distro repo (the PPA stays opt-in). */
+  z.object({ mode: z.literal("disabled") }),
+  /** The homelab hosts its own apt repo; the client points apt straight at `url`. */
+  z.object({ mode: z.literal("external"), url: z.url() }),
+  z.object({
+    mode: z.literal("managed"),
+    /**
+     * The stable LAN URL path root the dashboard serves the mirror at, relative
+     * to the client's `--server-url` (e.g. `/apt/timekpr`). Advertised rather
+     * than hardcoded on the client so the serving path stays server-owned.
+     */
+    aptPath: z.string().min(1),
+    /** The upstream package/channel served (`timekpr-next` / `timekpr-next-beta`). */
+    package: z.string().min(1),
+    /**
+     * The version currently cached and served, or `null` before the refresh job
+     * has fetched one — in which case the client falls back to the distro/PPA
+     * path (#394) rather than waiting on the mirror.
+     */
+    version: z.string().min(1).nullable(),
+    /** The `.deb` filename to download under `aptPath`, or `null` (see `version`). */
+    debFilename: z.string().min(1).nullable(),
+  }),
+]);
+export type TimekprMirrorAdvertisement = z.infer<typeof timekprMirrorAdvertisementSchema>;
+
 export const enrolResponseSchema = z.object({
   clientId: z.number().int(),
   hostname: z.string(),
@@ -187,6 +221,12 @@ export const enrolResponseSchema = z.object({
    * not set it. Surfaced so the install script and admin UI agree on the value.
    */
   platform: platformSchema,
+  /**
+   * Where and how to get `timekpr-next` (#393): the server-configured mirror
+   * mode + coordinates, so the client can install without a Launchpad
+   * round-trip. `{ mode: "disabled" }` on a default deployment.
+   */
+  timekprMirror: timekprMirrorAdvertisementSchema,
 });
 
 export type EnrolClientRequest = z.infer<typeof enrolClientSchema>;

@@ -5,7 +5,7 @@
  * userId, missing/invalid/expired/used bearer, user-set mismatch, duplicate
  * hostname) — per docs/testing.md → "HTTP routes".
  */
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ENROL_RATE_LIMIT_MAX_ATTEMPTS } from "../../src/api/clients/routes.js";
 import { hashToken } from "../../src/auth/secret-token.js";
 import { SESSION_COOKIE } from "../../src/auth/session.js";
+import { VERSION_SENTINEL } from "../../src/transport/timekpr-mirror/index.js";
 import { loadSettings, type Settings } from "../../src/config.js";
 import { clients, enrolmentTokens } from "../../src/policy/schema.js";
 import { buildTestApp, type TestApp } from "../helpers/app.js";
@@ -194,6 +195,46 @@ describe("client enrolment routes", () => {
     expect(links.json()).toEqual([
       { userId, clientId: body.clientId, osUsername: "alice", osUserRef: "1000" },
     ]);
+  });
+
+  it("advertises a disabled timekpr mirror by default (#393)", async () => {
+    const userId = await createUser("Alice");
+    const token = await mintFor(userId, "alice");
+
+    const res = await enrol(token, {
+      hostname: "mint-01",
+      sshUser: "pct-agent",
+      supervisedUsers: [{ osUsername: "alice", osUserRef: "1000" }],
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().timekprMirror).toEqual({ mode: "disabled" });
+  });
+
+  it("advertises the managed mirror coordinates + cached version at enrol (#393)", async () => {
+    // Restart the app in managed mode over a data dir that already holds a
+    // cached .deb + version sentinel (as the refresh job #392 would leave it).
+    await harness.close();
+    const mirrorDir = join(tmpDir, "apt-timekpr");
+    mkdirSync(mirrorDir, { recursive: true });
+    writeFileSync(join(mirrorDir, "timekpr-next_0.5.5_all.deb"), "!<arch>\npayload");
+    writeFileSync(join(mirrorDir, VERSION_SENTINEL), "0.5.5\n");
+    await start(settingsWith({ PCT_TIMEKPR_MIRROR: "managed", PCT_TIMEKPR_MIRROR_DIR: mirrorDir }));
+
+    const userId = await createUser("Alice");
+    const token = await mintFor(userId, "alice");
+    const res = await enrol(token, {
+      hostname: "mint-01",
+      sshUser: "pct-agent",
+      supervisedUsers: [{ osUsername: "alice", osUserRef: "1000" }],
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().timekprMirror).toEqual({
+      mode: "managed",
+      aptPath: "/apt/timekpr",
+      package: "timekpr-next",
+      version: "0.5.5",
+      debFilename: "timekpr-next_0.5.5_all.deb",
+    });
   });
 
   it("records reported component versions at enrolment and echoes them back (#164)", async () => {
