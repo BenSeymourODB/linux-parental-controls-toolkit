@@ -5,6 +5,13 @@
  * License boundary: none touched.
  */
 export { registerIntegrationRoutes } from "./routes.js";
+export { registerIntegrationGrantRoutes } from "./grants-routes.js";
+export {
+  createGrantSchema,
+  grantResponseSchema,
+  type CreateGrantRequest,
+  type GrantResponse,
+} from "./grant-dtos.js";
 export {
   createIntegrationTokenSchema,
   integrationScopeSchema,
