@@ -60,10 +60,14 @@ respect rather than assume away:
   `server/src/events/protocol.ts`, and after `accept` processes only WebSocket
   `pong` heartbeats. Server→client frames are a zod discriminated union on
   `type` (`server/src/events/taxonomy.ts`: `grant.applied`, `policy.changed`,
-  `enforce.force_close`, `enforce.session_lock`, `lockout.cleared`), each gated
-  by an exhaustive `capabilityForEvent` switch (`server/src/events/
-  capabilities.ts`, advertised set `CLIENT_CAPABILITIES`). A client-reported
-  lock is a **new frame in a new direction**.
+  `enforce.force_close`, `enforce.session_lock`, `lockout.cleared`), routed
+  through an exhaustive `capabilityForEvent` switch (`server/src/events/
+  capabilities.ts`) that gates them **where applicable** — the `enforce.*`
+  frames are capability-gated, while `grant.applied` / `policy.changed` are
+  baseline (return `null`). `CLIENT_CAPABILITIES` is the server-side
+  vocabulary of gate-able capability strings; a client advertises its own
+  subset in the `hello`. A client-reported lock is a **new frame in a new
+  direction**.
 - **The force-close trigger has no cancel handle.** `ForceCloseTrigger.enforce`
   (`server/src/enforcement/force-close.ts`) schedules a kill after
   `graceSeconds` and de-dups via a `#pending` set that is cleared *only when the
@@ -186,14 +190,26 @@ means:
   these frame types (`socket.on`, not just the one-shot `hello`), validating
   each and rejecting unknown/malformed inbound frames without tearing down the
   stream.
-- A new capability string (e.g. **`pause_on_lock`**) added to
+- A new capability string — **`session_state`** — added to
   `CLIENT_CAPABILITIES` (`server/src/events/capabilities.ts`). Advertising it in
-  the `hello` tells the server both that the client *will report* lock/unlock
-  and that pause semantics apply to it.
+  the `hello` tells the server the client *will report* session lock/unlock.
+  (This is the **wire capability**, deliberately named apart from the per-user
+  `pause_on_lock` **policy knob** of decision 6 — the capability says "this
+  client can report locks"; the knob says "this user's locks should pause the
+  budget". Distinct surfaces, distinct names, so #316 and the schema work in
+  #317 don't conflate them.)
 
 Per [ADR 0007 §4](0007-event-stream-version-compatibility.md) this is
-**additive**: a new capability-gated frame is not a breaking change and **does
-not bump `eventProtocol`**. The "upgrade the server first" rule
+**additive**: it costs no `eventProtocol` bump. One extension beyond §4 is
+explicit here: §4's capability *gate* is defined for **outbound** frames (the
+server withholds a server→client frame type a client didn't advertise). This
+ADR **extends the same capability concept to authorize a new inbound
+(client→server) frame** — the `session_state` capability tells the server to
+*accept and act on* `session.*` frames from that client. The additive /
+no-bump conclusion still holds by §1/§4 (a new capability + a frame in a schema
+separate from `serverEventSchema` is not an envelope break); #316 should not
+expect the existing outbound `capabilityForEvent` gate to cover the inbound
+path. The "upgrade the server first" rule
 ([ADR 0007 §3](0007-event-stream-version-compatibility.md)) guarantees the
 server understands the inbound frame before any client is capable of sending it;
 an un-upgraded client simply never advertises the capability and never sends it.
@@ -215,9 +231,11 @@ device sleep), the open interval is closed out by the first of:
 
 - **`max_pause_minutes`** (decision 6) — the server auto-closes an open interval
   at `lockedAt + max_pause_minutes`.
-- **Bridge disconnect** — the stream's existing disconnect handling finalises
-  the client's open pause intervals (closed at last-seen), since a dropped
-  bridge means the lock can no longer be trusted to still hold.
+- **Bridge disconnect** — the pause ledger (#317) hooks into the stream's
+  existing disconnect handling (`stream.ts` `socket.on("close")`, which today
+  only unregisters + touches `last_seen`) to finalise the client's open pause
+  intervals (closed at last-seen), since a dropped bridge means the lock can no
+  longer be trusted to still hold.
 - **Reconcile on reconnect** — a fresh `hello` with no corresponding open lock
   closes any stale open interval at last-seen.
 
