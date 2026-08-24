@@ -386,8 +386,13 @@ and e2guardian evaluates the constraint itself at request time. This keeps
 enforcement purely *config-file + reload* — no extra scheduler to install or keep
 in sync, and no clock-drift race between a re-push and the window edge. e2guardian
 `#time:` expresses weekday + time-of-day only; calendar **date-scoped** denies
-(`effective_from`/`effective_to`) are not representable this way and ride with the
-date-scoped resolver work (#142).
+(`effective_from`/`effective_to`, #385) are not representable this way, so the
+dashboard resolves them against the push instant instead: a date-scoped deny is
+rendered into the filter group — as a static banned site if it has no recurrence,
+or as a `#time:` window if it does — only while its calendar range is active, and
+a periodic re-push re-evaluates the active set as ranges open and close. This
+stays *config-file + reload* (no client-side scheduler); the re-push cadence
+carries the one boundary-latency trade-off the native `#time:` path avoids.
 
 ## External integrations
 

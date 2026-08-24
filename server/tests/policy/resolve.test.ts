@@ -14,6 +14,7 @@ import {
   overallDailySecondsForWeekday,
   ruleActiveAt,
   selectBudgetsForWeekday,
+  withinEffectiveDateRange,
   type BudgetInput,
   type EffectivePolicyInput,
   type ExceptionInput,
@@ -71,6 +72,37 @@ function mkInput(overrides: Partial<EffectivePolicyInput> = {}): EffectivePolicy
     ...overrides,
   };
 }
+
+describe("withinEffectiveDateRange — the date gate alone", () => {
+  const at = new Date("2024-06-03T12:00:00Z");
+
+  it("an unscoped rule (both bounds null) is always in range", () => {
+    expect(withinEffectiveDateRange(mkRule(), at)).toBe(true);
+  });
+
+  it("is false before effective_from and true at/after it (inclusive lower bound)", () => {
+    const rule = mkRule({ effectiveFrom: at });
+    expect(withinEffectiveDateRange(rule, new Date(at.getTime() - 1))).toBe(false);
+    expect(withinEffectiveDateRange(rule, at)).toBe(true);
+  });
+
+  it("treats effective_to as an exclusive upper bound", () => {
+    const rule = mkRule({ effectiveTo: at });
+    expect(withinEffectiveDateRange(rule, new Date(at.getTime() - 1))).toBe(true);
+    expect(withinEffectiveDateRange(rule, at)).toBe(false);
+  });
+
+  it("ignores recurrence fields — it gates only on the calendar range", () => {
+    // A recurring window whose weekday/time would not match `at` is still
+    // within the (open) date range: the recurrence gate is a separate concern.
+    const rule = mkRule({
+      recurrenceDays: MONDAY,
+      recurrenceStartMinute: 0,
+      recurrenceEndMinute: 1,
+    });
+    expect(withinEffectiveDateRange(rule, at)).toBe(true);
+  });
+});
 
 describe("isRuleActiveAt — date gate", () => {
   const at = new Date("2024-06-03T12:00:00Z");
