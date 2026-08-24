@@ -11,7 +11,9 @@ import { describe, expect, it } from "vitest";
 import {
   effectivePolicy,
   isRuleActiveAt,
+  overallDailySecondsForWeekday,
   ruleActiveAt,
+  selectBudgetsForWeekday,
   type BudgetInput,
   type EffectivePolicyInput,
   type ExceptionInput,
@@ -686,5 +688,141 @@ describe("effectivePolicy — timezone & formatting", () => {
     );
     expect(result.date).toBe("2024-01-05");
     expect(result.tz).toBe("America/New_York");
+  });
+});
+
+// --- Weekday-varying budgets (#141, ADR 0013) ------------------------------
+
+/** Saturday + Sunday mask (bits 5 and 6). */
+const WEEKEND = (1 << 5) | (1 << 6); // 96
+/** Monday..Friday mask (bits 0..4). */
+const WEEKDAYS = 31;
+/** A Saturday, five days after the mkInput default Monday (2024-06-03). */
+const SATURDAY = { year: 2024, month: 6, day: 8 } as const;
+
+const uniformOverall: BudgetInput = {
+  scope: "overall",
+  targetId: null,
+  window: "daily",
+  secondsAllowed: 7200,
+};
+const weekendOverall: BudgetInput = {
+  scope: "overall",
+  targetId: null,
+  window: "daily",
+  secondsAllowed: 14400,
+  recurrenceDays: WEEKEND,
+};
+
+describe("selectBudgetsForWeekday", () => {
+  it("shadows the uniform row with a weekday-specific row on a covered day", () => {
+    // Saturday (ISO weekday 6) is in the WEEKEND mask.
+    expect(selectBudgetsForWeekday([uniformOverall, weekendOverall], 6)).toEqual([weekendOverall]);
+  });
+
+  it("falls back to the uniform row on an uncovered day", () => {
+    // Monday (1) is not in the WEEKEND mask.
+    expect(selectBudgetsForWeekday([uniformOverall, weekendOverall], 1)).toEqual([uniformOverall]);
+  });
+
+  it("drops a weekday-specific row with no uniform fallback on an uncovered day", () => {
+    expect(selectBudgetsForWeekday([weekendOverall], 1)).toEqual([]);
+  });
+
+  it("leaves a uniform-only list unchanged on every weekday (pre-#141 behaviour)", () => {
+    expect(selectBudgetsForWeekday([uniformOverall], 1)).toEqual([uniformOverall]);
+    expect(selectBudgetsForWeekday([uniformOverall], 6)).toEqual([uniformOverall]);
+  });
+
+  it("resolves each (scope, window, target) slot independently", () => {
+    const weekdayActivity: BudgetInput = {
+      scope: "activity",
+      targetId: 2,
+      window: "daily",
+      secondsAllowed: 3600,
+      recurrenceDays: WEEKDAYS,
+    };
+    // On Monday the overall weekend row drops (no uniform), the weekday activity stays.
+    expect(selectBudgetsForWeekday([weekendOverall, weekdayActivity], 1)).toEqual([
+      weekdayActivity,
+    ]);
+  });
+
+  it("keeps every weekday-specific row that covers the day for same-slot summing", () => {
+    const second: BudgetInput = { ...weekendOverall, secondsAllowed: 600 };
+    expect(selectBudgetsForWeekday([weekendOverall, second], 6)).toEqual([weekendOverall, second]);
+  });
+});
+
+describe("effectivePolicy — weekday-varying budgets", () => {
+  it("applies the weekday-specific overall budget on a covered day", () => {
+    const result = effectivePolicy(
+      mkInput({ date: SATURDAY, budgets: [uniformOverall, weekendOverall] }),
+    );
+    expect(result.overallSeconds).toBe(14400);
+  });
+
+  it("falls back to the uniform overall budget on an uncovered day", () => {
+    // mkInput default date is a Monday.
+    const result = effectivePolicy(mkInput({ budgets: [uniformOverall, weekendOverall] }));
+    expect(result.overallSeconds).toBe(7200);
+  });
+
+  it("yields no daily limit when only a non-covering weekday budget exists", () => {
+    const result = effectivePolicy(mkInput({ budgets: [weekendOverall] })); // Monday
+    expect(result.overallSeconds).toBeNull();
+  });
+
+  it("varies a per-activity quota by weekday", () => {
+    const weekdayActivity: BudgetInput = {
+      scope: "activity",
+      targetId: 2,
+      window: "daily",
+      secondsAllowed: 3600,
+      recurrenceDays: WEEKDAYS,
+    };
+    const weekendActivity: BudgetInput = {
+      scope: "activity",
+      targetId: 2,
+      window: "daily",
+      secondsAllowed: 10800,
+      recurrenceDays: WEEKEND,
+    };
+    const budgets = [weekdayActivity, weekendActivity];
+    expect(effectivePolicy(mkInput({ budgets })).perActivitySeconds).toEqual([
+      { scope: "activity", targetId: 2, seconds: 3600 },
+    ]);
+    expect(effectivePolicy(mkInput({ date: SATURDAY, budgets })).perActivitySeconds).toEqual([
+      { scope: "activity", targetId: 2, seconds: 10800 },
+    ]);
+  });
+
+  it("adds an active grant on top of the weekday-resolved baseline", () => {
+    const grant: GrantInput = {
+      scope: "overall",
+      targetId: null,
+      secondsGranted: 1800,
+      grantedAt: new Date("2024-06-07T00:00:00Z"),
+      expiresAt: new Date("2024-06-10T00:00:00Z"),
+      revokedAt: null,
+    };
+    const result = effectivePolicy(
+      mkInput({ date: SATURDAY, budgets: [uniformOverall, weekendOverall], grants: [grant] }),
+    );
+    expect(result.overallSeconds).toBe(14400 + 1800);
+  });
+});
+
+describe("overallDailySecondsForWeekday", () => {
+  it("returns the covered weekday value", () => {
+    expect(overallDailySecondsForWeekday([uniformOverall, weekendOverall], 6)).toBe(14400);
+  });
+
+  it("returns the uniform fallback on an uncovered weekday", () => {
+    expect(overallDailySecondsForWeekday([uniformOverall, weekendOverall], 1)).toBe(7200);
+  });
+
+  it("returns null when no overall daily budget applies that weekday", () => {
+    expect(overallDailySecondsForWeekday([weekendOverall], 1)).toBeNull();
   });
 });

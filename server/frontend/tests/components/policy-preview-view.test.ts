@@ -63,6 +63,7 @@ function budget(overrides: Partial<BudgetResponse> = {}): BudgetResponse {
     targetId: null,
     window: "daily",
     secondsAllowed: 7200,
+    recurrenceDays: null,
     ...overrides,
   };
 }

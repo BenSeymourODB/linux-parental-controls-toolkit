@@ -109,6 +109,7 @@ describe("GET /api/users/:userId/budgets/resolved", () => {
         targetId: null,
         window: "daily",
         secondsAllowed: 7200,
+        recurrenceDays: null,
         source: { kind: "user" },
       },
     ]);
@@ -136,6 +137,7 @@ describe("GET /api/users/:userId/budgets/resolved", () => {
         targetId: null,
         window: "daily",
         secondsAllowed: 7200,
+        recurrenceDays: null,
         source: { kind: "group", groupId },
       },
     ]);
@@ -170,6 +172,7 @@ describe("GET /api/users/:userId/budgets/resolved", () => {
         targetId: null,
         window: "daily",
         secondsAllowed: 1800,
+        recurrenceDays: null,
         source: { kind: "user" },
       },
     ]);

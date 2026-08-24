@@ -44,7 +44,7 @@ import {
   listUserGroupsForUser,
   listUserSchedules,
 } from "./repository.js";
-import type { BudgetInput, ExceptionInput } from "./resolve.js";
+import { budgetSlotKey, type BudgetInput, type ExceptionInput } from "./resolve.js";
 import { byOrdinal, type ScheduleRule } from "./schedule-precedence.js";
 
 /** Where a gathered rule came from: the user's own list, or an inherited group. */
@@ -138,16 +138,6 @@ export interface GatheredBudget extends BudgetInput {
 }
 
 /**
- * Identity of a budget "slot" — the `(scope, window, target)` triple over which
- * a user-level budget fully replaces an inherited group budget (ADR 0008). The
- * `targetId` is part of the key so an `activity`/`group` override only shadows
- * the same activity/group, not every budget of that scope.
- */
-function budgetSlotKey(budget: BudgetInput): string {
-  return `${budget.scope}:${budget.window}:${budget.targetId ?? "null"}`;
-}
-
-/**
  * Merge an **explicit** own-budget list with the user's inherited group budgets
  * — own budgets first (they win), then each group's budgets (groups ascending
  * by id), with **full-replace** override per slot (#134,
@@ -187,6 +177,7 @@ export function mergeBudgetsWithGroups(
       targetId: row.targetId,
       window: row.window,
       secondsAllowed: row.secondsAllowed,
+      recurrenceDays: row.recurrenceDays ?? null,
       source: { kind: "user" },
     });
     covered.add(budgetSlotKey(row));
@@ -206,6 +197,7 @@ export function mergeBudgetsWithGroups(
         targetId: row.targetId,
         window: row.window,
         secondsAllowed: row.secondsAllowed,
+        recurrenceDays: row.recurrenceDays ?? null,
         source: { kind: "group", groupId: group.id },
       });
       groupSlots.add(key);

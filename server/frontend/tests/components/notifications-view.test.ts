@@ -76,6 +76,7 @@ function budget(overrides: Partial<BudgetResponse> = {}): BudgetResponse {
   return {
     id: 1,
     userId: 1,
+    recurrenceDays: null,
     scope: "overall",
     targetId: null,
     window: "daily",

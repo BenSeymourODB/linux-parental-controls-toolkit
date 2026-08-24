@@ -209,6 +209,39 @@ describe("POST /api/users/:userId/policy-preview", () => {
     });
   });
 
+  it("emits per-weekday diff rows for a proposed weekday-varying overall budget (#141)", async () => {
+    const userId = await createUser("Alice");
+    // Current baseline: a uniform 2h/day overall budget.
+    harness.db
+      .insert(budgets)
+      .values({ userId, scope: "overall", targetId: null, window: "daily", secondsAllowed: 7200 })
+      .run();
+
+    // Proposed: weekend-only 4h (Sat + Sun mask). The proposed mask must reach
+    // the diff — a weekday-varying proposal previewed as uniform would lie about
+    // what the push will enforce (the display-vs-enforce trap #362 closed). So
+    // weekdays lose their daily limit (→ whole-day 24h) and weekends become 4h.
+    const res = await auth({
+      method: "POST",
+      url: `/api/users/${userId}/policy-preview`,
+      payload: {
+        budgets: [
+          proposedBudget({ userId, secondsAllowed: 14400, recurrenceDays: (1 << 5) | (1 << 6) }),
+        ],
+        schedules: [],
+        now: "2026-06-17T12:00:00Z",
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    const daily = res.json().changes.filter((c: { field: string }) => c.field === "daily-overall");
+    // One row per weekday — all seven differ from the uniform 2h baseline.
+    expect(daily).toHaveLength(7);
+    const bySaturday = daily.find((c: { weekday: number }) => c.weekday === 6);
+    const byMonday = daily.find((c: { weekday: number }) => c.weekday === 1);
+    expect(bySaturday).toMatchObject({ after: "4h" });
+    expect(byMonday).toMatchObject({ after: "24h" });
+  });
+
   it("includes inherited group schedule windows on both sides of the diff (#362)", async () => {
     const userId = await createUser("Alice"); // tz null → UTC
     // A group "bedtime" the child inherits: deny 22:00–24:00 every day. Since the

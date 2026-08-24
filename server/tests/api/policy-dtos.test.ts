@@ -140,6 +140,7 @@ describe("policy DTO mappers", () => {
       targetId: 9,
       window: "weekly",
       secondsAllowed: 3600,
+      recurrenceDays: null,
     };
     expect(toBudgetResponse(row)).toEqual({
       id: 4,
@@ -148,7 +149,22 @@ describe("policy DTO mappers", () => {
       targetId: 9,
       window: "weekly",
       secondsAllowed: 3600,
+      recurrenceDays: null,
     });
+  });
+
+  it("maps a weekday-varying budget row, preserving the recurrence mask (#141)", () => {
+    const row: BudgetRow = {
+      id: 7,
+      userId: 1,
+      scope: "overall",
+      targetId: null,
+      window: "daily",
+      secondsAllowed: 7200,
+      // Mon..Fri = bits 0..4 = 0b0011111 = 31.
+      recurrenceDays: 31,
+    };
+    expect(toBudgetResponse(row).recurrenceDays).toBe(31);
   });
 
   it("maps a schedule row, serializing the effective window and keeping null recurrence", () => {
