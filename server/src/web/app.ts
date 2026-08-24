@@ -24,6 +24,7 @@ import {
   type AdGuardService,
 } from "../transport/adguard/index.js";
 import { type PolicyPushTransport } from "../transport/policy-push/index.js";
+import { type TimekprMirrorRefreshHandle } from "../transport/timekpr-mirror/index.js";
 import { buildAppServices } from "./app-services.js";
 import { registerFrontend } from "./frontend.js";
 import { registerInstallScript } from "./install-script.js";
@@ -77,6 +78,14 @@ declare module "fastify" {
      * after `listen`, and `buildApp`'s `onClose` hook stops it.
      */
     enforcementPipeline: EnforcementPipelineHandle | null;
+    /**
+     * The managed-mode `timekpr-next` mirror refresh scheduler handle (#392), or
+     * `null` until wired. Like the other schedulers it is **not** started by
+     * `buildApp` (so building the app — including tests — starts no timer);
+     * `main.ts` assigns it after `listen` in `managed` mirror mode. `buildApp`
+     * only owns its teardown: an `onClose` hook stops it if set.
+     */
+    timekprMirrorRefresh: TimekprMirrorRefreshHandle | null;
   }
 }
 
@@ -200,6 +209,16 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   app.decorate("adguardHealthPoll", null);
   app.addHook("onClose", async () => {
     app.adguardHealthPoll?.stop();
+  });
+
+  // The managed-mode timekpr mirror refresh scheduler (#392) is likewise started
+  // by main.ts after listen (not here, so building the app starts no timer);
+  // buildApp owns only its teardown. Initialised null and stopped on close if
+  // main.ts wired it — read from the decorator so the value main.ts assigns is
+  // the one torn down.
+  app.decorate("timekprMirrorRefresh", null);
+  app.addHook("onClose", async () => {
+    app.timekprMirrorRefresh?.stop();
   });
 
   app.get("/", async (_request, reply) => {
