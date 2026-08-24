@@ -1,0 +1,13 @@
+# Pinned Node.js runtime for the pct-client .deb (issue #106).
+#
+# The package bundles its OWN Node runtime under /usr/lib/pct-client/node so it
+# does not depend on the distro's Node packages (CLAUDE.md -> "Client agent").
+# build-deb.sh sources this file, downloads the matching official tarball from
+# nodejs.org, and verifies it against the SHA-256 pinned here.
+#
+# To bump: change NODE_VERSION and update BOTH SHA-256 lines from
+#   https://nodejs.org/dist/v<NODE_VERSION>/SHASUMS256.txt
+# (the node-v<ver>-linux-x64.tar.xz and node-v<ver>-linux-arm64.tar.xz rows).
+NODE_VERSION=22.22.2
+SHA256_LINUX_X64=88fd1ce767091fd8d4a99fdb2356e98c819f93f3b1f8663853a2dee9b438068a
+SHA256_LINUX_ARM64=e9e1930fd321a470e29bb68f30318bf58e3ecb4acb4f1533fb19c58328a091fe

@@ -1,0 +1,34 @@
+#!/bin/sh
+# postinst for pct-client (#106). POSIX sh; keep it idempotent so a re-install
+# or upgrade is a no-op where the state already exists.
+set -e
+
+case "$1" in
+configure)
+	# The bridge runs as this low-privilege account (docs/client-install.md
+	# step 7 / #78). Create it if the installer has not already; --system so it
+	# gets no login and no expiry. Idempotent: skip when it already exists.
+	if ! getent passwd pct-agent >/dev/null 2>&1; then
+		adduser --system --group --home /var/lib/pct-agent \
+			--shell /usr/sbin/nologin \
+			--gecos "Parental Controls Toolkit agent" pct-agent
+	fi
+
+	# Only touch systemd when it is the running init (skips containers/chroots).
+	if [ -d /run/systemd/system ]; then
+		systemd-tmpfiles --create /usr/lib/tmpfiles.d/pct-client.conf || true
+		systemctl daemon-reload || true
+		# Enable (not start): the bridge needs the enrolment token written to
+		# /etc/default/pct-client-bridge first, which install-client.sh does
+		# before starting the unit.
+		systemctl enable pct-client-bridge.service || true
+	fi
+	;;
+abort-upgrade | abort-remove | abort-deconfigure) ;;
+*)
+	echo "postinst called with unknown argument \`$1'" >&2
+	exit 1
+	;;
+esac
+
+exit 0

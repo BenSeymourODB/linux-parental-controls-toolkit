@@ -1,0 +1,15 @@
+Package: pct-client
+Version: @VERSION@
+Section: admin
+Priority: optional
+Architecture: @ARCH@
+Depends: systemd, adduser
+Maintainer: Ben Seymour <BenSeymourODB@users.noreply.github.com>
+Homepage: https://github.com/BenSeymourODB/linux-parental-controls-toolkit
+Description: Parental Controls Toolkit client agent (bridge + per-user agent)
+ Installs pct-client-bridge (a system service that holds the outbound event
+ stream to the dashboard) and pct-client-agent (a systemd --user daemon that
+ renders notifications and computes the time-remaining cadence for each
+ supervised user). The package bundles its own Node.js runtime under
+ /usr/lib/pct-client/node so it does not depend on the distribution's Node
+ packages.

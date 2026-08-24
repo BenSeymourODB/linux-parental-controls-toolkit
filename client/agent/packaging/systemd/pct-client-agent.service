@@ -1,0 +1,20 @@
+[Unit]
+Description=Parental Controls Toolkit per-user agent (notifications, cadence)
+Documentation=https://github.com/BenSeymourODB/linux-parental-controls-toolkit
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+# The socket the bridge listens on for this user is deterministic from the
+# running uid (%U); the policy User.id and any overrides come from the per-user
+# env file the installer writes. The file is optional (leading '-') so the unit
+# can be enabled before enrolment populates it.
+Environment=PCT_AGENT_SOCKET=/run/pct/%U.sock
+EnvironmentFile=-%h/.config/pct-client/agent.env
+ExecStart=/usr/lib/pct-client/node/bin/node /usr/lib/pct-client/dist/agent/main.js
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
