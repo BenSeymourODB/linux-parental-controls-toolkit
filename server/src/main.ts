@@ -13,6 +13,7 @@
 import { loadSettings } from "./config.js";
 import { ensureServerSshKeyPair } from "./setup/ssh-keys.js";
 import { startAdGuardHealthPoll } from "./transport/adguard/index.js";
+import { startTimekprMirrorRefresh } from "./transport/timekpr-mirror/index.js";
 import { buildApp } from "./web/app.js";
 
 const HOST = "0.0.0.0";
@@ -93,6 +94,28 @@ async function main(): Promise<void> {
   // Wired here (not in buildApp) so building the app starts no timer; buildApp's
   // onClose teardown stops it. Always present — a purge needs no SSH.
   app.retentionPurge.start();
+
+  // Start the managed-mode timekpr-next mirror refresh scheduler (#392, epic
+  // #389) after listen — a first refresh must not delay the dashboard becoming
+  // reachable, and the whole point is to keep the fetch off every client's
+  // install/enrol critical path. Only in `managed` mode: `external` points
+  // clients at a repo the homelab already hosts and `disabled` does nothing.
+  // The scheduler's tick never throws (a failed fetch is logged + backed off),
+  // and buildApp's onClose hook stops it on shutdown. We kick one tick now to
+  // warm the cache immediately.
+  const mirror = settings.timekprMirror;
+  if (mirror.mode === "managed") {
+    app.timekprMirrorRefresh = startTimekprMirrorRefresh({
+      config: {
+        dataDir: mirror.dataDir,
+        package: mirror.package,
+        ...(mirror.version !== undefined ? { version: mirror.version } : {}),
+      },
+      pattern: mirror.refreshCron,
+      log: app.log,
+    });
+    void app.timekprMirrorRefresh.tick();
+  }
 }
 
 void main();

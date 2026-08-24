@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "55e116a3-c82d-4c7f-94d8-1e8281cf3d27",
-  "prevId": "1c0fbc30-552d-45d7-a01c-1ad6ac067112",
+  "id": "f901310c-ba21-4856-8b9e-06408443ac8d",
+  "prevId": "150e81ca-93aa-47bf-8668-f0e380ae3f57",
   "tables": {
     "activities": {
       "name": "activities",
@@ -400,6 +400,13 @@
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
+        },
+        "recurrence_days": {
+          "name": "recurrence_days",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
         }
       },
       "indexes": {
@@ -446,6 +453,14 @@
         "budgets_target_coherence_check": {
           "name": "budgets_target_coherence_check",
           "value": "(\"budgets\".\"scope\" = 'overall') = (\"budgets\".\"target_id\" is null)"
+        },
+        "budgets_recurrence_days_check": {
+          "name": "budgets_recurrence_days_check",
+          "value": "\"budgets\".\"recurrence_days\" is null or (\"budgets\".\"recurrence_days\" between 1 and 127)"
+        },
+        "budgets_recurrence_daily_only_check": {
+          "name": "budgets_recurrence_daily_only_check",
+          "value": "\"budgets\".\"recurrence_days\" is null or \"budgets\".\"window\" = 'daily'"
         }
       }
     },
@@ -985,6 +1000,13 @@
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
+        },
+        "recurrence_days": {
+          "name": "recurrence_days",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
         }
       },
       "indexes": {
@@ -1031,6 +1053,14 @@
         "group_budgets_target_coherence_check": {
           "name": "group_budgets_target_coherence_check",
           "value": "(\"group_budgets\".\"scope\" = 'overall') = (\"group_budgets\".\"target_id\" is null)"
+        },
+        "group_budgets_recurrence_days_check": {
+          "name": "group_budgets_recurrence_days_check",
+          "value": "\"group_budgets\".\"recurrence_days\" is null or (\"group_budgets\".\"recurrence_days\" between 1 and 127)"
+        },
+        "group_budgets_recurrence_daily_only_check": {
+          "name": "group_budgets_recurrence_daily_only_check",
+          "value": "\"group_budgets\".\"recurrence_days\" is null or \"group_budgets\".\"window\" = 'daily'"
         }
       }
     },

@@ -76,6 +76,10 @@ function toBudgetInput(b: PolicyPreviewRequest["budgets"][number]): BudgetInput 
     targetId: b.targetId,
     window: b.window,
     secondsAllowed: b.secondsAllowed,
+    // Carry the weekday mask (#141) so the preview resolves the *proposed*
+    // budget exactly as the push will — a weekday-varying proposal must not be
+    // previewed as uniform (the display-vs-enforce trap #362 closed).
+    recurrenceDays: b.recurrenceDays ?? null,
   };
 }
 

@@ -25,14 +25,23 @@
  * the user's effective timezone, via {@link import("./budget-window.js")}
  * (ADR 0001) — local time enters only here, storage stays UTC.
  *
- * **Scope of this slice.** Recurring windows + uniform budgets + active grants
- * (the Phase-4 core of #143) plus **date-specific overrides** — the optional
- * `exceptions` layer (#142, `docs/adr/0012-date-specific-override-composition.md`):
- * an active one-off `allow`/`deny`/`extend` override wins over the recurring
- * rules for the target it covers, and `extend` widens the allowed window past a
- * standing deny. Exceptions affect only the per-day allow/deny/extend **access
- * windows**, never the seconds budgets (an additive time amount is a `Grant`,
- * not an exception). Weekday-varying budgets (#141) remain a later layer.
+ * **Scope of this slice.** Recurring windows + budgets (uniform *and*
+ * weekday-varying) + active grants + date-specific overrides. Two orthogonal
+ * additive layers compose here, on independent axes that never interact:
+ *
+ * - **Date-specific overrides** — the optional `exceptions` layer (#142,
+ *   `docs/adr/0012-date-specific-override-composition.md`): an active one-off
+ *   `allow`/`deny`/`extend` override wins over the recurring rules for the
+ *   target it covers, and `extend` widens the allowed window past a standing
+ *   deny. Exceptions affect only the per-day allow/deny/extend **access
+ *   windows**, never the seconds budgets (an additive time amount is a `Grant`,
+ *   not an exception).
+ * - **Weekday-varying budgets** — the `recurrence_days` layer (#141,
+ *   `docs/adr/0013-weekday-varying-budgets.md`): {@link selectBudgetsForWeekday}
+ *   is a within-slot day layer beneath the ADR-0008 group precedence (which
+ *   stays in {@link import("./group-resolution.js")}), resolving the **seconds**
+ *   budget for the day. It touches only budgets, so it composes with the
+ *   exception layer without either coding against the other.
  *
  * License boundary: none touched — pure TypeScript over the policy model.
  */
@@ -58,6 +67,14 @@ export interface BudgetInput {
   readonly targetId: number | null;
   readonly window: BudgetWindow;
   readonly secondsAllowed: number;
+  /**
+   * Weekday-varying budgets (#141, ADR 0013): a 7-bit ISO-weekday mask (bit 0 =
+   * Monday … bit 6 = Sunday) restricting the day(s) this `daily` allowance
+   * applies to. `null`/absent = uniform (every day), the degenerate default
+   * that reproduces pre-#141 behaviour. Resolved per slot by
+   * {@link selectBudgetsForWeekday}.
+   */
+  readonly recurrenceDays?: number | null;
 }
 
 /**
@@ -383,6 +400,81 @@ interface DayBounds {
 }
 
 /**
+ * The `(scope, window, target)` slot a budget occupies — the key over which
+ * ADR 0008 dedupes cross-source budgets and ADR 0013 groups a slot's rows for
+ * weekday selection. Exported so {@link import("./group-resolution.js")} shares
+ * the one definition (the two layers must key identically or they drift).
+ */
+export function budgetSlotKey(budget: BudgetInput): string {
+  return `${budget.scope}:${budget.window}:${budget.targetId ?? "null"}`;
+}
+
+/**
+ * Reduce a budget list to the rows that apply on the given ISO `weekday`
+ * (1 = Monday … 7 = Sunday), the within-slot weekday layer of #141 / ADR 0013.
+ *
+ * Per `(scope, window, target)` slot: rows whose `recurrenceDays` mask **covers**
+ * `weekday` (weekday-specific) win over and shadow the slot's uniform
+ * (`null`-mask) rows; rows whose mask is set but does **not** cover `weekday`
+ * are dropped. If a slot has weekday-specific rows but none covers `weekday`
+ * and there is no uniform fallback, the slot contributes nothing that day (no
+ * daily limit). Surviving rows are returned as-is so the callers' existing
+ * same-slot summing is preserved — a uniform-only list passes through unchanged,
+ * so pre-#141 behaviour is exact.
+ *
+ * This is a *within-slot* dimension: it never mixes sources, so it composes
+ * with the ADR-0008 group precedence resolved upstream in
+ * {@link import("./group-resolution.js").gatherUserBudgets} without disturbing
+ * the "a slot is sourced from exactly one place" invariant.
+ */
+export function selectBudgetsForWeekday(
+  budgets: readonly BudgetInput[],
+  weekday: number,
+): BudgetInput[] {
+  const weekdayBit = 1 << (weekday - 1);
+  const bySlot = new Map<string, BudgetInput[]>();
+  for (const budget of budgets) {
+    const key = budgetSlotKey(budget);
+    const existing = bySlot.get(key);
+    if (existing === undefined) bySlot.set(key, [budget]);
+    else existing.push(budget);
+  }
+
+  const selected: BudgetInput[] = [];
+  for (const rows of bySlot.values()) {
+    const specific = rows.filter((b) => {
+      const mask = b.recurrenceDays ?? null;
+      return mask !== null && (mask & weekdayBit) !== 0;
+    });
+    if (specific.length > 0) {
+      selected.push(...specific);
+      continue;
+    }
+    selected.push(...rows.filter((b) => (b.recurrenceDays ?? null) === null));
+  }
+  return selected;
+}
+
+/**
+ * The effective overall daily allowance for one ISO `weekday`, in seconds — the
+ * sum of the `overall`/`daily` budgets that {@link selectBudgetsForWeekday}
+ * leaves in play on that weekday, or `null` when none does (no daily limit that
+ * day). Grants are **not** folded in here: this is the per-weekday baseline the
+ * `timekpra` push (`transport/policy-push/resolve.ts`) reads to build the
+ * seven-day `--settimelimits` list, and the grant overlay is a per-user
+ * recompute layer above the push (#117).
+ */
+export function overallDailySecondsForWeekday(
+  budgets: readonly BudgetInput[],
+  weekday: number,
+): number | null {
+  const daily = selectBudgetsForWeekday(budgets, weekday).filter(
+    (b) => b.scope === "overall" && b.window === "daily",
+  );
+  return daily.length === 0 ? null : daily.reduce((sum, b) => sum + b.secondsAllowed, 0);
+}
+
+/**
  * The effective overall daily allowance in seconds: the sum of the user's
  * `overall`/`daily` budgets plus any active overall grants overlapping the day.
  * Returns `null` when no daily overall budget is defined (no daily limit — a
@@ -501,12 +593,15 @@ export function effectivePolicy(input: EffectivePolicyInput): EffectivePolicy {
     ...activeRules.filter((rule) => rule.targetKind === "overall"),
   ]);
 
-  // Budgets: the overall daily allowance and the per-activity/per-group quotas,
-  // each folding in active grants overlapping the day (`dayBounds` carries the
-  // effective-tz day edges the grant-overlap test needs).
+  // Budgets: reduce to the rows in play on this weekday (#141, ADR 0013) — a
+  // uniform-only list passes through unchanged — then resolve the overall daily
+  // allowance and the per-activity/per-group quotas, each folding in active
+  // grants overlapping the day (`dayBounds` carries the effective-tz day edges
+  // the grant-overlap test needs).
   const dayBounds: DayBounds = { start: dayStart, end: dayEnd };
-  const overallSeconds = resolveOverallSeconds(input.budgets, input.grants, dayBounds);
-  const perActivitySeconds = buildActivityQuotas(input.budgets, input.grants, dayBounds);
+  const budgetsForDay = selectBudgetsForWeekday(input.budgets, weekday);
+  const overallSeconds = resolveOverallSeconds(budgetsForDay, input.grants, dayBounds);
+  const perActivitySeconds = buildActivityQuotas(budgetsForDay, input.grants, dayBounds);
 
   return {
     date: `${year}-${pad2(month)}-${pad2(day)}`,
