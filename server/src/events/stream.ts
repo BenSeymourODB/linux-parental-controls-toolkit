@@ -38,6 +38,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 
 import {
   recordClientAgentVersion,
+  recordClientCapabilities,
   setClientUpdateRequired,
   touchClientLastSeen,
   type ClientRow,
@@ -198,6 +199,11 @@ export async function registerEventStream(
           try {
             if (hello !== null) {
               recordClientAgentVersion(db, clientId, hello.agentVersion, new Date());
+              // Persist the negotiated capability set (#400) so the admin
+              // Clients view can surface it beyond the life of this socket; the
+              // live per-connection gate (#288) still reads the set threaded
+              // into `hub.register` below.
+              recordClientCapabilities(db, clientId, hello.capabilities);
             }
             // A compatible connect clears any stale update-required flag (the
             // client has since been updated to an in-window protocol).

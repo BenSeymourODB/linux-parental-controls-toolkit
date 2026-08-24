@@ -205,6 +205,17 @@ export const clients = sqliteTable(
      * (pushing an agent update) is the Phase-14 update mechanism.
      */
     updateRequired: integer("update_required", { mode: "boolean" }).notNull().default(false),
+    /**
+     * The capability set the client last advertised in its event-stream `hello`
+     * handshake (ADR 0007 §4, #400), a JSON string array. System-observed, not
+     * admin-editable. `NULL` = the client has never completed a handshake (an
+     * admin-CRUD row, or an enrolled client the bridge hasn't connected from
+     * yet); `[]` = it handshaked advertising no optional primitives (an older
+     * agent). The admin Clients view renders these against
+     * {@link ../events/capabilities.ts CLIENT_CAPABILITY_CATALOG} to grey out
+     * controls a client can't honour.
+     */
+    capabilities: text("capabilities", { mode: "json" }).$type<string[]>(),
   },
   (table) => [
     uniqueIndex("clients_hostname_unique").on(table.hostname),

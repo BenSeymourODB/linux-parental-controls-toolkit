@@ -25,10 +25,12 @@ import {
   type ClientProber,
   type ClientProbeResult,
 } from "../../transport/health/index.js";
+import { CLIENT_CAPABILITY_CATALOG } from "../../events/capabilities.js";
 import { listForClient } from "../../transport/queue/index.js";
 import { mapWithConcurrency, timerDeadline, type DeadlineFactory } from "../../util/concurrency.js";
 import {
   toQueuedActionSummary,
+  type ClientCapabilityDto,
   type ClientHealthResponse,
   type ComponentHealthDto,
 } from "./health-dtos.js";
@@ -52,6 +54,24 @@ function unknownComponents(detail: string): ComponentHealthDto[] {
     component: descriptor.component,
     status: "unknown",
     detail,
+  }));
+}
+
+/**
+ * The full capability catalogue flagged against a client's advertised set
+ * (#400). `advertised === null` (never handshaked) yields every entry
+ * `supported: false`; the caller reports {@link ClientHealthResponse.capabilitiesReported}
+ * separately so the view can tell "not reported yet" from "handshaked, supports
+ * nothing". A capability the client advertised but the catalogue doesn't know
+ * is ignored — the matrix renders only controls the dashboard understands.
+ */
+function capabilityMatrix(advertised: readonly string[] | null): ClientCapabilityDto[] {
+  const supported = new Set(advertised ?? []);
+  return CLIENT_CAPABILITY_CATALOG.map((descriptor) => ({
+    capability: descriptor.capability,
+    label: descriptor.label,
+    description: descriptor.description,
+    supported: supported.has(descriptor.capability),
   }));
 }
 
@@ -113,6 +133,8 @@ function assemble(
       updateRequired: client.updateRequired,
     }),
     components,
+    capabilitiesReported: client.capabilities !== null,
+    capabilities: capabilityMatrix(client.capabilities),
     queue: {
       pending: queueRows.filter((row) => row.status === "pending").length,
       failed: queueRows.filter((row) => row.status === "failed").length,
