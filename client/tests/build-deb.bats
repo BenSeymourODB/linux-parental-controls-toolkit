@@ -74,10 +74,12 @@ teardown_file() {
 	[[ "$output" == *"amd64"* ]]
 }
 
-@test "control depends on systemd and adduser" {
+@test "control depends on systemd and recommends the desktop stack" {
 	run dpkg-deb --field "$DEB" Depends
 	[[ "$output" == *"systemd"* ]]
-	[[ "$output" == *"adduser"* ]]
+	run dpkg-deb --field "$DEB" Recommends
+	[[ "$output" == *"libnotify-bin"* ]]
+	[[ "$output" == *"libcanberra-gtk3-module"* ]]
 }
 
 # --- Payload layout ---------------------------------------------------------
@@ -87,8 +89,9 @@ teardown_file() {
 	[ -f "${EXTRACT}/usr/lib/pct-client/dist/agent/main.js" ]
 }
 
-@test "bundles the Node runtime binary" {
+@test "bundles the Node runtime binary and its LICENSE" {
 	[ -x "${EXTRACT}/usr/lib/pct-client/node/bin/node" ]
+	[ -f "${EXTRACT}/usr/lib/pct-client/node/LICENSE" ]
 }
 
 @test "bundles the production dependencies (ws, zod)" {
@@ -109,7 +112,6 @@ teardown_file() {
 	[ -f "$unit" ]
 	run cat "$unit"
 	[[ "$output" == *"User=pct-agent"* ]]
-	[[ "$output" == *"RuntimeDirectory=pct"* ]]
 	[[ "$output" == *"EnvironmentFile=/etc/default/pct-client-bridge"* ]]
 	[[ "$output" == *"ExecStart=/usr/lib/pct-client/node/bin/node /usr/lib/pct-client/dist/main.js"* ]]
 	[[ "$output" == *"WantedBy=multi-user.target"* ]]
@@ -150,13 +152,20 @@ teardown_file() {
 	done
 }
 
-@test "postinst creates pct-agent and enables the bridge via systemd" {
+@test "postinst creates pct-agent with an SSH-capable shell and home" {
+	# Must match client/lib/provision-agent-user.sh: pct-agent is the SSH
+	# principal the dashboard execs timekpra as, so it needs /bin/bash + a home.
 	run cat "${CTRL}/postinst"
-	[[ "$output" == *"adduser --system"* ]]
-	[[ "$output" == *"pct-agent"* ]]
+	[[ "$output" == *"useradd --system --create-home --shell /bin/bash pct-agent"* ]]
+	[[ "$output" != *"nologin"* ]]
+}
+
+@test "postinst enables and (on upgrade) restarts the bridge via systemd" {
+	run cat "${CTRL}/postinst"
 	[[ "$output" == *"systemd-tmpfiles --create"* ]]
 	[[ "$output" == *"systemctl daemon-reload"* ]]
 	[[ "$output" == *"systemctl enable pct-client-bridge.service"* ]]
+	[[ "$output" == *"systemctl try-restart pct-client-bridge.service"* ]]
 }
 
 @test "prerm stops and disables the bridge on removal" {
@@ -190,4 +199,24 @@ teardown_file() {
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"build-deb.sh"* ]]
 	[[ "$output" == *"--output"* ]]
+}
+
+@test "builds an arm64 package from the arm64 stub + SHA" {
+	# Exercises the arch -> NODE_ARCH mapping and the SHA256_LINUX_ARM64 branch.
+	local root="${WORKDIR}/arm64/node-v${NODE_VER}-linux-arm64"
+	mkdir -p "${root}/bin"
+	printf '#!/bin/sh\necho stub-node\n' >"${root}/bin/node"
+	chmod +x "${root}/bin/node"
+	printf 'stub license\n' >"${root}/LICENSE"
+	local tarball="${WORKDIR}/arm64/node-arm64.tar.xz"
+	tar -C "${WORKDIR}/arm64" -cJf "$tarball" "node-v${NODE_VER}-linux-arm64"
+	local sha
+	sha="$(sha256sum "$tarball" | cut -d' ' -f1)"
+	local deb="${WORKDIR}/pct-client_9.9.9_arm64.deb"
+
+	run env PCT_NODE_TARBALL="$tarball" PCT_NODE_SHA256="$sha" \
+		bash "${AGENT_DIR}/build-deb.sh" --arch arm64 --version 9.9.9 --output "$deb"
+	[ "$status" -eq 0 ]
+	run dpkg-deb --field "$deb" Architecture
+	[[ "$output" == *"arm64"* ]]
 }

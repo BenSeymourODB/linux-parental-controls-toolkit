@@ -3,7 +3,8 @@ Version: @VERSION@
 Section: admin
 Priority: optional
 Architecture: @ARCH@
-Depends: systemd, adduser
+Depends: systemd
+Recommends: libnotify-bin, libcanberra-gtk3-module
 Maintainer: Ben Seymour <BenSeymourODB@users.noreply.github.com>
 Homepage: https://github.com/BenSeymourODB/linux-parental-controls-toolkit
 Description: Parental Controls Toolkit client agent (bridge + per-user agent)

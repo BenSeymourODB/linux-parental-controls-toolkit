@@ -1,7 +1,7 @@
 #!/bin/sh
 # postrm for pct-client (#106). On purge, remove the local config conffile and
-# reload systemd so the removed unit is forgotten. The pct-agent account and
-# /var/lib/pct-agent are left in place: they may hold the server's SSH key and
+# reload systemd so the removed unit is forgotten. The pct-agent account and its
+# home (/home/pct-agent) are left in place: they hold the server's SSH key and
 # are shared with the installer-provisioned orchestration user (#78).
 set -e
 

@@ -14,10 +14,11 @@ Group=pct-agent
 # Populated by the enrolment step of install-client.sh: PCT_BRIDGE_SERVER_URL,
 # PCT_BRIDGE_TOKEN, PCT_BRIDGE_USERS. A conffile, so it survives package upgrades.
 EnvironmentFile=/etc/default/pct-client-bridge
-# Owns /run/pct/<linux-uid>.sock; RuntimeDirectory is 0755 so a supervised
-# user's agent can traverse to reach its own socket.
-RuntimeDirectory=pct
-RuntimeDirectoryMode=0755
+# /run/pct is created (owned by pct-agent, mode 0755) by the tmpfiles.d entry,
+# not by RuntimeDirectory=: the socket dir must persist across bridge restarts
+# so a supervised user's agent keeps its socket, and dispatch.ts deliberately
+# leaves creating it to packaging (#106). RuntimeDirectory= would tear it down
+# on every stop.
 ExecStart=/usr/lib/pct-client/node/bin/node /usr/lib/pct-client/dist/main.js
 Restart=on-failure
 RestartSec=5

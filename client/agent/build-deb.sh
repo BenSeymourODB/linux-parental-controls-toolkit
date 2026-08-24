@@ -111,7 +111,14 @@ if [ -z "$VERSION" ]; then
 	VERSION="$(git -C "$SCRIPT_DIR" describe --tags --always 2>/dev/null || true)"
 	VERSION="${VERSION#v}"
 fi
-[ -n "$VERSION" ] || VERSION="0.0.0"
+# A Debian upstream version must start with a digit. `git describe --always`
+# with no tags yields a bare commit hash (often letter-led), so fall back to a
+# sortable dev version rather than emit a policy-nonconforming one. Releases
+# pass --version explicitly (#168).
+case "$VERSION" in
+[0-9]*) : ;;
+*) VERSION="0.0.0+${VERSION:-unknown}" ;;
+esac
 
 : "${OUTPUT:=${SCRIPT_DIR}/dist/pct-client_${VERSION}_${ARCH}.deb}"
 
@@ -142,7 +149,7 @@ cp -r "${SCRIPT_DIR}/dist" "${PKG_ROOT}/dist"
 # pulls transitive deps, switch this to `npm ci --omit=dev` into a staging dir.
 echo "build-deb.sh: staging production node_modules"
 mkdir -p "${PKG_ROOT}/node_modules"
-PROD_DEPS="$(node -e 'const p=require("./package.json");process.stdout.write(Object.keys(p.dependencies||{}).join("\n"))' <"${SCRIPT_DIR}/package.json" 2>/dev/null || node -e 'const p=require(process.argv[1]);process.stdout.write(Object.keys(p.dependencies||{}).join("\n"))' "${SCRIPT_DIR}/package.json")"
+PROD_DEPS="$(node -e 'const p=require(process.argv[1]);process.stdout.write(Object.keys(p.dependencies||{}).join("\n"))' "${SCRIPT_DIR}/package.json")"
 while IFS= read -r dep; do
 	[ -n "$dep" ] || continue
 	src="${SCRIPT_DIR}/node_modules/${dep}"
