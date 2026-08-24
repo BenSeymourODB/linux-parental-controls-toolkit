@@ -1,23 +1,26 @@
 /**
- * Static guard for the LIVE symlink-planting privesc assertion (#360) in the
+ * Static guard for the LIVE privesc assertion (#360) in the
  * `client/ansible/molecule/default` scenario.
  *
- * #351 fixed a child→root symlink-following privilege escalation in
- * `activitywatch.yml`; `activitywatch-privesc.test.ts` statically proves the
- * `become_user` + `follow: false` defences are present on the playbook's
- * home-writing tasks. #360 adds a *live* Molecule assertion: `prepare.yml`
- * plants hostile leaf symlinks (`config.toml`, `aw-server.service`) pointing at
- * a root-owned canary, and `verify.yml` asserts the converge did not follow
- * them (the canary stays root-owned and unmodified; the child's dests are real
- * child-owned files).
+ * #351 fixed a child→root symlink-following privilege escalation in the
+ * `ansible.builtin.file` `state: directory` tasks of `activitywatch.yml`
+ * (`file.follow` defaults to TRUE, so a root-run directory task follows a
+ * child-planted symlink and chowns its root-owned target to the child).
+ * `activitywatch-privesc.test.ts` statically proves the `become_user` +
+ * `follow: false` defences are present on the playbook's home-writing tasks.
+ * #360 adds a *live* Molecule assertion that reproduces that exact directory-
+ * task technique at converge time against isolated probe symlinks: a positive
+ * control (root + `follow: true`) that must escalate into a root-owned canary,
+ * and the fixed shape (`become_user` + `follow: false`) that must leave the
+ * canary root-owned.
  *
  * Molecule itself only runs in the `client/ansible/**`-gated integration job,
  * not the fast `npm test` gate. This guard runs in the fast gate and asserts
- * the scenario keeps the canary planting + the root-ownership / content-
- * unchanged assertions, so the live check cannot silently regress (e.g. a
- * refactor that drops the symlink planting would make the live test pass
- * vacuously). Mirrors the static-analysis approach of
- * `activitywatch-privesc.test.ts`.
+ * the scenario keeps the probe planting + BOTH the positive control and the
+ * fixed-shape ownership assertions, so the live check cannot silently regress
+ * into something vacuous (e.g. dropping the positive control would let the
+ * fixed-shape assertion pass without proving the vector is even reproducible).
+ * Mirrors the static-analysis approach of `activitywatch-privesc.test.ts`.
  */
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -30,11 +33,10 @@ const scenarioDir = new URL("../../../client/ansible/molecule/default/", import.
 const preparePath = fileURLToPath(new URL("prepare.yml", scenarioDir));
 const verifyPath = fileURLToPath(new URL("verify.yml", scenarioDir));
 
-// The canary path + markers the scenario pins; kept in one place so the guard
+// The canary path + marker the scenario pins; kept in one place so the guard
 // tracks the same literals prepare.yml/verify.yml use.
 const CANARY_DIR = "/opt/pct-privesc-canary";
-const CONFIG_MARKER = "PCT-PRIVESC-CANARY-CONFIG-DO-NOT-OVERWRITE";
-const UNIT_MARKER = "PCT-PRIVESC-CANARY-UNIT-DO-NOT-OVERWRITE";
+const FIXED_MARKER = "PCT-PRIVESC-FIXED-CANARY-STILL-ROOT-OWNED";
 
 // A permissive task shape: Ansible module invocations are arbitrary keys
 // (`ansible.builtin.file`, …), and tasks nest under block/rescue/always. We
@@ -42,6 +44,7 @@ const UNIT_MARKER = "PCT-PRIVESC-CANARY-UNIT-DO-NOT-OVERWRITE";
 // the repo's "validate external input with zod / no unchecked `as`" convention.
 interface PlaybookTask {
   name?: string | undefined;
+  become?: boolean | undefined;
   become_user?: string | undefined;
   block?: PlaybookTask[] | undefined;
   rescue?: PlaybookTask[] | undefined;
@@ -53,6 +56,7 @@ const taskSchema: z.ZodType<PlaybookTask> = z.lazy(() =>
   z
     .object({
       name: z.string().optional(),
+      become: z.boolean().optional(),
       become_user: z.string().optional(),
       block: z.array(taskSchema).optional(),
       rescue: z.array(taskSchema).optional(),
@@ -68,6 +72,8 @@ const playSchema = z
   .passthrough();
 
 const playbookSchema = z.array(playSchema);
+
+const moduleParamsSchema = z.record(z.string(), z.unknown());
 
 function loadTasks(path: string): PlaybookTask[] {
   const plays = playbookSchema.parse(parse(readFileSync(path, "utf8")));
@@ -85,114 +91,110 @@ function flattenTasks(tasks: PlaybookTask[]): PlaybookTask[] {
   ]);
 }
 
-const moduleParamsSchema = z.record(z.string(), z.unknown());
-
 /** The params of a given `ansible.builtin.<module>` on a task, if present. */
 function moduleParams(task: PlaybookTask, module: string): Record<string, unknown> | undefined {
   const parsed = moduleParamsSchema.safeParse(task[`ansible.builtin.${module}`]);
   return parsed.success ? parsed.data : undefined;
 }
 
-/** The full serialised text of a task's module params (for substring probes). */
-function taskText(task: PlaybookTask): string {
-  return JSON.stringify(task);
+/** The `that:` conditions of an `assert` task, as strings (empty if none). */
+function assertConditions(task: PlaybookTask): string[] {
+  const that = moduleParams(task, "assert")?.that;
+  return Array.isArray(that) ? that.map((line) => String(line)) : [];
 }
 
-describe("molecule default scenario — live symlink privesc assertion (#360)", () => {
+describe("molecule default scenario — live privesc assertion (#360)", () => {
   const prepareTasks = loadTasks(preparePath);
   const verifyTasks = loadTasks(verifyPath);
 
-  it("plants hostile leaf symlinks into the child home as the child user", () => {
-    const linkTasks = prepareTasks.filter((task) => {
-      const file = moduleParams(task, "file");
-      return file?.state === "link";
-    });
-
-    // Two dests are poisoned: the aw-server config.toml and an aw-server unit.
+  it("plants child-owned probe symlinks into the root-owned canary, as the child", () => {
+    const linkTasks = prepareTasks.filter((task) => moduleParams(task, "file")?.state === "link");
     expect(linkTasks.length).toBeGreaterThanOrEqual(1);
 
     for (const task of linkTasks) {
-      // The write must run AS the child (never root) — a hostile symlink can
-      // then only reach files the child already owns.
+      // The symlinks must be planted AS the child (an unprivileged user can
+      // only create links they own) — mirrors the real attacker.
       expect(
         task.become_user,
         `symlink-planting task "${task.name ?? "<unnamed>"}" must run as the child (become_user)`,
       ).toBeDefined();
-      // …and point at the root-owned canary, so a followed write would be a
-      // real child→root escalation the fix must prevent. The task references
-      // the canary via the `canary_dir` play var.
-      expect(taskText(task)).toContain("canary_dir");
+      // …and point into the root-owned canary (referenced via `canary_dir`).
+      expect(JSON.stringify(task)).toContain("canary_dir");
     }
 
-    // Both concrete dests the converge templates into are covered, and the
-    // canary path/markers are pinned (in the play `vars` block → raw text).
-    expect(prepareRaw).toContain("config.toml");
-    expect(prepareRaw).toContain("aw-server.service");
+    // Both probe links + the canary path/marker are pinned (vars → raw text).
+    expect(prepareRaw).toContain("fixed-link");
+    expect(prepareRaw).toContain("vuln-link");
     expect(prepareRaw).toContain(CANARY_DIR);
+    expect(prepareRaw).toContain(FIXED_MARKER);
   });
 
-  it("creates the canary as root-owned, mode 0600, with the pinned markers", () => {
-    const canaryCopy = prepareTasks.find((task) => {
-      const copy = moduleParams(task, "copy");
-      return copy !== undefined && taskText(task).includes("canary");
+  it("creates the canary targets as root-owned directories", () => {
+    const canaryDir = prepareTasks.find((task) => {
+      const file = moduleParams(task, "file");
+      return file?.state === "directory" && JSON.stringify(task).includes("canary_dir");
     });
-    expect(canaryCopy, "prepare.yml must write the root-owned canary sentinel files").toBeDefined();
-    const copy = moduleParams(canaryCopy ?? {}, "copy");
-    expect(copy?.owner).toBe("root");
-    expect(copy?.group).toBe("root");
-    expect(copy?.mode).toBe("0600");
-
-    // The marker literals live in the play `vars` block.
-    expect(prepareRaw).toContain(CONFIG_MARKER);
-    expect(prepareRaw).toContain(UNIT_MARKER);
-    expect(verifyRaw).toContain(CONFIG_MARKER);
-    expect(verifyRaw).toContain(UNIT_MARKER);
+    expect(canaryDir, "prepare.yml must create the root-owned canary targets").toBeDefined();
+    const file = moduleParams(canaryDir ?? {}, "file");
+    expect(file?.owner).toBe("root");
+    expect(file?.group).toBe("root");
   });
 
-  it("asserts in verify.yml that the canary stayed root-owned", () => {
-    const rootAssert = verifyTasks.find((task) => {
-      const assertParams = moduleParams(task, "assert");
-      const that = assertParams?.that;
-      return Array.isArray(that) && that.some((line) => String(line).includes("uid == 0"));
-    });
-    expect(
-      rootAssert,
-      "verify.yml must assert the canary files are still uid 0 (root-owned)",
-    ).toBeDefined();
-  });
-
-  it("asserts in verify.yml that the canary content was not overwritten", () => {
-    // A slurp of the canary + an assert that decodes and compares its content.
-    const slurpsCanary = verifyTasks.some((task) => {
-      const slurp = moduleParams(task, "slurp");
-      return slurp !== undefined && String(slurp.src).includes("canary_dir");
-    });
-    expect(slurpsCanary, "verify.yml must read the canary content back").toBe(true);
-
-    const contentAssert = verifyTasks.find((task) => {
-      const assertParams = moduleParams(task, "assert");
-      const that = assertParams?.that;
-      return Array.isArray(that) && that.some((line) => String(line).includes("b64decode"));
-    });
-    expect(
-      contentAssert,
-      "verify.yml must assert the decoded canary content equals the pinned marker",
-    ).toBeDefined();
-  });
-
-  it("asserts in verify.yml that the child dests are real child-owned files", () => {
-    const notLinkAssert = verifyTasks.find((task) => {
-      const assertParams = moduleParams(task, "assert");
-      const that = assertParams?.that;
+  it("runs a VULNERABLE positive control (root + follow: true) that must escalate", () => {
+    const controlTask = verifyTasks.find((task) => {
+      const file = moduleParams(task, "file");
       return (
-        Array.isArray(that) &&
-        that.some((line) => String(line).includes("isreg")) &&
-        that.some((line) => String(line).includes("islnk"))
+        file?.state === "directory" &&
+        file.follow === true &&
+        JSON.stringify(task).includes("vuln-link")
       );
     });
     expect(
-      notLinkAssert,
-      "verify.yml must assert the poisoned dests are regular files, not symlinks",
+      controlTask,
+      "verify.yml must run the vulnerable directory-task shape (follow: true) as the positive control",
     ).toBeDefined();
+    // The control must NOT drop to the child — it reproduces the root-run vuln.
+    expect(controlTask?.become_user).toBeUndefined();
+
+    // …and it must assert the escalation actually happened (vuln-target now
+    // owned by the child), otherwise the whole assertion proves nothing.
+    const controlAssert = verifyTasks.find((task) =>
+      assertConditions(task).some((line) => line.includes("vuln_target.stat.pw_name")),
+    );
+    expect(
+      controlAssert,
+      "verify.yml must assert the positive control escalated (vuln-target owned by the child)",
+    ).toBeDefined();
+    expect(assertConditions(controlAssert ?? {}).join("\n")).toContain("poisoned_user");
+  });
+
+  it("runs the FIXED shape (become_user + follow: false) and asserts the target stays root", () => {
+    const fixedTask = verifyTasks.find((task) => {
+      const file = moduleParams(task, "file");
+      return (
+        file?.state === "directory" &&
+        file.follow === false &&
+        JSON.stringify(task).includes("fixed-link")
+      );
+    });
+    expect(fixedTask, "verify.yml must run the fixed directory-task shape").toBeDefined();
+    expect(
+      fixedTask?.become_user,
+      "the fixed shape must drop to the child (become_user), matching the #351 fix",
+    ).toBeDefined();
+
+    const fixedAssert = verifyTasks.find((task) => {
+      const conds = assertConditions(task);
+      return (
+        conds.some((line) => line.includes("fixed_target.stat.uid == 0")) &&
+        conds.some((line) => line.includes("fixed_target.stat.gid == 0"))
+      );
+    });
+    expect(
+      fixedAssert,
+      "verify.yml must assert the fixed-target canary stays root-owned (uid/gid 0)",
+    ).toBeDefined();
+    // The content-unchanged belt-and-suspenders check is present too.
+    expect(verifyRaw).toContain("fixed_canary_marker");
   });
 });
