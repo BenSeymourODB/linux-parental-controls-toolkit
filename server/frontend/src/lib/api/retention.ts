@@ -14,6 +14,9 @@ import type {
   RetentionCategory,
   RetentionConfigResponse,
   RetentionEntryResponse,
+  RetentionPurgePreviewResponse,
+  RetentionPurgeRunResponse,
+  RetentionPurgeRunsResponse,
   SetRetentionOverrideRequest,
 } from "./contract.js";
 
@@ -47,4 +50,20 @@ export function clearRetentionOverride(
   return apiFetch<RetentionEntryResponse>(`/retention/${encodeURIComponent(category)}`, {
     method: "DELETE",
   });
+}
+
+/** Run the retention purge now (recorded as a `manual` run). */
+export function runRetentionPurge(): Promise<RetentionPurgeRunResponse> {
+  return apiFetch<RetentionPurgeRunResponse>("/retention/purge", { method: "POST" });
+}
+
+/** Dry-run: count what a purge would remove now, without deleting or recording. */
+export function previewRetentionPurge(): Promise<RetentionPurgePreviewResponse> {
+  return apiFetch<RetentionPurgePreviewResponse>("/retention/purge/preview", { method: "POST" });
+}
+
+/** Recent purge runs, newest first (`runs[0]` is the last-run summary). */
+export function fetchRetentionPurgeRuns(limit?: number): Promise<RetentionPurgeRunsResponse> {
+  const query = limit === undefined ? "" : `?limit=${encodeURIComponent(String(limit))}`;
+  return apiFetch<RetentionPurgeRunsResponse>(`/retention/purge/runs${query}`);
 }

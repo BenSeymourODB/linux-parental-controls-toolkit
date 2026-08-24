@@ -14,6 +14,7 @@
  */
 import { z } from "zod";
 import { isValidTimeZone } from "./policy/budget-window.js";
+import { DEFAULT_PURGE_BATCH_SIZE } from "./policy/purge.js";
 import { DEFAULT_RETENTION_DAYS, MAX_RETENTION_DAYS } from "./policy/retention.js";
 import { isValidCronPattern } from "./transport/activitywatch/telemetry.js";
 import { DEFAULT_COMPAT_WINDOW } from "./events/protocol.js";
@@ -187,10 +188,23 @@ const timekprMirrorSchema = z.discriminatedUnion("mode", [
     package: z.enum(TIMEKPR_MIRROR_PACKAGES).default("timekpr-next"),
     /**
      * Optional pinned upstream version to mirror (`PCT_TIMEKPR_MIRROR_VERSION`).
-     * When unset, the (later) refresh job (#392) tracks the newest upstream
-     * release. Mirrors the AdGuard `version` pin.
+     * When unset, the refresh job (#392) tracks the newest upstream release.
+     * Mirrors the AdGuard `version` pin.
      */
     version: z.string().min(1).optional(),
+    /**
+     * croner pattern for the background fetch/refresh job
+     * (`PCT_TIMEKPR_MIRROR_REFRESH_CRON`, #392). Validated here so a typo fails
+     * fast at startup rather than silently never running. Defaults to daily at
+     * 03:00 — upstream `timekpr-next` releases are infrequent and the fetch runs
+     * off every client's install/enrol critical path, so cadence is not latency
+     * critical (`docs/adr/0011-server-hosted-upstream-package-mirror.md`).
+     */
+    refreshCron: z
+      .string()
+      .min(1)
+      .default("0 3 * * *")
+      .refine(isValidCronPattern, { message: "must be a valid cron pattern (e.g. 0 3 * * *)" }),
   }),
 ]);
 
@@ -405,7 +419,7 @@ const settingsSchema = z
       initialLookbackSeconds: z.coerce.number().int().positive().default(900),
     }),
     /**
-     * Data retention (#136, epic #135). `defaultDays` is the global default
+     * Data retention (#136/#137, epic #135). `defaultDays` is the global default
      * window applied to every dated-data category that has no per-category
      * override in the policy store (`PCT_RETENTION_DEFAULT_DAYS`, default 365).
      * Per-category overrides (custom window or "keep forever") are persisted in
@@ -413,6 +427,13 @@ const settingsSchema = z
      * lives in the environment. Bounded by {@link MAX_RETENTION_DAYS} so an
      * absurd value is rejected at startup — "effectively forever" is the
      * explicit per-category keep-forever mode, not a giant day count.
+     *
+     * `purgeCron` is the cadence of the automatic purge job (#137,
+     * `PCT_RETENTION_PURGE_CRON`); validated here so a typo fails fast. Defaults
+     * to 03:00 daily — purging is not latency-critical, and an off-peak hour
+     * keeps the (batched) first run clear of the busy evening. `purgeBatchSize`
+     * (`PCT_RETENTION_PURGE_BATCH_SIZE`) bounds each delete pass; it defaults to
+     * the purge module's `DEFAULT_PURGE_BATCH_SIZE`.
      */
     retention: z.object({
       defaultDays: z.coerce
@@ -421,6 +442,12 @@ const settingsSchema = z
         .min(1)
         .max(MAX_RETENTION_DAYS)
         .default(DEFAULT_RETENTION_DAYS),
+      purgeCron: z
+        .string()
+        .min(1)
+        .default("0 3 * * *")
+        .refine(isValidCronPattern, { message: "must be a valid cron pattern (e.g. 0 3 * * *)" }),
+      purgeBatchSize: z.coerce.number().int().positive().default(DEFAULT_PURGE_BATCH_SIZE),
     }),
     /**
      * Phase-6 periodic re-apply / tamper-reversion scheduler (#93): the croner
@@ -507,9 +534,9 @@ const settingsSchema = z
     adguard: adguardSchema,
     /**
      * Server-hosted `timekpr-next` package mirror (#391, epic #389). Keyed on
-     * `PCT_TIMEKPR_MIRROR`; parsed-and-ready ahead of the fetch/serve wiring
-     * (#392/#393), like the `telemetry`/`reapply`/`adguard` blocks above. See
-     * {@link timekprMirrorSchema}.
+     * `PCT_TIMEKPR_MIRROR`. The `managed` branch's `refreshCron` drives the
+     * background fetch/refresh job (#392); the signed apt index + serving is
+     * still ahead (#393). See {@link timekprMirrorSchema}.
      */
     timekprMirror: timekprMirrorSchema,
   })
@@ -586,6 +613,8 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
     },
     retention: {
       defaultDays: env.PCT_RETENTION_DEFAULT_DAYS,
+      purgeCron: env.PCT_RETENTION_PURGE_CRON,
+      purgeBatchSize: env.PCT_RETENTION_PURGE_BATCH_SIZE,
     },
     reapply: {
       cron: env.PCT_REAPPLY_CRON,
@@ -617,6 +646,7 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
       dataDir: env.PCT_TIMEKPR_MIRROR_DIR,
       package: env.PCT_TIMEKPR_MIRROR_PACKAGE,
       version: env.PCT_TIMEKPR_MIRROR_VERSION,
+      refreshCron: env.PCT_TIMEKPR_MIRROR_REFRESH_CRON,
     },
   });
 

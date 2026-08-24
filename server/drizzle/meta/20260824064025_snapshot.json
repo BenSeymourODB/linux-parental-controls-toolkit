@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "e004c4dc-e05f-4604-a04d-5e3652525f01",
+  "id": "f901310c-ba21-4856-8b9e-06408443ac8d",
   "prevId": "150e81ca-93aa-47bf-8668-f0e380ae3f57",
   "tables": {
     "activities": {
@@ -574,13 +574,6 @@
           "notNull": true,
           "autoincrement": false,
           "default": false
-        },
-        "capabilities": {
-          "name": "capabilities",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
         }
       },
       "indexes": {
@@ -1506,6 +1499,80 @@
         "retention_overrides_coherence_check": {
           "name": "retention_overrides_coherence_check",
           "value": "(\"retention_overrides\".\"keep_forever\" = 1 and \"retention_overrides\".\"days\" is null) or (\"retention_overrides\".\"keep_forever\" = 0 and \"retention_overrides\".\"days\" > 0)"
+        }
+      }
+    },
+    "retention_purge_runs": {
+      "name": "retention_purge_runs",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "at": {
+          "name": "at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(unixepoch())"
+        },
+        "trigger": {
+          "name": "trigger",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "total_deleted": {
+          "name": "total_deleted",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "duration_ms": {
+          "name": "duration_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "items": {
+          "name": "items",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "retention_purge_runs_at_idx": {
+          "name": "retention_purge_runs_at_idx",
+          "columns": [
+            "at"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "retention_purge_runs_trigger_check": {
+          "name": "retention_purge_runs_trigger_check",
+          "value": "\"retention_purge_runs\".\"trigger\" in ('scheduled', 'manual')"
+        },
+        "retention_purge_runs_total_deleted_check": {
+          "name": "retention_purge_runs_total_deleted_check",
+          "value": "\"retention_purge_runs\".\"total_deleted\" >= 0"
+        },
+        "retention_purge_runs_duration_check": {
+          "name": "retention_purge_runs_duration_check",
+          "value": "\"retention_purge_runs\".\"duration_ms\" >= 0"
         }
       }
     },

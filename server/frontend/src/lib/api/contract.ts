@@ -84,6 +84,9 @@ export type {
   RetentionEntryResponse,
   RetentionConfigResponse,
   SetRetentionOverrideRequest,
+  RetentionPurgeRunResponse,
+  RetentionPurgeRunsResponse,
+  RetentionPurgePreviewResponse,
 } from "../../../../src/api/retention/dtos.js";
 export type {
   CreateIntegrationTokenRequest,

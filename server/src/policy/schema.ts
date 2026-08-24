@@ -38,6 +38,7 @@ import {
   matchTypeValues,
   platformValues,
   retentionCategoryValues,
+  retentionPurgeTriggerValues,
   scheduleActionValues,
   scopeValues,
   soundProfileValues,
@@ -991,5 +992,50 @@ export const retentionOverrides = sqliteTable(
       "retention_overrides_coherence_check",
       sql`(${table.keepForever} = 1 and ${table.days} is null) or (${table.keepForever} = 0 and ${table.days} > 0)`,
     ),
+  ],
+);
+
+/**
+ * One category's outcome within a recorded retention purge run, stored in the
+ * `retention_purge_runs.items` JSON column (the `audit_log.command` JSON-column
+ * precedent). Mirrors `policy/purge.ts`'s `PurgeCategoryResult`, but `cutoff`
+ * is serialised as **epoch seconds** (offset-free UTC, ADR 0001) rather than a
+ * `Date`, matching how every timestamp is stored; `null` means the category is
+ * kept forever (nothing purged).
+ */
+export interface RetentionPurgeRunItem {
+  readonly category: (typeof retentionCategoryValues)[number];
+  readonly cutoff: number | null;
+  readonly deleted: number;
+}
+
+/**
+ * Ledger of retention purge runs (#137, epic #135).
+ *
+ * The scheduled purge job (`src/retention/`) records one row per actual run
+ * (dry-run *previews* are reads, not runs, and are never recorded) so purges
+ * are observable and the admin retention page can show a last-run summary. This
+ * is a purpose-built ledger rather than the transport `audit_log` (#85): that
+ * table is command-shaped — every row requires a client `target_*` and a
+ * `command` argv — whereas a purge is an internal DB-maintenance op with
+ * neither. `items` carries the per-category breakdown ({@link
+ * RetentionPurgeRunItem}) as JSON, exactly as `audit_log.command` stores its
+ * argv. The `(at)` index serves the newest-first "last run" read.
+ */
+export const retentionPurgeRuns = sqliteTable(
+  "retention_purge_runs",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    at: timestampNow("at"),
+    trigger: text("trigger", { enum: retentionPurgeTriggerValues }).notNull(),
+    totalDeleted: integer("total_deleted").notNull(),
+    durationMs: integer("duration_ms").notNull(),
+    items: text("items", { mode: "json" }).$type<RetentionPurgeRunItem[]>().notNull(),
+  },
+  (table) => [
+    index("retention_purge_runs_at_idx").on(table.at),
+    check("retention_purge_runs_trigger_check", oneOf(table.trigger, retentionPurgeTriggerValues)),
+    check("retention_purge_runs_total_deleted_check", sql`${table.totalDeleted} >= 0`),
+    check("retention_purge_runs_duration_check", sql`${table.durationMs} >= 0`),
   ],
 );
