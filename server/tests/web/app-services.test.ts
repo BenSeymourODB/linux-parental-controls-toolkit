@@ -64,6 +64,32 @@ describe("buildAppServices", () => {
     await services.teardown();
   });
 
+  it("always constructs the retention purge scheduler and stops it on teardown", async () => {
+    const db = testDb();
+    openDbs.push(db);
+    const services = buildAppServices({ db }, disabledSettings(), log);
+
+    expect(typeof services.retentionPurge.start).toBe("function");
+    expect(typeof services.retentionPurge.tick).toBe("function");
+    const stop = vi.spyOn(services.retentionPurge, "stop");
+
+    await services.teardown();
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it("honours an injected retention purge scheduler and stops it on teardown", async () => {
+    const db = testDb();
+    openDbs.push(db);
+    const retentionPurge = { start: vi.fn(), tick: vi.fn(), stop: vi.fn() };
+    const services = buildAppServices({ db, retentionPurge }, disabledSettings(), log);
+
+    expect(services.retentionPurge).toBe(retentionPurge);
+    await services.teardown();
+    expect(retentionPurge.stop).toHaveBeenCalledOnce();
+    // Constructing + tearing down never starts the timer (main.ts's job).
+    expect(retentionPurge.start).not.toHaveBeenCalled();
+  });
+
   it("returns injected instances as-is (each seam honoured)", async () => {
     const db = testDb();
     openDbs.push(db);

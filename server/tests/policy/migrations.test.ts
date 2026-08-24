@@ -59,9 +59,10 @@ function columnNames(sqlite: Database.Database, table: string): string[] {
  * Every table the committed migrations must materialise. These are the
  * policy-model tables (docs/architecture.md) plus `admin_credentials`, the
  * single-admin login row added in #52, `transport_queue`, the offline-push
- * queue added in #84, and `retention_overrides`, the per-category retention
- * config added in #136 (none is part of the policy model — see their table
- * comments in `schema.ts`). Sorted to match the `ORDER BY name` query.
+ * queue added in #84, `retention_overrides`, the per-category retention config
+ * added in #136, and `retention_purge_runs`, the purge-run ledger added in #137
+ * (none is part of the policy model — see their table comments in `schema.ts`).
+ * Sorted to match the `ORDER BY name` query.
  */
 const EXPECTED_TABLES = [
   "activities",
@@ -80,6 +81,7 @@ const EXPECTED_TABLES = [
   "integration_tokens",
   "notification_policies",
   "retention_overrides",
+  "retention_purge_runs",
   "schedules",
   "transport_queue",
   "usage_samples",

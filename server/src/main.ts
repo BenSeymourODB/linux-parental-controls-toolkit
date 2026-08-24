@@ -90,6 +90,11 @@ async function main(): Promise<void> {
   // so the `?.` keeps a keyless first boot a no-op.
   app.enforcementPipeline?.start();
 
+  // Start the Phase-11 scheduled retention purge (#137) on its cron cadence.
+  // Wired here (not in buildApp) so building the app starts no timer; buildApp's
+  // onClose teardown stops it. Always present — a purge needs no SSH.
+  app.retentionPurge.start();
+
   // Start the managed-mode timekpr-next mirror refresh scheduler (#392, epic
   // #389) after listen — a first refresh must not delay the dashboard becoming
   // reachable, and the whole point is to keep the fetch off every client's

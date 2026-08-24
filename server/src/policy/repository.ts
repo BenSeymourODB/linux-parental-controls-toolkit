@@ -17,7 +17,7 @@
  * License boundary: none touched — Drizzle (Apache-2.0) and better-sqlite3
  * (MIT) only.
  */
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 
 import type { PolicyDb } from "./db.js";
 import type {
@@ -25,6 +25,7 @@ import type {
   BudgetWindow,
   MatchType,
   RetentionCategory,
+  RetentionPurgeTrigger,
   ScheduleAction,
   Scope,
   SoundProfile,
@@ -44,12 +45,14 @@ import {
   groupSchedules,
   notificationPolicies,
   retentionOverrides,
+  retentionPurgeRuns,
   schedules,
   userGroupMemberships,
   userGroups,
   users,
   usersOnClients,
 } from "./schema.js";
+import type { RetentionPurgeRunItem } from "./schema.js";
 
 /** A persisted {@link users} row. */
 export type UserRow = typeof users.$inferSelect;
@@ -1382,6 +1385,57 @@ export function deleteRetentionOverride(db: PolicyDb, category: RetentionCategor
       .returning({ category: retentionOverrides.category })
       .get() !== undefined
   );
+}
+
+// --- Retention purge runs (#137) -------------------------------------------
+
+/** A persisted {@link retentionPurgeRuns} row (the `items` JSON already parsed). */
+export type RetentionPurgeRunRow = typeof retentionPurgeRuns.$inferSelect;
+
+/** The fields a caller supplies to record one completed purge run. */
+export interface RecordPurgeRunInput {
+  /** When the run executed (its `now`), stored as the row's `at`. */
+  readonly at: Date;
+  /** What triggered it: the croner schedule or an admin "run now". */
+  readonly trigger: RetentionPurgeTrigger;
+  /** Total rows deleted across every category (`>= 0`). */
+  readonly totalDeleted: number;
+  /** Wall-clock duration of the run in milliseconds (`>= 0`). */
+  readonly durationMs: number;
+  /** Per-category breakdown (cutoff as epoch seconds, rows deleted). */
+  readonly items: readonly RetentionPurgeRunItem[];
+}
+
+/**
+ * Append one completed purge run to the ledger and return the stored row.
+ * Previews are never recorded — only actual runs call this (see `src/retention`).
+ */
+export function recordPurgeRun(db: PolicyDb, input: RecordPurgeRunInput): RetentionPurgeRunRow {
+  return db
+    .insert(retentionPurgeRuns)
+    .values({
+      at: input.at,
+      trigger: input.trigger,
+      totalDeleted: input.totalDeleted,
+      durationMs: input.durationMs,
+      items: [...input.items],
+    })
+    .returning()
+    .get();
+}
+
+/**
+ * Recent purge runs, newest first (by `at`, ties broken by newest `id`), capped
+ * at `limit`. `listPurgeRuns(db, 1)[0]` is the "last-run summary" the admin page
+ * and the `GET /retention/purge/runs` route read.
+ */
+export function listPurgeRuns(db: PolicyDb, limit: number): RetentionPurgeRunRow[] {
+  return db
+    .select()
+    .from(retentionPurgeRuns)
+    .orderBy(desc(retentionPurgeRuns.at), desc(retentionPurgeRuns.id))
+    .limit(limit)
+    .all();
 }
 
 /**
