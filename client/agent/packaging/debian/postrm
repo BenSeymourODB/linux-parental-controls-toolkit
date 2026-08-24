@@ -1,0 +1,22 @@
+#!/bin/sh
+# postrm for pct-client (#106). On purge, remove the local config conffile and
+# reload systemd so the removed unit is forgotten. The pct-agent account and its
+# home (/home/pct-agent) are left in place: they hold the server's SSH key and
+# are shared with the installer-provisioned orchestration user (#78).
+set -e
+
+case "$1" in
+purge)
+	rm -f /etc/default/pct-client-bridge
+	if [ -d /run/systemd/system ]; then
+		systemctl daemon-reload || true
+	fi
+	;;
+remove | upgrade | failed-upgrade | abort-install | abort-upgrade | disappear) ;;
+*)
+	echo "postrm called with unknown argument \`$1'" >&2
+	exit 1
+	;;
+esac
+
+exit 0

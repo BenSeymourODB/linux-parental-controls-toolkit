@@ -1,0 +1,32 @@
+[Unit]
+Description=Parental Controls Toolkit client bridge (dashboard event stream)
+Documentation=https://github.com/BenSeymourODB/linux-parental-controls-toolkit
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Low-privilege account created by the client installer (#78) / this package's
+# postinst. Holds the outbound WebSocket to the dashboard; never trusts the
+# local user (docs/client-notifications.md -> "pct-client-bridge").
+User=pct-agent
+Group=pct-agent
+# Populated by the enrolment step of install-client.sh: PCT_BRIDGE_SERVER_URL,
+# PCT_BRIDGE_TOKEN, PCT_BRIDGE_USERS. A conffile, so it survives package upgrades.
+EnvironmentFile=/etc/default/pct-client-bridge
+# /run/pct is created (owned by pct-agent, mode 0755) by the tmpfiles.d entry,
+# not by RuntimeDirectory=: the socket dir must persist across bridge restarts
+# so a supervised user's agent keeps its socket, and dispatch.ts deliberately
+# leaves creating it to packaging (#106). RuntimeDirectory= would tear it down
+# on every stop.
+ExecStart=/usr/lib/pct-client/node/bin/node /usr/lib/pct-client/dist/main.js
+Restart=on-failure
+RestartSec=5
+# Standard service sandboxing (bounded hardening, not tamper-proofing):
+# CLAUDE.md -> "Tamper resistance is deliberately bounded".
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

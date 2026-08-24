@@ -1,0 +1,20 @@
+#!/bin/sh
+# prerm for pct-client (#106). Stop + disable the system bridge on removal.
+# The per-user agent units are systemd --user and were enabled by the installer
+# per supervised uid; they are torn down with the user session, not here.
+set -e
+
+case "$1" in
+remove | deconfigure)
+	if [ -d /run/systemd/system ]; then
+		systemctl disable --now pct-client-bridge.service || true
+	fi
+	;;
+upgrade | failed-upgrade) ;;
+*)
+	echo "prerm called with unknown argument \`$1'" >&2
+	exit 1
+	;;
+esac
+
+exit 0

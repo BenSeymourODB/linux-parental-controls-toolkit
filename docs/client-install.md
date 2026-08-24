@@ -178,6 +178,15 @@ separately:
    - The bridge is given a per-client bearer token (issued by the
      dashboard at enrolment time) so it can authenticate to
      `/api/events/stream`.
+
+   > **How the package is built (#106).** The `pct-client` `.deb` is
+   > produced by `client/agent/build-deb.sh`, which compiles the agent
+   > TypeScript, bundles a pinned, SHA-256-verified Node runtime under
+   > `/usr/lib/pct-client/node`, and ships the two systemd units plus the
+   > `/etc/default/pct-client-bridge` conffile. The package's `postinst`
+   > creates the `pct-agent` account and *enables* the bridge; this step
+   > writes the enrolment token to the conffile and then *starts* it.
+   > Publishing the package over a release channel is #168.
 6. **Configure e2guardian**
    - Generate a default config with per-UID filter groups corresponding
      to each supervised user.

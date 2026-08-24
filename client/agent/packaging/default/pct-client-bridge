@@ -1,0 +1,17 @@
+# Environment for pct-client-bridge.service (EnvironmentFile).
+#
+# The enrolment step of install-client.sh writes the real values here after the
+# dashboard issues the per-client token (#77). This shipped file carries only
+# commented examples so a fresh install has a valid, inert config file; the
+# bridge refuses to start until PCT_BRIDGE_SERVER_URL / PCT_BRIDGE_TOKEN /
+# PCT_BRIDGE_USERS are set (client/agent/src/bridge/config.ts).
+#
+# PCT_BRIDGE_SERVER_URL=wss://dashboard.example.lan/api/events/stream
+# PCT_BRIDGE_TOKEN=<per-client bearer token issued at enrolment>
+# PCT_BRIDGE_USERS=[{"userId":1,"linuxUid":1001}]
+#
+# Optional overrides (defaults in config.ts):
+# PCT_BRIDGE_SOCKET_DIR=/run/pct
+# PCT_BRIDGE_SOCKET_MODE=0o600
+# PCT_BRIDGE_BACKOFF_BASE_MS=1000
+# PCT_BRIDGE_BACKOFF_MAX_MS=60000

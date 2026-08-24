@@ -1,0 +1,42 @@
+#!/bin/sh
+# postinst for pct-client (#106). POSIX sh; keep it idempotent so a re-install
+# or upgrade is a no-op where the state already exists.
+set -e
+
+case "$1" in
+configure)
+	# The bridge runs as this low-privilege account, which is ALSO the SSH
+	# principal the dashboard connects as to run timekpra (docs/client-install.md
+	# step 7 / #78). It must therefore have a real login shell and a home for
+	# ~/.ssh/authorized_keys. Create it identically to
+	# client/lib/provision-agent-user.sh so whichever of the two runs first
+	# yields the same account (both are idempotent "skip if exists"): --system,
+	# --create-home (=> /home/pct-agent), --shell /bin/bash (the SSH exec
+	# channel needs a shell). useradd is from the essential passwd package.
+	if ! getent passwd pct-agent >/dev/null 2>&1; then
+		useradd --system --create-home --shell /bin/bash pct-agent
+	fi
+
+	# Only touch systemd when it is the running init (skips containers/chroots).
+	if [ -d /run/systemd/system ]; then
+		systemd-tmpfiles --create /usr/lib/tmpfiles.d/pct-client.conf || true
+		systemctl daemon-reload || true
+		# Enable (not start): the bridge needs the enrolment token written to
+		# /etc/default/pct-client-bridge first, which install-client.sh does
+		# before starting the unit.
+		systemctl enable pct-client-bridge.service || true
+		# On upgrade, pick up the new dist/ + bundled runtime if the bridge is
+		# already running. try-restart is a no-op when the unit is stopped (a
+		# fresh install before enrolment), so it never starts an unconfigured
+		# bridge.
+		systemctl try-restart pct-client-bridge.service || true
+	fi
+	;;
+abort-upgrade | abort-remove | abort-deconfigure) ;;
+*)
+	echo "postinst called with unknown argument \`$1'" >&2
+	exit 1
+	;;
+esac
+
+exit 0
