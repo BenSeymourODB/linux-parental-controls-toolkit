@@ -59,6 +59,8 @@ function client(overrides: Partial<ClientResponse> = {}): ClientResponse {
     lastSeen: "2026-06-20T10:00:00.000Z",
     reportedIps: null,
     sourceIp: null,
+    sshTarget: null,
+    effectiveSshTarget: "mint-box",
     enrolled: true,
     platform: "linux",
     ...overrides,

@@ -36,7 +36,7 @@ import {
 } from "../../../src/transport/health/prober.js";
 
 const CREDENTIALS: SshCredentials = { privateKey: "PRIVATE-KEY", port: 2222 };
-const CLIENT = { hostname: "alice-pc.local", sshUser: "pct-agent" };
+const CLIENT = { hostname: "alice-pc.local", sshUser: "pct-agent", sshTarget: null };
 const HEALTHY_INFO: AwServerInfo = { hostname: "alice-pc", version: "v0.13.2", testing: false };
 /** The loopback endpoint the fake's `withPortForward` hands its callback. */
 const FORWARDED_BASE_URL = "http://127.0.0.1:54321";
