@@ -55,6 +55,7 @@ import type {
   UserOnClientRow,
   UserRow,
 } from "../../policy/repository.js";
+import { sshHostForClient } from "../../transport/ssh/index.js";
 
 /** An IANA timezone name, validated against the host's tz database (ADR-0001). */
 export const tzSchema = z.string().refine(isValidTimeZone, { message: "Unknown IANA timezone" });
@@ -104,6 +105,23 @@ export function toUserResponse(row: UserRow): UserResponse {
 
 // --- Clients ---------------------------------------------------------------
 
+/**
+ * An SSH-target override (#406): a hostname **or** an IPv4/IPv6 literal the
+ * transport dials in preference to the client's `hostname`. Constrained to the
+ * union of the hostname and IP-literal charsets (`.`/`-` for hostnames, `:`/`%`
+ * for IPv6 and its zone id, `_` for lenient hostnames) and length-bounded to a
+ * hostname's max — advisory-grade validation matching the enrolment DTOs'
+ * `reportedIpSchema` posture (safe to store and echo), not a full RFC parse. It
+ * never travels through a hand-rolled JSON encoder, but the charset keeps a bad
+ * value from being mistaken for a shell/URL fragment downstream.
+ */
+export const sshTargetSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(253)
+  .regex(/^[A-Za-z0-9.:%_-]+$/, "must be a hostname or an IPv4/IPv6 address literal");
+
 export const createClientSchema = z.object({
   hostname: z.string().trim().min(1).max(253),
   sshUser: z.string().trim().min(1).max(64),
@@ -117,6 +135,12 @@ export const updateClientSchema = z
     sshUser: z.string().trim().min(1).max(64).optional(),
     /** Admin-editable friendly name (#355); the card titles on it. */
     friendlyName: z.string().trim().min(1).max(100).optional(),
+    /**
+     * The SSH-target override (#406): a value pins the transport to that host;
+     * `null` clears the override (back to `hostname`); an omitted key leaves it
+     * unchanged. Nullable so the admin can revert to the default.
+     */
+    sshTarget: sshTargetSchema.nullable().optional(),
   })
   .refine(nonEmpty, { message: "At least one field must be provided" });
 
@@ -132,6 +156,17 @@ export const clientResponseSchema = z.object({
   reportedIps: z.array(z.string()).nullable(),
   /** The observed source IP of the enrol request, or null (#355). Read-only. */
   sourceIp: z.string().nullable(),
+  /**
+   * The admin-chosen SSH-target override (#406), or null when none is set (the
+   * transport then dials `hostname`). Editable via `PATCH /api/clients/:id`.
+   */
+  sshTarget: z.string().nullable(),
+  /**
+   * The host string the SSH transport actually dials for this client (#406):
+   * `sshTarget ?? hostname`. Read-only, always present — surfaced so the admin
+   * UI shows exactly what the transport will connect to, in lockstep with it.
+   */
+  effectiveSshTarget: z.string(),
   /**
    * Whether this client has been through the enrolment exchange
    * (`POST /api/clients/enrol`) — true once it holds a bearer token. A client
@@ -164,6 +199,8 @@ export function toClientResponse(row: ClientRow): ClientResponse {
     lastSeen: row.lastSeen === null ? null : row.lastSeen.toISOString(),
     reportedIps: row.reportedIps,
     sourceIp: row.sourceIp,
+    sshTarget: row.sshTarget,
+    effectiveSshTarget: sshHostForClient(row),
     enrolled: row.bearerTokenHash !== null,
     platform: row.platform,
   };

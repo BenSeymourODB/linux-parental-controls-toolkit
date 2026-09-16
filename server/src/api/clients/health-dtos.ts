@@ -33,6 +33,23 @@ export const componentHealthSchema = z.object({
 });
 
 /**
+ * One row of a client's capability matrix (#400): a known capability from the
+ * server catalogue, its admin-facing label, and whether *this* client
+ * advertised support for it in its event-stream handshake. The frontend renders
+ * every catalogue entry and greys out the unsupported ones.
+ */
+export const clientCapabilitySchema = z.object({
+  /** The capability id (`per_app_close`, `session_budget`, …). */
+  capability: z.string(),
+  /** Admin-facing label from the server catalogue. */
+  label: z.string(),
+  /** One-line explanation of the primitive, from the server catalogue (the chip tooltip). */
+  description: z.string(),
+  /** Did this client advertise the capability on its last handshake? */
+  supported: z.boolean(),
+});
+
+/**
  * A single queued (or dead-lettered) transport action for a client — the
  * "what's pending / what got stuck" the admin sees for an unreachable client.
  * Mirrors the `transport_queue` row, with timestamps serialised as ISO strings.
@@ -79,6 +96,22 @@ export const clientHealthSchema = z.object({
   reachabilityReason: z.enum(sshUnreachableReasonValues).nullable(),
   /** Last time the client was confirmed reachable (ISO), or null if never. */
   lastSeen: z.string().nullable(),
+  /**
+   * When the post-enrol connectivity verification (#354) last ran (ISO), or
+   * null if it never has. Lets the card show "enrolled but never verified" as a
+   * distinct state from "verified once, currently offline" — the passive
+   * `lastSeen`/`reachability` signals can't tell those apart on their own.
+   */
+  lastVerifiedAt: z.string().nullable(),
+  /** The verdict of the most recent verification (#354): reachable or not; null if never run. */
+  lastVerifyReachable: z.boolean().nullable(),
+  /**
+   * The classified SSH failure cause (#353) of the most recent verification
+   * when it failed, or null when it succeeded or never ran (#354). Distinct
+   * from {@link reachabilityReason}, which reflects a live probe this request
+   * ran; this is the persisted outcome of the installer-triggered self-test.
+   */
+  lastVerifyReason: z.enum(sshUnreachableReasonValues).nullable(),
   enrolledAt: z.string(),
   /** When this status was probed (ISO), or null when no probe ran (degraded). */
   probedAt: z.string().nullable(),
@@ -107,6 +140,20 @@ export const clientHealthSchema = z.object({
    */
   versionStatus: z.enum(clientVersionStatusValues),
   components: z.array(componentHealthSchema),
+  /**
+   * Whether the client has ever completed an event-stream handshake and so
+   * reported a capability set (#400). `false` for an admin-CRUD row or an
+   * enrolled client the bridge has not yet connected from — the view then shows
+   * a "not reported yet" state rather than a wall of greyed controls.
+   */
+  capabilitiesReported: z.boolean(),
+  /**
+   * The full known capability catalogue, each entry flagged `supported` for
+   * this client (#400). Always the complete catalogue so the view can render
+   * every control and grey out the ones this client can't honour; when
+   * {@link capabilitiesReported} is `false`, every entry is `supported: false`.
+   */
+  capabilities: z.array(clientCapabilitySchema),
   queue: clientQueueSchema,
 });
 
@@ -114,6 +161,7 @@ export const clientHealthSchema = z.object({
 export const clientHealthListSchema = z.array(clientHealthSchema);
 
 export type ComponentHealthDto = z.infer<typeof componentHealthSchema>;
+export type ClientCapabilityDto = z.infer<typeof clientCapabilitySchema>;
 export type QueuedActionSummary = z.infer<typeof queuedActionSummarySchema>;
 export type ClientQueueDto = z.infer<typeof clientQueueSchema>;
 export type ClientHealthResponse = z.infer<typeof clientHealthSchema>;

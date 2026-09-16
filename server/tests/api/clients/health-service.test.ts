@@ -66,6 +66,36 @@ describe("getClientHealth", () => {
     expect(health?.components[0]?.detail).toMatch(/#39/);
   });
 
+  it("defaults the verification fields to null before any verification runs (#354)", async () => {
+    const health = await getClientHealth(db, client.id);
+    expect(health?.lastVerifiedAt).toBeNull();
+    expect(health?.lastVerifyReachable).toBeNull();
+    expect(health?.lastVerifyReason).toBeNull();
+  });
+
+  it("surfaces a persisted failed verification outcome + its class (#354)", async () => {
+    repo.recordClientVerification(db, client.id, {
+      reachable: false,
+      reason: "auth",
+      at: PROBE_AT,
+    });
+    const health = await getClientHealth(db, client.id);
+    expect(health?.lastVerifiedAt).toBe("2026-06-19T12:00:00.000Z");
+    expect(health?.lastVerifyReachable).toBe(false);
+    expect(health?.lastVerifyReason).toBe("auth");
+  });
+
+  it("surfaces a persisted reachable verification with a null reason (#354)", async () => {
+    repo.recordClientVerification(db, client.id, {
+      reachable: true,
+      reason: null,
+      at: PROBE_AT,
+    });
+    const health = await getClientHealth(db, client.id);
+    expect(health?.lastVerifyReachable).toBe(true);
+    expect(health?.lastVerifyReason).toBeNull();
+  });
+
   it("reports a live probe and bumps last_seen when the client is reachable", async () => {
     const prober = new FakeProber(onlineResult);
     const health = await getClientHealth(db, client.id, prober);
@@ -133,6 +163,48 @@ describe("getClientHealth", () => {
       "policy.push:user:2",
     ]);
     expect(health?.queue.actions.find((a) => a.status === "failed")?.lastError).toBe("exit code 1");
+  });
+});
+
+describe("capability matrix (#400)", () => {
+  it("reports capabilitiesReported=false and every entry unsupported before any handshake", async () => {
+    const health = await getClientHealth(db, client.id);
+    expect(health?.capabilitiesReported).toBe(false);
+    // The full catalogue is always rendered so the view knows the vocabulary;
+    // nothing is supported until the client handshakes.
+    expect(health?.capabilities.length).toBeGreaterThan(0);
+    expect(health?.capabilities.every((c) => c.supported === false)).toBe(true);
+    expect(health?.capabilities.every((c) => c.label.length > 0)).toBe(true);
+    // The catalogue description is carried through for the chip tooltip.
+    expect(health?.capabilities.every((c) => c.description.length > 0)).toBe(true);
+  });
+
+  it("flags only the advertised capabilities as supported", async () => {
+    repo.recordClientCapabilities(db, client.id, ["session_budget"]);
+    const health = await getClientHealth(db, client.id);
+    expect(health?.capabilitiesReported).toBe(true);
+    const bySupport = Object.fromEntries(
+      (health?.capabilities ?? []).map((c) => [c.capability, c.supported]),
+    );
+    expect(bySupport["session_budget"]).toBe(true);
+    expect(bySupport["per_app_close"]).toBe(false);
+  });
+
+  it("treats an empty advertised set as reported with nothing supported", async () => {
+    repo.recordClientCapabilities(db, client.id, []);
+    const health = await getClientHealth(db, client.id);
+    expect(health?.capabilitiesReported).toBe(true);
+    expect(health?.capabilities.every((c) => c.supported === false)).toBe(true);
+  });
+
+  it("ignores an advertised capability the catalogue doesn't know", async () => {
+    repo.recordClientCapabilities(db, client.id, ["session_budget", "future_primitive"]);
+    const health = await getClientHealth(db, client.id);
+    // Only known controls render; the unknown one is not surfaced.
+    expect(health?.capabilities.some((c) => c.capability === "future_primitive")).toBe(false);
+    expect(health?.capabilities.find((c) => c.capability === "session_budget")?.supported).toBe(
+      true,
+    );
   });
 });
 

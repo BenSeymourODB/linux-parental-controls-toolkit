@@ -301,6 +301,83 @@ plan_strict() {
   [[ "$output" == *"client credentials stored at ${PCT_STATE_DIR}/pct-client.env"* ]]
 }
 
+# --- verify-connection (#354) ----------------------------------------------
+
+@test "runs the post-enrol connectivity self-test after authorizing the key (#354)" {
+  export PCT_FAKE_ENROL_RESPONSE='{"clientId":7,"hostname":"h","sshUser":"pct-agent","bearerToken":"BEARER-XYZ","sshPublicKey":null,"supervisedUsers":[]}'
+  ok_args
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Verify the dashboard can reach this client over SSH"* ]]
+  # POSTs to the per-client verify endpoint with the id from the enrol response.
+  [[ "$output" == *"POST https://parentalcontrols.lan/api/clients/7/verify-connection"* ]]
+  # Default fake response is reachable → the loud pass verdict.
+  [[ "$output" == *"the dashboard reached this client over SSH"* ]]
+}
+
+@test "never prints the client bearer token in the verify step (#354)" {
+  export PCT_FAKE_ENROL_RESPONSE='{"clientId":7,"hostname":"h","sshUser":"pct-agent","bearerToken":"SECRET-BEARER","sshPublicKey":null,"supervisedUsers":[]}'
+  ok_args
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Authorization: Bearer <redacted>"* ]]
+  [[ "$output" != *"SECRET-BEARER"* ]]
+}
+
+@test "warns loudly with a DNS remediation hint on an unreachable verify (#354)" {
+  export PCT_FAKE_ENROL_RESPONSE='{"clientId":7,"hostname":"alice-pc.local","sshUser":"pct-agent","bearerToken":"B","sshPublicKey":null,"supervisedUsers":[]}'
+  export PCT_FAKE_VERIFY_RESPONSE='{"reachable":false,"failureClass":"dns","detail":"getaddrinfo ENOTFOUND alice-pc.local","verifiedAt":"1970-01-01T00:00:00.000Z"}'
+  ok_args
+  # A failed verify is a warning, not a rollback: the install still exits 0.
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"could NOT reach this client over SSH (dns)"* ]]
+  # The DNS hint names the client's own hostname (what the dashboard tried to
+  # resolve) — non-deterministic in CI — so assert the stable remediation text.
+  [[ "$output" == *"cannot resolve"* ]]
+  [[ "$output" == *"add extra_hosts/dns to the dashboard's compose file"* ]]
+  [[ "$output" == *"client enrolment complete"* ]]
+}
+
+@test "prints the auth-class remediation hint on an auth failure (#354)" {
+  export PCT_FAKE_ENROL_RESPONSE='{"clientId":7,"hostname":"h","sshUser":"pct-agent","bearerToken":"B","sshPublicKey":null,"supervisedUsers":[]}'
+  export PCT_FAKE_VERIFY_RESPONSE='{"reachable":false,"failureClass":"auth","detail":"auth failed","verifiedAt":"1970-01-01T00:00:00.000Z"}'
+  ok_args
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"could NOT reach this client over SSH (auth)"* ]]
+  [[ "$output" == *"SSH key is not authorized for pct-agent"* ]]
+}
+
+@test "does not run the verify step under --skip-enrol (#354)" {
+  PCT_STATE_DIR="${TMP}/etc-pct" plan --skip-enrol --supervised-user alice
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"Verify the dashboard can reach this client over SSH"* ]]
+}
+
+@test "soft-warns (no abort) when the dashboard has no SSH key yet: verify 503 (real run)" {
+  local stub="${TMP}/curl-503"
+  # First call (enrol) → 200 with a body; second (verify) → 503. Distinguish by URL.
+  cat >"$stub" <<'EOS'
+#!/usr/bin/env bash
+url="${@: -1}"
+case "$url" in
+  *"/verify-connection") out=""; for a in "$@"; do [ "$prev" = "--output" ] && out="$a"; prev="$a"; done
+    : >"$out"; printf '503' ;;
+  *"/enrol") out=""; for a in "$@"; do [ "$prev" = "--output" ] && out="$a"; prev="$a"; done
+    printf '{"clientId":7,"hostname":"h","sshUser":"pct-agent","bearerToken":"B","sshPublicKey":null,"supervisedUsers":[]}' >"$out"; printf '200' ;;
+  *) printf '200' ;;
+esac
+EOS
+  chmod +x "$stub"
+  run env -u PCT_DRY_RUN bash -c '
+    PCT_CURL="'"$stub"'"
+    PCT_OS_RELEASE="'"$OSREL"'"
+    PCT_STATE_DIR="'"${TMP}"'/etc-pct"
+    export PCT_CURL PCT_OS_RELEASE PCT_STATE_DIR
+    source "'"$SCRIPT"'"
+    pct_orch_verify_connection https://parentalcontrols.lan 7 BEARER h
+  '
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"can't run the SSH self-test yet"* ]]
+}
+
 # --- self-test hook --------------------------------------------------------
 
 @test "notes the self-test is pending when it is not installed" {
