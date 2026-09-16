@@ -231,11 +231,14 @@ modelled on the AdGuard Home trichotomy above and decided in
 [`docs/adr/0011-server-hosted-upstream-package-mirror.md`](adr/0011-server-hosted-upstream-package-mirror.md)
 (tracking issue #389).
 
-> **Status:** this release ships the configuration seam only (issue #391).
-> The background fetch/refresh job (#392), the served apt index + enrol-time
-> advertisement (#393), and the client-side repo path (#394) land in
-> subsequent Phase-14 slices; setting `managed`/`external` has no runtime
-> effect yet.
+> **Status:** `managed` mode now fetches and serves. The config seam (#391),
+> the background fetch/refresh job (#392), and the served `.deb` + enrol-time
+> advertisement (#393, the ADR 0011 MVP) have landed. Still ahead: the
+> **client-side repo path** (#394, so the installer actually consumes the
+> advertisement) and the **GPG-signed apt index** with full `apt`
+> update/pinning/rollback semantics (the Phase-14 end-state under epic #163).
+> Until the client path lands, setting `managed` fetches + serves but no
+> installer points at it yet.
 
 | Mode | What the dashboard does | When to use it |
 |---|---|---|
@@ -264,6 +267,39 @@ PCT_TIMEKPR_MIRROR_URL=https://apt.lan/timekpr
 The mirrored **package/channel is chosen on the server**
 (`PCT_TIMEKPR_MIRROR_PACKAGE`, stable or beta), so a client never has to
 know which channel it gets.
+
+### What `managed` mode serves (the MVP)
+
+Once the background job (#392) has fetched a `.deb`, the dashboard serves it
+over the LAN from the same Fastify process, alongside `/install-client.sh`:
+
+| Route | Response |
+|---|---|
+| `GET /apt/timekpr/manifest.json` | `{ "package", "version", "filename" }` for the currently-cached `.deb`, or `404` before the first successful fetch. |
+| `GET /apt/timekpr/<file>.deb` | The cached package bytes (`Content-Type: application/vnd.debian.binary-package`). Only a validated `.deb` basename that exists under the mirror dir is served; anything else `404`s. |
+
+At enrol, the response advertises these coordinates so the client
+(#394) can install without a Launchpad round-trip. The `timekprMirror`
+field mirrors the config trichotomy:
+
+```jsonc
+// managed, once a version is cached
+"timekprMirror": {
+  "mode": "managed",
+  "aptPath": "/apt/timekpr",          // join onto --server-url
+  "package": "timekpr-next",
+  "version": "0.5.5",                 // null until the first refresh
+  "debFilename": "timekpr-next_0.5.5_all.deb"  // null until the first refresh
+}
+// external: { "mode": "external", "url": "https://apt.lan/timekpr" }
+// disabled: { "mode": "disabled" }
+```
+
+The MVP contract is a **direct `.deb` download** (`apt-get install
+./<file>.deb`, which resolves the package's own dependencies from the
+client's existing distro repos). Signed apt-index semantics
+(`InRelease`/`Release.gpg`, `apt update`/pinning/rollback) are the
+Phase-14 end-state and are tracked separately.
 
 ### License posture
 
