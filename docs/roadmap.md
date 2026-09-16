@@ -242,6 +242,20 @@ expiry, lock + grant-unlock on overall-screen-time expiry.
   is decided in
   [`docs/adr/0007-event-stream-version-compatibility.md`](adr/0007-event-stream-version-compatibility.md);
   this phase implements it.
+- **Pause-on-lock** — a voluntary screen lock pauses the supervised user's
+  budget and unlocking resumes it (the one-tap "I'm taking a break" lever).
+  The model & authority — Timekpr-native for the overall clock, an
+  authoritative server pause-ledger for the per-activity path, new
+  capability-gated `session.locked` / `session.unlocked` client→server
+  frames, reconciliation bounds, and the `pause_on_lock` policy knob — is
+  decided in
+  [`docs/adr/0015-pause-on-lock.md`](adr/0015-pause-on-lock.md); epic
+  [#313](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/313)
+  implements it across Phase 8b (client agent + event stream), with one
+  Phase-4 Timekpr piece
+  ([#318](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/318))
+  and one Phase-9 UI piece
+  ([#320](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/320)).
 
 ## Phase 8c — Lockout / grant-unlock flow
 

@@ -317,6 +317,16 @@ of normal policy distribution:
   decided in
   [`docs/adr/0007-event-stream-version-compatibility.md`](adr/0007-event-stream-version-compatibility.md);
   the frame envelope is fixed against that contract.
+- **Pause-on-lock** — a voluntary screen lock pausing the budget (and the
+  first *client→server* application frames on this stream,
+  `session.locked` / `session.unlocked`, the "liveness pings and
+  acknowledgements" this channel was chosen to carry). Its model &
+  authority — how the overall clock and the per-activity path each pause,
+  how the countdown/cadence freeze while paused, and the `pause_on_lock`
+  policy knob — is decided in
+  [`docs/adr/0015-pause-on-lock.md`](adr/0015-pause-on-lock.md) (epic
+  [#313](https://github.com/BenSeymourODB/linux-parental-controls-toolkit/issues/313)),
+  not here.
 - Push notifications to the *parent*'s phone when a child's budget
   is running low. That's a feature of the `/app` PWA, covered in
   [`roadmap.md`](roadmap.md) Phase 9, not of this client-side agent.
