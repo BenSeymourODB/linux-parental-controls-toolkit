@@ -44,6 +44,48 @@ export const CLIENT_CAPABILITIES = {
 export type ClientCapability = (typeof CLIENT_CAPABILITIES)[keyof typeof CLIENT_CAPABILITIES];
 
 /**
+ * One entry in the admin-facing capability catalogue: a known capability, its
+ * human label, and a one-line description of the enforcement primitive it
+ * names.
+ */
+export interface ClientCapabilityDescriptor {
+  /** The capability id a client advertises in its `hello` (a {@link ClientCapability}). */
+  capability: ClientCapability;
+  /** Short admin-facing label for the Clients view. */
+  label: string;
+  /** One-line explanation of the primitive the capability gates. */
+  description: string;
+}
+
+/**
+ * The ordered, admin-facing catalogue of every capability the server knows
+ * about — the single source of the UI labels for the per-client capability
+ * matrix (#400). The server owns these labels (the same "server classifies,
+ * frontend renders" split as {@link ../api/clients/version-status.ts}) so the
+ * vocabulary stays single-sourced with {@link CLIENT_CAPABILITIES}, and a
+ * future Windows client's greyed-out controls come straight from here rather
+ * than a hand-mirrored frontend list (`docs/windows-client-support.md` →
+ * "Modularity tweaks").
+ *
+ * Every {@link CLIENT_CAPABILITIES} value must appear exactly once; a unit test
+ * (`tests/events/capabilities.test.ts`) pins that so a new capability can't be
+ * added to the vocabulary without giving it a catalogue label.
+ */
+export const CLIENT_CAPABILITY_CATALOG: readonly ClientCapabilityDescriptor[] = [
+  {
+    capability: CLIENT_CAPABILITIES.perAppClose,
+    label: "Per-app force-close",
+    description: "Kills an app or app-group's processes when its per-activity quota is exhausted.",
+  },
+  {
+    capability: CLIENT_CAPABILITIES.sessionBudget,
+    label: "Session budget",
+    description:
+      "Locks the session when the overall screen-time budget runs out, and unlocks on a restoring grant.",
+  },
+];
+
+/**
  * The capability a client must have advertised to be sent `event`, or `null`
  * for a **baseline** frame every client receives.
  *

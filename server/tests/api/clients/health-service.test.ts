@@ -136,6 +136,48 @@ describe("getClientHealth", () => {
   });
 });
 
+describe("capability matrix (#400)", () => {
+  it("reports capabilitiesReported=false and every entry unsupported before any handshake", async () => {
+    const health = await getClientHealth(db, client.id);
+    expect(health?.capabilitiesReported).toBe(false);
+    // The full catalogue is always rendered so the view knows the vocabulary;
+    // nothing is supported until the client handshakes.
+    expect(health?.capabilities.length).toBeGreaterThan(0);
+    expect(health?.capabilities.every((c) => c.supported === false)).toBe(true);
+    expect(health?.capabilities.every((c) => c.label.length > 0)).toBe(true);
+    // The catalogue description is carried through for the chip tooltip.
+    expect(health?.capabilities.every((c) => c.description.length > 0)).toBe(true);
+  });
+
+  it("flags only the advertised capabilities as supported", async () => {
+    repo.recordClientCapabilities(db, client.id, ["session_budget"]);
+    const health = await getClientHealth(db, client.id);
+    expect(health?.capabilitiesReported).toBe(true);
+    const bySupport = Object.fromEntries(
+      (health?.capabilities ?? []).map((c) => [c.capability, c.supported]),
+    );
+    expect(bySupport["session_budget"]).toBe(true);
+    expect(bySupport["per_app_close"]).toBe(false);
+  });
+
+  it("treats an empty advertised set as reported with nothing supported", async () => {
+    repo.recordClientCapabilities(db, client.id, []);
+    const health = await getClientHealth(db, client.id);
+    expect(health?.capabilitiesReported).toBe(true);
+    expect(health?.capabilities.every((c) => c.supported === false)).toBe(true);
+  });
+
+  it("ignores an advertised capability the catalogue doesn't know", async () => {
+    repo.recordClientCapabilities(db, client.id, ["session_budget", "future_primitive"]);
+    const health = await getClientHealth(db, client.id);
+    // Only known controls render; the unknown one is not surfaced.
+    expect(health?.capabilities.some((c) => c.capability === "future_primitive")).toBe(false);
+    expect(health?.capabilities.find((c) => c.capability === "session_budget")?.supported).toBe(
+      true,
+    );
+  });
+});
+
 describe("version drift (#352)", () => {
   it("reports the reported agent version + reported-at, echoing the server version", async () => {
     repo.recordClientAgentVersion(db, client.id, "0.1.0-alpha.4", PROBE_AT);

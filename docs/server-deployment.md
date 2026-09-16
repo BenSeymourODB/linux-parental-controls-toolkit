@@ -549,15 +549,30 @@ Each category keys its "age" on the *end* of the record's relevant window, so
 a purge only ever removes data that is wholly in the past — an active or
 future-dated record can never be selected.
 
-This release ships the retention **configuration model and API** (#136) and the
-**per-entity deletion routines** (#138): one bounded, idempotent purge per
-category (`server/src/policy/purge.ts`, `purgeExpiredRecords`) that deletes
-strictly-expired rows in batches, so a large first run never holds a long write
-lock and an interrupted run resumes cleanly. What remains separate (#137) is the
-croner-scheduled job that *drives* these routines on a cadence, audits each run,
-and offers a dry-run/preview and a manual "run now". Only the global default
-lives in the environment — restart to change it; per-category overrides are
-runtime config and need no restart.
+Purging is **automatic**. A croner-scheduled job (#137) runs on the cadence set
+by `PCT_RETENTION_PURGE_CRON` (default `0 3 * * *` — 03:00 daily) and drives the
+per-entity deletion routines (#138, `server/src/policy/purge.ts`): one bounded,
+idempotent purge per category that deletes strictly-expired rows in batches
+(`PCT_RETENTION_PURGE_BATCH_SIZE`, default `1000`), so a large first run never
+holds a long write lock and an interrupted run resumes cleanly. The effective
+policy is rebuilt each pass, so a window change applies on the next run without a
+restart.
+
+Every run is recorded in a purge-run ledger (`retention_purge_runs`) — what each
+category's cutoff was and how many rows it deleted — so purges are observable;
+the admin retention page shows the last run. Admins can also trigger a run, or a
+side-effect-free **preview** that only counts what *would* be purged, through the
+admin API:
+
+- `POST /api/retention/purge` — run the purge now (recorded as a `manual` run).
+- `POST /api/retention/purge/preview` — dry run: per-category counts, deletes
+  and records nothing.
+- `GET /api/retention/purge/runs` — recent runs, newest first (the first is the
+  last-run summary).
+
+Only the global default and the purge cadence/batch size live in the
+environment — restart to change them; per-category overrides are runtime config
+and need no restart.
 
 ## Upgrade path
 
