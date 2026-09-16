@@ -433,6 +433,17 @@ parental-controls toolkit. Example flow:
 - All external traffic enters via `/api/integrations/*`. No side channels.
 - Per-integration tokens are scoped (e.g. `grants:write`,
   `policy:read`), revocable from the admin UI, and rate-limited per token.
+  The limit is a fixed in-process window keyed by the authenticated token
+  (`PCT_INTEGRATIONS_RATE_LIMIT_MAX` requests per
+  `PCT_INTEGRATIONS_RATE_LIMIT_WINDOW_SECONDS`, default 120 / 60 s). It is
+  enforced in the integration guard right after authentication, so a noisy
+  integrator is throttled regardless of the endpoint or scope it targets (an
+  over-limit request is rejected before the scope check, so a wrong-scope flood
+  is throttled too). Every **authenticated** response carries `RateLimit-Limit`
+  / `RateLimit-Remaining` / `RateLimit-Reset` (an unauthenticated `401` carries
+  none — no token is known yet); an over-limit request is rejected `429` with
+  the standard `{ error: { code: "rate_limited", … } }` envelope and a
+  `Retry-After` header.
 - Grant requests are **idempotent by `source_ref`**. The integrator owns
   the dedupe key; the dashboard enforces uniqueness.
 - The `Grant` ledger is immutable: revocations are a separate row, not an
