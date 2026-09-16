@@ -21,10 +21,21 @@ import { budgetResponseSchema, scheduleResponseSchema } from "./dtos.js";
 /**
  * The proposed-policy preview request body. `budgets`/`schedules` reuse the
  * single-source response DTOs (what the editor holds), so a proposed rule
- * carries its `id`/`ordinal` — which the resolver needs for precedence. `now`
- * is an optional reference instant (ISO-8601) the proposed/current resolution
- * is computed against; it exists for deterministic tests and future-dated
- * previews, and defaults to the current time when absent.
+ * carries its `id`/`ordinal` — which the resolver needs for precedence.
+ *
+ * Two ways to pick the reference the proposed/current resolution is computed
+ * against, in precedence order:
+ *
+ * - `date` — a calendar date (`YYYY-MM-DD`) the admin picks to preview a
+ *   **future-dated** policy (#281). The server resolves it to an instant at
+ *   local noon of that date in the *user's effective timezone*, so the
+ *   recurring resolver selects the right reference week (a date-scoped schedule
+ *   rule dormant today but active that week then shows in the diff). Because the
+ *   tz-aware conversion is the server's to make, the client sends only the date.
+ * - `now` — an instant-precise reference (ISO-8601 date-time), the seam
+ *   deterministic tests pin the clock with.
+ *
+ * When both are present `date` wins; when neither is, the current time is used.
  *
  * Note: `scheduleResponseSchema` validates the recurrence fields only
  * structurally (each `int | null`), not the cross-field invariants the write
@@ -47,6 +58,13 @@ export const policyPreviewRequestSchema = z.object({
   budgets: z.array(budgetResponseSchema).default([]),
   schedules: z.array(scheduleResponseSchema).default([]),
   now: z.string().datetime().optional(),
+  /**
+   * A calendar date (`YYYY-MM-DD`) to preview the policy *as of*. Optional and,
+   * like `now`, deliberately not `.default(...)` so the inferred type keeps
+   * `date?: string` and a caller previewing "today" omits it. Validated as a
+   * real calendar date (rejects `2026-13-40` and any date-time string).
+   */
+  date: z.iso.date().optional(),
   probe: z.boolean().optional(),
 });
 

@@ -29,6 +29,13 @@
  * effect, and it bumps `last_seen` on a client that answers, exactly like the
  * Clients-page health probe.
  *
+ * **Future-dated.** By default the preview resolves against *now*; a request may
+ * pass a calendar `date` (#281) to preview the policy as it resolves on a chosen
+ * future day, so a date-scoped schedule rule (its `effective_from`/`effective_to`
+ * gate) dormant today but active that week surfaces in the diff. The reference is
+ * the only thing `date` moves; the resolver, diff, and client annotations are
+ * unchanged.
+ *
  * **Scope.** SSH + `timekpra` session limits (what `resolve.ts` models on
  * `main`). The Ansible-side filter diff (e2guardian / iptables) is Phase 6 (#90)
  * and is a tracked follow-up.
@@ -40,7 +47,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 
 import type { Settings } from "../../config.js";
-import { resolveEffectiveTz } from "../../policy/budget-window.js";
+import { localDayBounds, resolveEffectiveTz } from "../../policy/budget-window.js";
 import type { PolicyDb } from "../../policy/db.js";
 import {
   gatherUserBudgets,
@@ -68,6 +75,38 @@ import {
 
 /** `:userId` path param for the preview route. */
 const previewParamsSchema = z.object({ userId: z.coerce.number().int().positive() });
+
+/** Local minutes in half a day — the offset from local midnight to local noon. */
+const NOON_OFFSET_MS = 12 * 60 * 60 * 1000;
+
+/**
+ * The reference instant the current/proposed policy is resolved against, from
+ * the request body (precedence `date` > `now` > current time; see
+ * {@link policyPreviewRequestSchema}).
+ *
+ * A `date` (`YYYY-MM-DD`, already validated as a real calendar date) is resolved
+ * to **local noon** of that date in the user's effective `tz`:
+ * `localDayBounds` gives the UTC instant of local midnight, and +12h lands at
+ * local noon. Noon (not midnight) is used so the reference sits ~12h from either
+ * local-day edge — a DST shift (±1h) can never nudge it into an adjacent day —
+ * which keeps the resolver's reference-week selection correct even for a `date`
+ * that falls on a week boundary. The resolver only uses the instant to pick the
+ * week (and, for grants/date gates, the day), so noon-of-day is the faithful
+ * "preview this whole day/week" reference.
+ */
+function referenceInstant(body: PolicyPreviewRequest, tz: string): Date {
+  if (body.date !== undefined) {
+    // `z.iso.date()` has already guaranteed three real numeric parts, but a
+    // runtime destructure (not an `as` tuple cast, banned by CLAUDE.md) is what
+    // satisfies `noUncheckedIndexedAccess`; the guard below is unreachable and
+    // degrades to "today" only to keep the types honest.
+    const [year, month, day] = body.date.split("-").map(Number);
+    if (year !== undefined && month !== undefined && day !== undefined) {
+      return new Date(localDayBounds(year, month, day, tz).start.getTime() + NOON_OFFSET_MS);
+    }
+  }
+  return body.now === undefined ? new Date() : new Date(body.now);
+}
 
 /** Map a proposed budget DTO onto the resolver's {@link BudgetInput}. */
 function toBudgetInput(b: PolicyPreviewRequest["budgets"][number]): BudgetInput {
@@ -256,7 +295,9 @@ export function registerPreviewRoutes(
       }
 
       const tz = resolveEffectiveTz(user.tz, settings.defaultTz);
-      const now = request.body.now === undefined ? new Date() : new Date(request.body.now);
+      // The reference instant the week / "today" resolve against — the current
+      // time, an explicit `now`, or local noon of a picked future `date` (#281).
+      const now = referenceInstant(request.body, tz);
 
       // Current policy mirrors the live executor: the user's effective rules —
       // own rules merged with inherited group schedules/budgets (#362), resolved
