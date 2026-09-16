@@ -152,6 +152,66 @@ starts anyway with the affected feature disabled and surfaces an error
 in the admin UI. Core functionality (Timekpr policy, ActivityWatch pull,
 e2guardian via Ansible) is not blocked by a missing AdGuard Home.
 
+## Name resolution from the container
+
+Enrolment is client→server HTTP: it proves the *client can reach the
+dashboard*. But every push, health probe, and telemetry pull runs the other
+way — **dashboard → client over SSH** — and that direction is only as good as
+the dashboard container's ability to reach the client's recorded address.
+
+The trap: the container's DNS view is usually **not** your desktop's. A bare
+LAN name or mDNS address (`alice-pc`, `alice-pc.local`) that resolves from the
+admin's machine often does **not** resolve from inside the container, because
+the container has no mDNS resolver and may use a different DNS server. A client
+can then "enrol successfully" while the server can never actually reach it —
+exactly the failure mode the post-enrol connectivity check (below) exists to
+surface.
+
+To avoid it, enrol each client by an address the **container** can resolve:
+
+- **Prefer an IP address or a fully-qualified name** your DNS server serves
+  (`alice-pc.home.arpa`, `192.168.1.42`) over a bare hostname or a `.local`
+  mDNS name.
+- **Or teach the container the name.** In your compose file, either pin the
+  mapping with `extra_hosts:` (adds `/etc/hosts` entries):
+
+  ```yaml
+  services:
+    pct-dashboard:
+      extra_hosts:
+        - "alice-pc:192.168.1.42"
+  ```
+
+  or point the container at a DNS server that resolves your LAN names with
+  `dns:`.
+
+### Post-enrol connectivity verification (#354)
+
+The client installer runs a **server→client SSH self-test** after it authorizes
+the dashboard's key: `POST /api/clients/:id/verify-connection` (authenticated by
+the client's own per-client bearer token) makes the dashboard run the real
+resolve → TCP → SSH-auth → `exec true` ladder against the client and returns a
+classified verdict. The installer prints a pass/fail line with a
+class-specific remediation hint, and the outcome is recorded on the client so
+the admin Clients page shows "enrolled but never verified" distinctly from
+"verified reachable" and "verification failed (`<class>`)".
+
+The failure classes map to different fixes:
+
+| Class | What it means | Fix |
+| --- | --- | --- |
+| `dns` | The container can't resolve the client's recorded hostname | Enrol by IP/FQDN, or add `extra_hosts:` / `dns:` (above). |
+| `connection_refused` | Nothing is listening on the SSH port | `sshd` is down on the client — check `systemctl status ssh`. |
+| `timeout` | The host never answered | A firewall is blocking SSH, or the recorded address is stale. |
+| `auth` | The box answered but rejected the dashboard's key | The dashboard key isn't authorized for the `pct-agent` user — re-check `authorized_keys`. |
+| `handshake` | Connected, but the SSH handshake failed | An SSH version/config mismatch on the client. |
+
+A failed verification **warns loudly but never rolls back** the enrolment — the
+client is registered, and the offline queue already tolerates an unreachable
+client until the path is fixed. Before the first-run SSH-key bootstrap (#39) has
+run, the endpoint returns `503` and the installer notes the check isn't available
+yet.
+
 ## AdGuard Home deployment modes
 
 DNS filtering is optional and configurable through `PCT_ADGUARD_MODE`.
@@ -432,6 +492,44 @@ failed-attempt limiter" (#235).
 - Client SSH access uses a single dedicated key generated on first run;
   rotation is a one-click action in the dashboard that pushes a new key
   via the existing connection.
+
+## Reaching clients over SSH — target selection
+
+By default the dashboard dials each client at the **hostname** it reported
+when it enrolled. In a homelab where the dashboard container runs on a bridge
+network, that hostname may not resolve — the container has no visibility of the
+LAN's mDNS/`.local` names or the router's DHCP hostname table — and every push
+to that client fails as "unreachable" even though the box is up. (This is a
+candidate cause of the `v0.1.0-alpha.5` all-clients-unreachable incident.)
+
+To work around it, set a **per-client SSH-target override**: the host string
+the transport connects to, used in preference to the hostname.
+
+- **Where:** the client's card in the admin **Clients** view has an *SSH
+  target* control (in edit mode). It offers one-click candidates drawn from the
+  addresses captured at enrol — the client's self-reported IP(s) and the source
+  IP the server observed the enrol request come from — or you can type any
+  hostname or IPv4/IPv6 literal. "Use hostname" clears the override.
+- **API:** `PATCH /api/clients/:id` with `{ "sshTarget": "192.168.1.50" }` sets
+  it; `{ "sshTarget": null }` clears it back to the hostname. The change is
+  audited like any other client edit.
+- **Effect:** the resolved target is `ssh_target ?? hostname`, applied across
+  the **direct SSH transport** — the `timekpra` policy push, the health probe,
+  the ActivityWatch telemetry pull, and the force-close — so those all dial the
+  same host. The card shows the *effective* target so what you see is what it
+  connects to. (The **Ansible-driven** paths — the e2guardian/AppArmor filter
+  pushes and the periodic re-apply — still address clients by hostname via the
+  generated inventory; extending the override to them is tracked as a
+  follow-up.)
+- **Default is unchanged:** with no override, behaviour is exactly as before
+  (dial the hostname), so existing clients need no action.
+- **Stale addresses:** self-reported IPs go stale under DHCP. Prefer a
+  DHCP reservation or a static address for a box you pin by IP; the post-enrol
+  connectivity check verifies against the *effective* target and can flag when
+  hostname resolution is the failure class.
+
+License boundary: unchanged — the transport still invokes `timekpra` as a
+subprocess over SSH; the override only changes which host string it dials.
 
 ## Backup and restore
 

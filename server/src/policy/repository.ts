@@ -88,6 +88,12 @@ export interface ClientUpdate {
   sshUser?: string | undefined;
   /** Admin-editable friendly name (#355). */
   friendlyName?: string | undefined;
+  /**
+   * Admin-editable SSH target override (#406): a host string the transport uses
+   * in preference to `hostname`. `null` clears the override (back to hostname);
+   * an omitted key leaves it unchanged.
+   */
+  sshTarget?: string | null | undefined;
 }
 
 /** The link's own attributes (the user/client pair comes from the route). */
@@ -211,6 +217,49 @@ export function touchClientLastSeen(db: PolicyDb, id: number, at: Date): void {
  */
 export function recordClientLastSeen(db: PolicyDb, id: number, at: Date): ClientRow | undefined {
   return db.update(clients).set({ lastSeen: at }).where(eq(clients.id, id)).returning().get();
+}
+
+/** The outcome of a post-enrol connectivity verification (#354) to persist. */
+export interface ClientVerificationOutcome {
+  /** Whether the server reached the client over SSH on this run. */
+  readonly reachable: boolean;
+  /**
+   * The classified SSH failure cause when `reachable` is `false`, else `null`.
+   * A plain string here (an `SshUnreachableReason` at the call site) so the
+   * `policy/` layer keeps no dependency on `transport/`.
+   */
+  readonly reason: string | null;
+  /** When the verification ran. */
+  readonly at: Date;
+}
+
+/**
+ * Record a post-enrol connectivity-verification outcome (#354): a real
+ * server→client SSH round-trip triggered by the installer. Writes the three
+ * `last_verify_*` columns and, when the client was reachable, also bumps
+ * `last_seen` to `at` — a successful verification *is* a live sighting, so it
+ * should refresh the passive liveness signal too. Returns the updated row, or
+ * `undefined` if no client with `id` exists.
+ *
+ * System-observed columns (not admin-editable), written directly like
+ * {@link recordClientLastSeen} rather than through {@link updateClient}.
+ */
+export function recordClientVerification(
+  db: PolicyDb,
+  id: number,
+  outcome: ClientVerificationOutcome,
+): ClientRow | undefined {
+  return db
+    .update(clients)
+    .set({
+      lastVerifiedAt: outcome.at,
+      lastVerifyReachable: outcome.reachable,
+      lastVerifyReason: outcome.reachable ? null : outcome.reason,
+      ...(outcome.reachable ? { lastSeen: outcome.at } : {}),
+    })
+    .where(eq(clients.id, id))
+    .returning()
+    .get();
 }
 
 /**

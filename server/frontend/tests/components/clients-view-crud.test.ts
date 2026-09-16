@@ -43,9 +43,14 @@ function client(overrides: Partial<ClientResponse> = {}): ClientResponse {
   return {
     id: 1,
     hostname: "mint-01",
+    friendlyName: null,
     sshUser: "pct-agent",
     enrolledAt: "2026-01-01T00:00:00.000Z",
     lastSeen: null,
+    reportedIps: null,
+    sourceIp: null,
+    sshTarget: null,
+    effectiveSshTarget: "mint-01",
     enrolled: true,
     platform: "linux",
     ...overrides,
@@ -111,7 +116,62 @@ describe("ClientsView inventory CRUD", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     expect(await screen.findByText("mint-renamed")).toBeInTheDocument();
-    expect(updateClient).toHaveBeenCalledWith(1, { hostname: "mint-renamed", sshUser: "pct-agent" });
+    // The SSH-target override is always sent (null clears it) since the edit box
+    // is empty for a client with no override (#406).
+    expect(updateClient).toHaveBeenCalledWith(1, {
+      hostname: "mint-renamed",
+      sshUser: "pct-agent",
+      sshTarget: null,
+    });
+  });
+
+  it("sets an SSH-target override from a reported-IP candidate and sends it (#406)", async () => {
+    listClients.mockResolvedValue([
+      client({ id: 1, hostname: "mint-01", reportedIps: ["192.168.1.50"], sourceIp: "10.0.0.9" }),
+    ]);
+    updateClient.mockResolvedValue(
+      client({ id: 1, hostname: "mint-01", sshTarget: "192.168.1.50", effectiveSshTarget: "192.168.1.50" }),
+    );
+
+    render(ClientsView);
+    await screen.findByText("mint-01");
+
+    await fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    // One-click the reported-IP candidate chip into the override box.
+    await fireEvent.click(screen.getByRole("button", { name: "192.168.1.50" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(updateClient).toHaveBeenCalledWith(1, {
+        hostname: "mint-01",
+        sshUser: "pct-agent",
+        sshTarget: "192.168.1.50",
+      }),
+    );
+    // The override marker replaces the "hostname" note once it's set.
+    expect(await screen.findByText("override")).toBeInTheDocument();
+  });
+
+  it("clears an existing SSH-target override with 'Use hostname' (#406)", async () => {
+    listClients.mockResolvedValue([
+      client({ id: 1, hostname: "mint-01", sshTarget: "192.168.1.50", effectiveSshTarget: "192.168.1.50" }),
+    ]);
+    updateClient.mockResolvedValue(client({ id: 1, hostname: "mint-01" }));
+
+    render(ClientsView);
+    await screen.findByText("mint-01");
+
+    await fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Use hostname" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(updateClient).toHaveBeenCalledWith(1, {
+        hostname: "mint-01",
+        sshUser: "pct-agent",
+        sshTarget: null,
+      }),
+    );
   });
 
   it("deletes a client after confirmation and drops the card", async () => {
