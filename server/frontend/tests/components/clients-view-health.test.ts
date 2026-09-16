@@ -59,6 +59,8 @@ function client(overrides: Partial<ClientResponse> = {}): ClientResponse {
     lastSeen: "2026-06-20T10:00:00.000Z",
     reportedIps: null,
     sourceIp: null,
+    sshTarget: null,
+    effectiveSshTarget: "mint-box",
     enrolled: true,
     platform: "linux",
     ...overrides,
@@ -86,6 +88,8 @@ function health(overrides: Partial<ClientHealthResponse> = {}): ClientHealthResp
     serverVersion: "0.1.0-alpha.5",
     versionStatus: "up_to_date",
     components: [{ component: "timekpr-next", status: "ok", detail: "active" }],
+    capabilitiesReported: false,
+    capabilities: [],
     queue: { pending: 0, failed: 0, actions: [] },
     ...overrides,
   };

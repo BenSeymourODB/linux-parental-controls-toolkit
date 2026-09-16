@@ -83,7 +83,12 @@ export const DEFAULT_REAPPLY_PLATFORMS: ReadonlySet<Platform> = new Set<Platform
 /** Default SSH port recorded in the audit target (clients carry no port column). */
 const DEFAULT_SSH_PORT = 22;
 
-/** Max length of a recorded error message; longer messages are truncated. */
+/**
+ * Max length of a recorded error message; longer messages are truncated. An
+ * arbitrary operational cap, not schema-driven — the audit `error_message`
+ * column is unbounded `TEXT` (`policy/schema.ts`); this just bounds row growth
+ * from a pathological error.
+ */
 const MAX_ERROR_MESSAGE = 2000;
 
 /** Per-client exponential backoff bounds after a failed re-apply. */

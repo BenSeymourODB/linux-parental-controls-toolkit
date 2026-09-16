@@ -61,7 +61,12 @@ class FakeForwarder {
 const credentials = { privateKey: "KEY" };
 
 function clientsNamed(...hostnames: string[]): TelemetryClient[] {
-  return hostnames.map((hostname, index) => ({ id: index + 1, hostname, sshUser: "pct-agent" }));
+  return hostnames.map((hostname, index) => ({
+    id: index + 1,
+    hostname,
+    sshUser: "pct-agent",
+    sshTarget: null,
+  }));
 }
 
 describe("runTelemetryPull", () => {
@@ -81,6 +86,22 @@ describe("runTelemetryPull", () => {
     expect(result).toEqual({ attempted: 3, succeeded: 3, skippedOffline: 0, failed: 0 });
     expect(consume).toHaveBeenCalledTimes(3);
     expect(transport.visited.sort()).toEqual(["a", "b", "c"]);
+  });
+
+  it("dials the per-client SSH-target override instead of the hostname (#406)", async () => {
+    const transport = new FakeForwarder();
+    const logger = makeLogger();
+    const consume = vi.fn(async () => undefined);
+
+    // hostname "unresolvable.local" would fail to resolve; the override pins the
+    // pull to a reachable IP — the whole point of #406, verified end-to-end here.
+    const clients: TelemetryClient[] = [
+      { id: 1, hostname: "unresolvable.local", sshUser: "pct-agent", sshTarget: "192.168.1.50" },
+    ];
+
+    await runTelemetryPull({ transport, credentials, logger, clients, consume });
+
+    expect(transport.visited).toEqual(["192.168.1.50"]);
   });
 
   it("forwards to the configured aw-server port and passes the loopback base URL", async () => {
@@ -225,7 +246,12 @@ describe("runTelemetryPull", () => {
     it("probeAwServer rejects (counted as a failure) when the server is unhealthy", async () => {
       infoBody = { not: "the info shape" };
       const logger = makeLogger();
-      const client: TelemetryClient = { id: 1, hostname: "x", sshUser: "pct-agent" };
+      const client: TelemetryClient = {
+        id: 1,
+        hostname: "x",
+        sshUser: "pct-agent",
+        sshTarget: null,
+      };
 
       await expect(probeAwServer({ client, baseUrl, logger })).rejects.toThrow();
     });

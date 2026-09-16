@@ -70,7 +70,7 @@ export interface ClientConnectionVerifier {
    * always passes the full authenticated client row.
    */
   verify(
-    client: Pick<ClientRow, "hostname" | "sshUser"> & { readonly id?: number },
+    client: Pick<ClientRow, "hostname" | "sshUser" | "sshTarget"> & { readonly id?: number },
   ): Promise<ConnectionVerification>;
 }
 
@@ -171,7 +171,7 @@ export class SshClientConnectionVerifier implements ClientConnectionVerifier {
   }
 
   async verify(
-    client: Pick<ClientRow, "hostname" | "sshUser"> & { readonly id?: number },
+    client: Pick<ClientRow, "hostname" | "sshUser" | "sshTarget"> & { readonly id?: number },
   ): Promise<ConnectionVerification> {
     const target = targetFromClient(client, this.#credentials);
     const at = this.#now();

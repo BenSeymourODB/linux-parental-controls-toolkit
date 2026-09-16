@@ -97,7 +97,7 @@ describe("createEnforcementPipeline", () => {
       initialLookbackSeconds: 3600,
       now: () => PASS_END,
       transport: fakeTransport(),
-      loadClients: () => [{ id: 1, hostname: "alice-pc", sshUser: "pct-agent" }],
+      loadClients: () => [{ id: 1, hostname: "alice-pc", sshUser: "pct-agent", sshTarget: null }],
       createSource: () => fakeSource([]),
       ...overrides,
     };
@@ -138,7 +138,9 @@ describe("createEnforcementPipeline", () => {
 
     const pipeline = createEnforcementPipeline(
       baseOptions({
-        loadClients: () => [{ id: clientId, hostname: "alice-pc", sshUser: "pct-agent" }],
+        loadClients: () => [
+          { id: clientId, hostname: "alice-pc", sshUser: "pct-agent", sshTarget: null },
+        ],
         // A full hour of firefox in this pass's window → 3600s > the 1800s budget.
         createSource: () =>
           fakeSource([
@@ -190,7 +192,9 @@ describe("createEnforcementPipeline", () => {
     let observedStart: Date | null = null;
     const pipeline = createEnforcementPipeline(
       baseOptions({
-        loadClients: () => [{ id: clientId, hostname: "alice-pc", sshUser: "pct-agent" }],
+        loadClients: () => [
+          { id: clientId, hostname: "alice-pc", sshUser: "pct-agent", sshTarget: null },
+        ],
         createSource: (): AwEventSource => ({
           getWindowEvents: (q) => {
             observedStart = q.start;

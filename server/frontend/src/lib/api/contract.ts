@@ -84,6 +84,9 @@ export type {
   RetentionEntryResponse,
   RetentionConfigResponse,
   SetRetentionOverrideRequest,
+  RetentionPurgeRunResponse,
+  RetentionPurgeRunsResponse,
+  RetentionPurgePreviewResponse,
 } from "../../../../src/api/retention/dtos.js";
 export type {
   CreateIntegrationTokenRequest,
@@ -99,6 +102,7 @@ export type {
 export type {
   ClientHealthResponse,
   ComponentHealthDto,
+  ClientCapabilityDto,
   ClientQueueDto,
   QueuedActionSummary,
 } from "../../../../src/api/clients/health-dtos.js";

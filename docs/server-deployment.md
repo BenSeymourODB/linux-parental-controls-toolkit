@@ -493,6 +493,44 @@ failed-attempt limiter" (#235).
   rotation is a one-click action in the dashboard that pushes a new key
   via the existing connection.
 
+## Reaching clients over SSH — target selection
+
+By default the dashboard dials each client at the **hostname** it reported
+when it enrolled. In a homelab where the dashboard container runs on a bridge
+network, that hostname may not resolve — the container has no visibility of the
+LAN's mDNS/`.local` names or the router's DHCP hostname table — and every push
+to that client fails as "unreachable" even though the box is up. (This is a
+candidate cause of the `v0.1.0-alpha.5` all-clients-unreachable incident.)
+
+To work around it, set a **per-client SSH-target override**: the host string
+the transport connects to, used in preference to the hostname.
+
+- **Where:** the client's card in the admin **Clients** view has an *SSH
+  target* control (in edit mode). It offers one-click candidates drawn from the
+  addresses captured at enrol — the client's self-reported IP(s) and the source
+  IP the server observed the enrol request come from — or you can type any
+  hostname or IPv4/IPv6 literal. "Use hostname" clears the override.
+- **API:** `PATCH /api/clients/:id` with `{ "sshTarget": "192.168.1.50" }` sets
+  it; `{ "sshTarget": null }` clears it back to the hostname. The change is
+  audited like any other client edit.
+- **Effect:** the resolved target is `ssh_target ?? hostname`, applied across
+  the **direct SSH transport** — the `timekpra` policy push, the health probe,
+  the ActivityWatch telemetry pull, and the force-close — so those all dial the
+  same host. The card shows the *effective* target so what you see is what it
+  connects to. (The **Ansible-driven** paths — the e2guardian/AppArmor filter
+  pushes and the periodic re-apply — still address clients by hostname via the
+  generated inventory; extending the override to them is tracked as a
+  follow-up.)
+- **Default is unchanged:** with no override, behaviour is exactly as before
+  (dial the hostname), so existing clients need no action.
+- **Stale addresses:** self-reported IPs go stale under DHCP. Prefer a
+  DHCP reservation or a static address for a box you pin by IP; the post-enrol
+  connectivity check verifies against the *effective* target and can flag when
+  hostname resolution is the failure class.
+
+License boundary: unchanged — the transport still invokes `timekpra` as a
+subprocess over SSH; the override only changes which host string it dials.
+
 ## Backup and restore
 
 The entire deployable state lives under `/data`, and most of it is
@@ -609,15 +647,30 @@ Each category keys its "age" on the *end* of the record's relevant window, so
 a purge only ever removes data that is wholly in the past — an active or
 future-dated record can never be selected.
 
-This release ships the retention **configuration model and API** (#136) and the
-**per-entity deletion routines** (#138): one bounded, idempotent purge per
-category (`server/src/policy/purge.ts`, `purgeExpiredRecords`) that deletes
-strictly-expired rows in batches, so a large first run never holds a long write
-lock and an interrupted run resumes cleanly. What remains separate (#137) is the
-croner-scheduled job that *drives* these routines on a cadence, audits each run,
-and offers a dry-run/preview and a manual "run now". Only the global default
-lives in the environment — restart to change it; per-category overrides are
-runtime config and need no restart.
+Purging is **automatic**. A croner-scheduled job (#137) runs on the cadence set
+by `PCT_RETENTION_PURGE_CRON` (default `0 3 * * *` — 03:00 daily) and drives the
+per-entity deletion routines (#138, `server/src/policy/purge.ts`): one bounded,
+idempotent purge per category that deletes strictly-expired rows in batches
+(`PCT_RETENTION_PURGE_BATCH_SIZE`, default `1000`), so a large first run never
+holds a long write lock and an interrupted run resumes cleanly. The effective
+policy is rebuilt each pass, so a window change applies on the next run without a
+restart.
+
+Every run is recorded in a purge-run ledger (`retention_purge_runs`) — what each
+category's cutoff was and how many rows it deleted — so purges are observable;
+the admin retention page shows the last run. Admins can also trigger a run, or a
+side-effect-free **preview** that only counts what *would* be purged, through the
+admin API:
+
+- `POST /api/retention/purge` — run the purge now (recorded as a `manual` run).
+- `POST /api/retention/purge/preview` — dry run: per-category counts, deletes
+  and records nothing.
+- `GET /api/retention/purge/runs` — recent runs, newest first (the first is the
+  last-run summary).
+
+Only the global default and the purge cadence/batch size live in the
+environment — restart to change them; per-category overrides are runtime config
+and need no restart.
 
 ## Upgrade path
 

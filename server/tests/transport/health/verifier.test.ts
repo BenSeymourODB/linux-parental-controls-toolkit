@@ -24,7 +24,12 @@ import {
 } from "../../../src/transport/health/index.js";
 
 const CREDENTIALS = { privateKey: "fake-private-key" };
-const CLIENT = { id: 7, hostname: "alice-pc.local", sshUser: "pct-agent" } as const;
+const CLIENT = {
+  id: 7,
+  hostname: "alice-pc.local",
+  sshUser: "pct-agent",
+  sshTarget: null,
+} as const;
 const AT = new Date("2026-08-23T10:00:00.000Z");
 const REF: SshTargetRef = { host: "alice-pc.local", port: 22, username: "pct-agent" };
 
@@ -191,7 +196,7 @@ describe("SshClientConnectionVerifier", () => {
       log: { warn },
     });
 
-    await verifier.verify({ hostname: "alice-pc.local", sshUser: "pct-agent" });
+    await verifier.verify({ hostname: "alice-pc.local", sshUser: "pct-agent", sshTarget: null });
 
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0]?.[0]).not.toHaveProperty("clientId");

@@ -89,7 +89,7 @@ describe("createUsageTelemetryConsumer", () => {
 
   function context(clientId: number, logger: TelemetryLogger): TelemetryConsumeContext {
     return {
-      client: { id: clientId, hostname: "alice-pc", sshUser: "pct-agent" },
+      client: { id: clientId, hostname: "alice-pc", sshUser: "pct-agent", sshTarget: null },
       baseUrl: "http://127.0.0.1:54321",
       logger,
     };

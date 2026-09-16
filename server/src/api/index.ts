@@ -150,10 +150,12 @@ export {
   clientHealthListSchema,
   clientQueueSchema,
   componentHealthSchema,
+  clientCapabilitySchema,
   queuedActionSummarySchema,
   type ClientHealthResponse,
   type ClientQueueDto,
   type ComponentHealthDto,
+  type ClientCapabilityDto,
   type QueuedActionSummary,
 } from "./clients/index.js";
 
@@ -264,5 +266,7 @@ export {
   type ServerEventType,
   type EventFrame,
   CLIENT_CAPABILITIES,
+  CLIENT_CAPABILITY_CATALOG,
   type ClientCapability,
+  type ClientCapabilityDescriptor,
 } from "../events/index.js";

@@ -99,7 +99,10 @@ export interface EnforcementOutcome {
  * *window* is the schedule layer's concern, not budget enforcement.
  */
 function isExhausted(quota: QuotaConsumption): boolean {
-  return quota.consumedSeconds > 0 && quota.consumedSeconds >= quota.allowedSeconds;
+  // `hasConsumption` makes the 0/0-idle guard self-evident: a disallowed but
+  // idle target (allowed 0, consumed 0) must not fire with nothing running.
+  const hasConsumption = quota.consumedSeconds > 0;
+  return hasConsumption && quota.consumedSeconds >= quota.allowedSeconds;
 }
 
 /**

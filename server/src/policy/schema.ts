@@ -38,6 +38,7 @@ import {
   matchTypeValues,
   platformValues,
   retentionCategoryValues,
+  retentionPurgeTriggerValues,
   scheduleActionValues,
   scopeValues,
   soundProfileValues,
@@ -184,6 +185,18 @@ export const clients = sqliteTable(
      */
     sourceIp: text("source_ip"),
     /**
+     * An admin-chosen SSH target override (#406): the host string the SSH
+     * transport connects to for this client, in preference to the raw
+     * `hostname`. Nullable — `NULL` (the default) keeps the transport targeting
+     * `hostname`, so existing clients are unaffected. Set to a recorded IP (from
+     * `reportedIps` / `sourceIp`) or a typed hostname/IP when the dashboard's
+     * container can't resolve the client's LAN hostname. Resolution is
+     * `ssh_target ?? hostname`, centralised in `sshHostForClient`
+     * (`transport/ssh/facade.ts`) so the transport and the admin-facing
+     * effective-target display never drift.
+     */
+    sshTarget: text("ssh_target"),
+    /**
      * Durable telemetry pull cursor (#382): the `end` of the last window whose
      * `UsageSample` rows were successfully persisted for this client. The
      * Phase-5 pull seeds its in-memory cursor from this on boot and advances
@@ -225,6 +238,17 @@ export const clients = sqliteTable(
     lastVerifiedAt: integer("last_verified_at", { mode: "timestamp" }),
     lastVerifyReachable: integer("last_verify_reachable", { mode: "boolean" }),
     lastVerifyReason: text("last_verify_reason"),
+    /**
+     * The capability set the client last advertised in its event-stream `hello`
+     * handshake (ADR 0007 §4, #400), a JSON string array. System-observed, not
+     * admin-editable. `NULL` = the client has never completed a handshake (an
+     * admin-CRUD row, or an enrolled client the bridge hasn't connected from
+     * yet); `[]` = it handshaked advertising no optional primitives (an older
+     * agent). The admin Clients view renders these against
+     * {@link ../events/capabilities.ts CLIENT_CAPABILITY_CATALOG} to grey out
+     * controls a client can't honour.
+     */
+    capabilities: text("capabilities", { mode: "json" }).$type<string[]>(),
   },
   (table) => [
     uniqueIndex("clients_hostname_unique").on(table.hostname),
@@ -1001,5 +1025,50 @@ export const retentionOverrides = sqliteTable(
       "retention_overrides_coherence_check",
       sql`(${table.keepForever} = 1 and ${table.days} is null) or (${table.keepForever} = 0 and ${table.days} > 0)`,
     ),
+  ],
+);
+
+/**
+ * One category's outcome within a recorded retention purge run, stored in the
+ * `retention_purge_runs.items` JSON column (the `audit_log.command` JSON-column
+ * precedent). Mirrors `policy/purge.ts`'s `PurgeCategoryResult`, but `cutoff`
+ * is serialised as **epoch seconds** (offset-free UTC, ADR 0001) rather than a
+ * `Date`, matching how every timestamp is stored; `null` means the category is
+ * kept forever (nothing purged).
+ */
+export interface RetentionPurgeRunItem {
+  readonly category: (typeof retentionCategoryValues)[number];
+  readonly cutoff: number | null;
+  readonly deleted: number;
+}
+
+/**
+ * Ledger of retention purge runs (#137, epic #135).
+ *
+ * The scheduled purge job (`src/retention/`) records one row per actual run
+ * (dry-run *previews* are reads, not runs, and are never recorded) so purges
+ * are observable and the admin retention page can show a last-run summary. This
+ * is a purpose-built ledger rather than the transport `audit_log` (#85): that
+ * table is command-shaped — every row requires a client `target_*` and a
+ * `command` argv — whereas a purge is an internal DB-maintenance op with
+ * neither. `items` carries the per-category breakdown ({@link
+ * RetentionPurgeRunItem}) as JSON, exactly as `audit_log.command` stores its
+ * argv. The `(at)` index serves the newest-first "last run" read.
+ */
+export const retentionPurgeRuns = sqliteTable(
+  "retention_purge_runs",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    at: timestampNow("at"),
+    trigger: text("trigger", { enum: retentionPurgeTriggerValues }).notNull(),
+    totalDeleted: integer("total_deleted").notNull(),
+    durationMs: integer("duration_ms").notNull(),
+    items: text("items", { mode: "json" }).$type<RetentionPurgeRunItem[]>().notNull(),
+  },
+  (table) => [
+    index("retention_purge_runs_at_idx").on(table.at),
+    check("retention_purge_runs_trigger_check", oneOf(table.trigger, retentionPurgeTriggerValues)),
+    check("retention_purge_runs_total_deleted_check", sql`${table.totalDeleted} >= 0`),
+    check("retention_purge_runs_duration_check", sql`${table.durationMs} >= 0`),
   ],
 );
