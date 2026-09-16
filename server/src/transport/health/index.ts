@@ -45,3 +45,15 @@ export {
 // annotates; re-exported here so the health DTO derives its enum from a single
 // source, the same discipline as the component / reachability enums above.
 export { sshUnreachableReasonValues, type SshUnreachableReason } from "../ssh/errors.js";
+
+// Post-enrol connectivity verification (#354): the classified server→client SSH
+// self-test the installer triggers, distinct from the passive-liveness prober
+// above. Shares the SSH facade + the #353 failure classification.
+export {
+  SshClientConnectionVerifier,
+  type ClientConnectionVerifier,
+  type ConnectionVerification,
+  type SshClientConnectionVerifierOptions,
+  type VerifyLogger,
+  type VerifyTransport,
+} from "./verifier.js";

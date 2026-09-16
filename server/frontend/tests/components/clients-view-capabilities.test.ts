@@ -73,6 +73,9 @@ function health(overrides: Partial<ClientHealthResponse> = {}): ClientHealthResp
     components: [{ component: "timekpr-next", status: "ok", detail: "active" }],
     capabilitiesReported: false,
     capabilities: [],
+    lastVerifiedAt: null,
+    lastVerifyReachable: null,
+    lastVerifyReason: null,
     queue: { pending: 0, failed: 0, actions: [] },
     ...overrides,
   };

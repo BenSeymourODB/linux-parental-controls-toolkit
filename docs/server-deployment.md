@@ -152,6 +152,66 @@ starts anyway with the affected feature disabled and surfaces an error
 in the admin UI. Core functionality (Timekpr policy, ActivityWatch pull,
 e2guardian via Ansible) is not blocked by a missing AdGuard Home.
 
+## Name resolution from the container
+
+Enrolment is client→server HTTP: it proves the *client can reach the
+dashboard*. But every push, health probe, and telemetry pull runs the other
+way — **dashboard → client over SSH** — and that direction is only as good as
+the dashboard container's ability to reach the client's recorded address.
+
+The trap: the container's DNS view is usually **not** your desktop's. A bare
+LAN name or mDNS address (`alice-pc`, `alice-pc.local`) that resolves from the
+admin's machine often does **not** resolve from inside the container, because
+the container has no mDNS resolver and may use a different DNS server. A client
+can then "enrol successfully" while the server can never actually reach it —
+exactly the failure mode the post-enrol connectivity check (below) exists to
+surface.
+
+To avoid it, enrol each client by an address the **container** can resolve:
+
+- **Prefer an IP address or a fully-qualified name** your DNS server serves
+  (`alice-pc.home.arpa`, `192.168.1.42`) over a bare hostname or a `.local`
+  mDNS name.
+- **Or teach the container the name.** In your compose file, either pin the
+  mapping with `extra_hosts:` (adds `/etc/hosts` entries):
+
+  ```yaml
+  services:
+    pct-dashboard:
+      extra_hosts:
+        - "alice-pc:192.168.1.42"
+  ```
+
+  or point the container at a DNS server that resolves your LAN names with
+  `dns:`.
+
+### Post-enrol connectivity verification (#354)
+
+The client installer runs a **server→client SSH self-test** after it authorizes
+the dashboard's key: `POST /api/clients/:id/verify-connection` (authenticated by
+the client's own per-client bearer token) makes the dashboard run the real
+resolve → TCP → SSH-auth → `exec true` ladder against the client and returns a
+classified verdict. The installer prints a pass/fail line with a
+class-specific remediation hint, and the outcome is recorded on the client so
+the admin Clients page shows "enrolled but never verified" distinctly from
+"verified reachable" and "verification failed (`<class>`)".
+
+The failure classes map to different fixes:
+
+| Class | What it means | Fix |
+| --- | --- | --- |
+| `dns` | The container can't resolve the client's recorded hostname | Enrol by IP/FQDN, or add `extra_hosts:` / `dns:` (above). |
+| `connection_refused` | Nothing is listening on the SSH port | `sshd` is down on the client — check `systemctl status ssh`. |
+| `timeout` | The host never answered | A firewall is blocking SSH, or the recorded address is stale. |
+| `auth` | The box answered but rejected the dashboard's key | The dashboard key isn't authorized for the `pct-agent` user — re-check `authorized_keys`. |
+| `handshake` | Connected, but the SSH handshake failed | An SSH version/config mismatch on the client. |
+
+A failed verification **warns loudly but never rolls back** the enrolment — the
+client is registered, and the offline queue already tolerates an unreachable
+client until the path is fixed. Before the first-run SSH-key bootstrap (#39) has
+run, the endpoint returns `503` and the installer notes the check isn't available
+yet.
+
 ## AdGuard Home deployment modes
 
 DNS filtering is optional and configurable through `PCT_ADGUARD_MODE`.

@@ -56,6 +56,9 @@ describe("policy DTO mappers", () => {
       lastTelemetryPullAt: null,
       platform: "linux",
       updateRequired: false,
+      lastVerifiedAt: null,
+      lastVerifyReachable: null,
+      lastVerifyReason: null,
       capabilities: null,
     };
     expect(toClientResponse(row)).toEqual({
@@ -92,6 +95,9 @@ describe("policy DTO mappers", () => {
       lastTelemetryPullAt: null,
       platform: "linux",
       updateRequired: false,
+      lastVerifiedAt: null,
+      lastVerifyReachable: null,
+      lastVerifyReason: null,
       capabilities: null,
     };
     const dto = toClientResponse(row);
@@ -117,6 +123,9 @@ describe("policy DTO mappers", () => {
       lastTelemetryPullAt: null,
       platform: "linux",
       updateRequired: false,
+      lastVerifiedAt: null,
+      lastVerifyReachable: null,
+      lastVerifyReason: null,
       capabilities: null,
     };
     expect(toClientResponse(row).enrolled).toBe(false);
@@ -140,6 +149,9 @@ describe("policy DTO mappers", () => {
       lastTelemetryPullAt: null,
       platform: "linux",
       updateRequired: false,
+      lastVerifiedAt: null,
+      lastVerifyReachable: null,
+      lastVerifyReason: null,
       capabilities: null,
     };
     expect(toClientResponse(row).lastSeen).toBeNull();
@@ -163,6 +175,9 @@ describe("policy DTO mappers", () => {
       lastTelemetryPullAt: null,
       platform: "windows",
       updateRequired: false,
+      lastVerifiedAt: null,
+      lastVerifyReachable: null,
+      lastVerifyReason: null,
       capabilities: null,
     };
     expect(toClientResponse(row).platform).toBe("windows");

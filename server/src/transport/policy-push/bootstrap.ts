@@ -28,7 +28,12 @@ import type { Settings } from "../../config.js";
 import type { PolicyDb } from "../../policy/db.js";
 import { getClient } from "../../policy/repository.js";
 import { AuditingTransport, DrizzleAuditSink, type AuditableTransport } from "../audit/index.js";
-import { SshClientProber, type ClientProber } from "../health/index.js";
+import {
+  SshClientConnectionVerifier,
+  SshClientProber,
+  type ClientConnectionVerifier,
+  type ClientProber,
+} from "../health/index.js";
 import {
   compositeExecutor,
   startOfflineQueueDrainer,
@@ -111,6 +116,15 @@ export interface PolicyPushTransport {
    * routes keep degrading to `unknown`.
    */
   readonly prober?: ClientProber;
+  /**
+   * The post-enrol connectivity verifier (#354), present only when the live
+   * transport is wired (the SSH key exists). It runs a classified `true`
+   * round-trip over the same pooled SSH transport; `buildApp` injects it into
+   * the `POST /api/clients/:id/verify-connection` route so the installer's
+   * self-test proves the server→client SSH path really works. Absent in the
+   * logging fallback (there is no SSH pool), where that route reports `503`.
+   */
+  readonly verifier?: ClientConnectionVerifier;
   /** Stop the drainer and close pooled SSH connections (on `app.close()`). */
   dispose(): void;
 }
@@ -217,6 +231,13 @@ export function createPolicyPushTransport(
   // `warn` per failed probe with the classified failure cause (#353).
   const prober = new SshClientProber(ssh, credentials, { log });
 
+  // The post-enrol connectivity verifier (#354) shares this same pooled,
+  // *un-audited* SSH surface: a `true` liveness round-trip is data, not an admin
+  // command, so it must not flood the audit log the way the `timekpra` pushes
+  // (through `auditing`) do — the same discipline as the health prober above.
+  // buildApp injects it into the verify-connection route.
+  const verifier = new SshClientConnectionVerifier(ssh, credentials, { log });
+
   // The queued same-day-adjustment executor (#274): resolves an absolute
   // `--settimeleft` target on first reconnect and replays it idempotently. Runs
   // over the same audited `timekpra` client as the online lever below.
@@ -307,6 +328,7 @@ export function createPolicyPushTransport(
     adjustTimeToday: timeTodayAdjuster,
     pushPolicyNow,
     prober,
+    verifier,
     dispose: (): void => {
       drainer.stop();
       ssh.disposeAll();
