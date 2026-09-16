@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   bridgeConfigSchema,
   ConfigError,
+  DEFAULT_AGENT_VERSION,
   DEFAULT_SOCKET_DIR,
   DEFAULT_SOCKET_MODE,
   loadConfigFromEnv,
@@ -27,6 +28,17 @@ describe("bridgeConfigSchema", () => {
     expect(parsed.socketDir).toBe(DEFAULT_SOCKET_DIR);
     expect(parsed.socketMode).toBe(DEFAULT_SOCKET_MODE);
     expect(parsed.backoff).toEqual({ baseMs: 1_000, maxMs: 60_000 });
+    expect(parsed.agentVersion).toBe(DEFAULT_AGENT_VERSION);
+  });
+
+  it("accepts an explicit agentVersion", () => {
+    const parsed = bridgeConfigSchema.parse({
+      serverUrl: "wss://d/api/events/stream",
+      token: "t",
+      agentVersion: "1.4.2",
+      users: [{ userId: 1, linuxUid: 1000 }],
+    });
+    expect(parsed.agentVersion).toBe("1.4.2");
   });
 
   it("accepts ws:// and wss:// but rejects other schemes", () => {
@@ -98,6 +110,12 @@ describe("loadConfigFromEnv", () => {
     expect(cfg.serverUrl).toBe(VALID_ENV.PCT_BRIDGE_SERVER_URL);
     expect(cfg.token).toBe("tok_abc123");
     expect(cfg.users).toEqual([{ userId: 7, linuxUid: 1001 }]);
+    expect(cfg.agentVersion).toBe(DEFAULT_AGENT_VERSION);
+  });
+
+  it("reads PCT_BRIDGE_AGENT_VERSION when the packaging stamps it", () => {
+    const cfg = loadConfigFromEnv({ ...VALID_ENV, PCT_BRIDGE_AGENT_VERSION: "2.0.1" });
+    expect(cfg.agentVersion).toBe("2.0.1");
   });
 
   it("reads optional socketDir, octal socketMode, and backoff overrides", () => {
