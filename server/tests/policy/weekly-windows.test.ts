@@ -9,6 +9,7 @@
 import { describe, expect, it } from "vitest";
 
 import { resolveWeeklyAllowedWindows } from "../../src/policy/weekly-windows.js";
+import type { ExceptionInput } from "../../src/policy/resolve.js";
 import type { ScheduleRule } from "../../src/policy/schedule-precedence.js";
 import { buildWeeklyAllowedHoursCommands } from "../../src/transport/timekpr/allowed-hours.js";
 
@@ -142,6 +143,29 @@ describe("resolveWeeklyAllowedWindows", () => {
     expect(byWeekday.get(7)).toEqual([]);
   });
 
+  it("is unchanged when passed an empty exceptions array (default recurring grid)", () => {
+    const schedules: ScheduleRule[] = [
+      mkRule({
+        id: 1,
+        action: "allow",
+        recurrenceDays: WEEKDAYS,
+        recurrenceStartMinute: 16 * 60,
+        recurrenceEndMinute: 18 * 60,
+      }),
+      mkRule({ id: 2, ordinal: 1, action: "deny" }),
+    ];
+    const withField = resolveWeeklyAllowedWindows({
+      schedules,
+      tz: "UTC",
+      reference: REFERENCE,
+      exceptions: [],
+    });
+    const without = resolveWeeklyAllowedWindows({ schedules, tz: "UTC", reference: REFERENCE });
+    for (const weekday of [1, 2, 3, 4, 5, 6, 7] as const) {
+      expect(withField.get(weekday)).toEqual(without.get(weekday));
+    }
+  });
+
   it("feeds buildWeeklyAllowedHoursCommands end-to-end (#140 push)", () => {
     // allow 16:00–18:00 Mon–Fri; the bridge's output drives the merged
     // transport mapping directly (the resolver→timekpra glue this module adds).
@@ -166,5 +190,90 @@ describe("resolveWeeklyAllowedWindows", () => {
       ["--setallowedhours", "alice", "4", "16;17"],
       ["--setallowedhours", "alice", "5", "16;17"],
     ]);
+  });
+});
+
+/**
+ * Build an {@link ExceptionInput}, defaulting to a whole-Wednesday (2024-06-05,
+ * the reference day) `overall` `deny` in UTC.
+ */
+function mkException(overrides: Partial<ExceptionInput> = {}): ExceptionInput {
+  return {
+    id: 1,
+    targetKind: "overall",
+    targetId: null,
+    action: "deny",
+    effectiveFrom: new Date("2024-06-05T00:00:00Z"),
+    expiresAt: new Date("2024-06-06T00:00:00Z"),
+    createdAt: new Date("2024-06-01T00:00:00Z"),
+    ...overrides,
+  };
+}
+
+describe("resolveWeeklyAllowedWindows — date-specific overrides (#399)", () => {
+  it("denies only the weekday a whole-day deny override covers, leaving others standing", () => {
+    // No recurring schedule → every day baseline-allowed; the override denies Wed.
+    const byWeekday = resolveWeeklyAllowedWindows({
+      schedules: [],
+      tz: "UTC",
+      reference: REFERENCE,
+      exceptions: [mkException()],
+    });
+    // Wednesday (weekday 3, the covered day) is now denied all day…
+    expect(byWeekday.get(3)).toEqual([]);
+    // …while every other day keeps the standing unrestricted grid.
+    for (const weekday of [1, 2, 4, 5, 6, 7] as const) {
+      expect(byWeekday.get(weekday)).toEqual([{ start: 0, end: 1440 }]);
+    }
+  });
+
+  it("widens the covered day past a standing bedtime deny via an extend override", () => {
+    // Standing: allow 09:00–17:00 every day, deny the rest (a bedtime cut-off).
+    const schedules: ScheduleRule[] = [
+      mkRule({
+        id: 1,
+        action: "allow",
+        recurrenceDays: EVERY_DAY,
+        recurrenceStartMinute: 9 * 60,
+        recurrenceEndMinute: 17 * 60,
+      }),
+      mkRule({ id: 2, ordinal: 1, action: "deny" }),
+    ];
+    // "allow until 21:00 this Wednesday" — an extend union past the 17:00 deny.
+    const exception = mkException({
+      action: "extend",
+      effectiveFrom: new Date("2024-06-05T00:00:00Z"),
+      expiresAt: new Date("2024-06-05T21:00:00Z"),
+    });
+    const overridden = resolveWeeklyAllowedWindows({
+      schedules,
+      tz: "UTC",
+      reference: REFERENCE,
+      exceptions: [exception],
+    });
+    const standing = resolveWeeklyAllowedWindows({ schedules, tz: "UTC", reference: REFERENCE });
+    // Wednesday now reaches to 21:00 (1260); other days keep the 09:00–17:00 grid.
+    expect(overridden.get(3)).toEqual([{ start: 0, end: 21 * 60 }]);
+    expect(standing.get(3)).toEqual([{ start: 9 * 60, end: 17 * 60 }]);
+    for (const weekday of [1, 2, 4, 5, 6, 7] as const) {
+      expect(overridden.get(weekday)).toEqual([{ start: 9 * 60, end: 17 * 60 }]);
+    }
+  });
+
+  it("ignores an override whose window falls outside the resolved week", () => {
+    // An override for a date in a later week must not touch this week's grid.
+    const nextWeek = mkException({
+      effectiveFrom: new Date("2024-06-12T00:00:00Z"),
+      expiresAt: new Date("2024-06-13T00:00:00Z"),
+    });
+    const byWeekday = resolveWeeklyAllowedWindows({
+      schedules: [],
+      tz: "UTC",
+      reference: REFERENCE,
+      exceptions: [nextWeek],
+    });
+    for (const weekday of [1, 2, 3, 4, 5, 6, 7] as const) {
+      expect(byWeekday.get(weekday)).toEqual([{ start: 0, end: 1440 }]);
+    }
   });
 });

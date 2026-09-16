@@ -48,7 +48,11 @@
 import { z } from "zod";
 
 import type { PolicyDb } from "../../policy/db.js";
-import { gatherUserBudgets, gatherUserScheduleRules } from "../../policy/group-resolution.js";
+import {
+  gatherUserBudgets,
+  gatherUserExceptions,
+  gatherUserScheduleRules,
+} from "../../policy/group-resolution.js";
 import { getClient, getUser, listUserLinks } from "../../policy/repository.js";
 import type { ActionExecutor, QueuedAction } from "../queue/types.js";
 import { policyPushPayloadSchema } from "./payload.js";
@@ -90,6 +94,17 @@ export interface PolicyPushExecutorOptions {
   readonly log?: PolicyPushExecutorLogger;
   /** Clock for the reference instant; overridable in tests. Defaults to `new Date()`. */
   readonly now?: () => Date;
+  /**
+   * When `true`, the effective push also composes the user's active
+   * date-specific exceptions (own + inherited group, `gatherUserExceptions`,
+   * ADR 0012 precedence) into the allowed-hours grid — the #399 date-override
+   * enforcement push. The standing push leaves this `false` (the default) so the
+   * recurring `timekpra` grid stays exception-free (ADR 0012 §3). Because the
+   * executor re-resolves from the DB on every run, a queued override replayed
+   * after its window has closed simply resolves to the standing grid — the
+   * revert is automatic.
+   */
+  readonly includeExceptions?: boolean;
 }
 
 /**
@@ -100,6 +115,7 @@ export interface PolicyPushExecutorOptions {
 export function createPolicyPushExecutor(options: PolicyPushExecutorOptions): ActionExecutor {
   const { db, registry, defaultTz, log } = options;
   const now = options.now ?? ((): Date => new Date());
+  const includeExceptions = options.includeExceptions ?? false;
 
   return async function execute(action: QueuedAction): Promise<void> {
     const { userId, reason, detail } = policyPushPayloadSchema.parse(action.payload);
@@ -148,6 +164,11 @@ export function createPolicyPushExecutor(options: PolicyPushExecutorOptions): Ac
     // reaches the client instead of being display-only.
     const budgets = gatherUserBudgets(db, userId);
     const schedules = gatherUserScheduleRules(db, userId);
+    // The date-override push (#399) folds active exceptions into the allowed-hours
+    // grid; the standing push omits them so the recurring grid stays
+    // exception-free (ADR 0012 §3). Re-read here so a queued override replayed
+    // after its window closed resolves to the standing grid (auto-revert).
+    const exceptions = includeExceptions ? gatherUserExceptions(db, userId) : undefined;
 
     await runner.enforce({
       client,
@@ -158,6 +179,7 @@ export function createPolicyPushExecutor(options: PolicyPushExecutorOptions): Ac
       schedules,
       budgets,
       now: now(),
+      ...(exceptions !== undefined ? { exceptions } : {}),
     });
   };
 }

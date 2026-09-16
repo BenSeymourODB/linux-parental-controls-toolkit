@@ -130,6 +130,10 @@ export function createLinuxPolicyRunner(options: LinuxPolicyRunnerOptions): Plat
         schedules: ctx.schedules,
         budgets: ctx.budgets,
         now: ctx.now,
+        // Fold in date-specific overrides when the executor supplies them (#399);
+        // the standing push omits `exceptions`, keeping the recurring grid
+        // exception-free (ADR 0012 §3).
+        ...(ctx.exceptions !== undefined ? { exceptions: ctx.exceptions } : {}),
       });
       const timekpr = buildClient({
         client: ctx.client,

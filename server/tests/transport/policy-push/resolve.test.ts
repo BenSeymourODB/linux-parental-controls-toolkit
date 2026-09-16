@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import type { BudgetInput } from "../../../src/policy/resolve.js";
+import type { BudgetInput, ExceptionInput } from "../../../src/policy/resolve.js";
 import type { ScheduleRule } from "../../../src/policy/schedule-precedence.js";
 import { buildWeeklyAllowedHoursCommands } from "../../../src/transport/timekpr/allowed-hours.js";
 import {
@@ -124,6 +124,102 @@ describe("resolvePolicyPush", () => {
 
     expect(resolved.weekly.get(1)).toEqual([{ start: 360, end: 1440 }]);
     expect(resolved.weekly.get(7)).toEqual([{ start: 360, end: 1440 }]);
+  });
+
+  describe("date-specific overrides (#399)", () => {
+    /** A whole-Wednesday (2026-06-17, the NOW day) `overall` deny override. */
+    function denyWednesday(overrides: Partial<ExceptionInput> = {}): ExceptionInput {
+      return {
+        id: 1,
+        targetKind: "overall",
+        targetId: null,
+        action: "deny",
+        effectiveFrom: new Date("2026-06-17T00:00:00Z"),
+        expiresAt: new Date("2026-06-18T00:00:00Z"),
+        createdAt: new Date("2026-06-01T00:00:00Z"),
+        ...overrides,
+      };
+    }
+
+    it("folds an active override into only the covered weekday's allowed-hours grid", () => {
+      const resolved = resolvePolicyPush({
+        tz: "UTC",
+        schedules: [],
+        budgets: [],
+        now: NOW,
+        exceptions: [denyWednesday()],
+      });
+      // Wednesday (weekday 3) is denied; the rest of the week stays unrestricted.
+      expect(resolved.weekly.get(3)).toEqual([]);
+      for (const weekday of [1, 2, 4, 5, 6, 7] as const) {
+        expect(resolved.weekly.get(weekday)).toEqual([{ start: 0, end: 1440 }]);
+      }
+    });
+
+    it("leaves the recurring grid untouched when no exceptions are supplied", () => {
+      const withOverride = resolvePolicyPush({
+        tz: "UTC",
+        schedules: [],
+        budgets: [],
+        now: NOW,
+        exceptions: [denyWednesday()],
+      });
+      const standing = resolvePolicyPush({ tz: "UTC", schedules: [], budgets: [], now: NOW });
+      // They differ only on the overridden weekday.
+      expect(standing.weekly.get(3)).toEqual([{ start: 0, end: 1440 }]);
+      expect(withOverride.weekly.get(3)).toEqual([]);
+    });
+
+    it("widens a covered day past a standing bedtime deny via an extend override", () => {
+      // Standing: allow 09:00–17:00 every day, deny the rest (a bedtime cut-off).
+      const schedules: ScheduleRule[] = [
+        rule({
+          id: 1,
+          action: "allow",
+          recurrenceDays: 0b1111111,
+          recurrenceStartMinute: 9 * 60,
+          recurrenceEndMinute: 17 * 60,
+        }),
+        rule({ id: 2, ordinal: 1, action: "deny" }),
+      ];
+      // "allow games until 9pm this Wednesday" — the #364 extend-past-a-deny case.
+      const resolved = resolvePolicyPush({
+        tz: "UTC",
+        schedules,
+        budgets: [],
+        now: NOW,
+        exceptions: [
+          denyWednesday({
+            action: "extend",
+            effectiveFrom: new Date("2026-06-17T00:00:00Z"),
+            expiresAt: new Date("2026-06-17T21:00:00Z"),
+          }),
+        ],
+      });
+      // Wednesday reaches to 21:00; the other days keep the 09:00–17:00 grid.
+      expect(resolved.weekly.get(3)).toEqual([{ start: 0, end: 21 * 60 }]);
+      for (const weekday of [1, 2, 4, 5, 6, 7] as const) {
+        expect(resolved.weekly.get(weekday)).toEqual([{ start: 9 * 60, end: 17 * 60 }]);
+      }
+    });
+
+    it("never changes the seconds limits (an exception carries no time amount)", () => {
+      const budgets: BudgetInput[] = [
+        { scope: "overall", targetId: null, window: "daily", secondsAllowed: 7200 },
+        { scope: "overall", targetId: null, window: "weekly", secondsAllowed: 36000 },
+      ];
+      const resolved = resolvePolicyPush({
+        tz: "UTC",
+        schedules: [],
+        budgets,
+        now: NOW,
+        exceptions: [denyWednesday()],
+      });
+      // Allowed-hours reflect the override, but the daily/weekly seconds do not.
+      expect(resolved.weekly.get(3)).toEqual([]);
+      expect(resolved.perWeekdaySeconds).toEqual([7200, 7200, 7200, 7200, 7200, 7200, 7200]);
+      expect(resolved.weeklySeconds).toBe(36000);
+    });
   });
 
   describe("unrestrictedPolicyPush (#253 unmanage)", () => {

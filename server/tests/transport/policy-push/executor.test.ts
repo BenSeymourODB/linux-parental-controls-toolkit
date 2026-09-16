@@ -16,7 +16,9 @@ import {
   addUserToGroup,
   createBudget,
   createClient,
+  createException,
   createGroupBudget,
+  createGroupException,
   createGroupSchedule,
   createSchedule,
   createUser,
@@ -36,6 +38,7 @@ import {
   type PolicyPushRunnerLogger,
 } from "../../../src/transport/policy-push/linux-runner.js";
 import { createPlatformRunnerRegistry } from "../../../src/transport/policy-push/platform-runner.js";
+import type { WeeklyAllowedWindows } from "../../../src/transport/timekpr/allowed-hours.js";
 import type { ActionExecutor, QueuedAction } from "../../../src/transport/queue/types.js";
 import { SshCommandError, SshUnreachableError } from "../../../src/transport/ssh/errors.js";
 import { testDb, type TestDb } from "../../helpers/db.js";
@@ -508,5 +511,115 @@ describe("createPolicyPushExecutor", () => {
     await expect(
       executor({ clientId, coalesceKey: "user:1", kind: "policy.push", payload: { nope: true } }),
     ).rejects.toBeInstanceOf(ZodError);
+  });
+
+  describe("date-specific override push (includeExceptions, #399)", () => {
+    // A fixed mid-week instant (Wed 2026-06-17 12:00 UTC): the reference week is
+    // Mon 2026-06-15 … Sun 2026-06-21, so an override on the 17th is ISO weekday 3.
+    const NOW = new Date("2026-06-17T12:00:00Z");
+
+    /** A recording client that captures the weekly allowed-hours grid it was pushed. */
+    function capturingClient(): { client: PolicyPushClient; weekly?: WeeklyAllowedWindows } {
+      const rec: { client: PolicyPushClient; weekly?: WeeklyAllowedWindows } = {
+        client: {
+          setTimeLimits: () => Promise.resolve(),
+          setTimeLimitWeek: () => Promise.resolve(),
+          setTimeLimitMonth: () => Promise.resolve(),
+          setWeeklyAllowedHours: (weekly) => {
+            rec.weekly = weekly;
+            return Promise.resolve();
+          },
+        },
+      };
+      return rec;
+    }
+
+    function overrideExecutor(
+      rec: { client: PolicyPushClient },
+      includeExceptions: boolean,
+    ): ActionExecutor {
+      const runner = createLinuxPolicyRunner({ buildClient: () => rec.client });
+      return createPolicyPushExecutor({
+        db,
+        defaultTz: "UTC",
+        registry: createPlatformRunnerRegistry([runner]),
+        includeExceptions,
+        now: () => NOW,
+      });
+    }
+
+    it("folds an active overall deny override into the pushed grid when includeExceptions is set", async () => {
+      const { userId, clientId } = setup();
+      createException(db, {
+        userId,
+        targetKind: "overall",
+        action: "deny",
+        effectiveFrom: new Date("2026-06-17T00:00:00Z"),
+        expiresAt: new Date("2026-06-18T00:00:00Z"),
+      });
+
+      const rec = capturingClient();
+      await overrideExecutor(rec, true)(action(clientId, userId));
+
+      // Wednesday (weekday 3) is denied by the override; the rest stay unrestricted.
+      expect(rec.weekly?.get(3)).toEqual([]);
+      expect(rec.weekly?.get(1)).toEqual([{ start: 0, end: 1440 }]);
+    });
+
+    it("ignores exceptions for the standing push (includeExceptions defaults false)", async () => {
+      const { userId, clientId } = setup();
+      createException(db, {
+        userId,
+        targetKind: "overall",
+        action: "deny",
+        effectiveFrom: new Date("2026-06-17T00:00:00Z"),
+        expiresAt: new Date("2026-06-18T00:00:00Z"),
+      });
+
+      const rec = capturingClient();
+      await overrideExecutor(rec, false)(action(clientId, userId));
+
+      // The recurring grid is exception-free: Wednesday stays unrestricted.
+      expect(rec.weekly?.get(3)).toEqual([{ start: 0, end: 1440 }]);
+    });
+
+    it("resolves an expired override to the standing grid (auto-revert on replay)", async () => {
+      const { userId, clientId } = setup();
+      // Its window closed before NOW — a queued override replayed after expiry
+      // must resolve to the standing grid (the executor re-reads at run time).
+      createException(db, {
+        userId,
+        targetKind: "overall",
+        action: "deny",
+        effectiveFrom: new Date("2026-06-10T00:00:00Z"),
+        expiresAt: new Date("2026-06-11T00:00:00Z"),
+      });
+
+      const rec = capturingClient();
+      await overrideExecutor(rec, true)(action(clientId, userId));
+
+      for (const weekday of [1, 2, 3, 4, 5, 6, 7] as const) {
+        expect(rec.weekly?.get(weekday)).toEqual([{ start: 0, end: 1440 }]);
+      }
+    });
+
+    it("includes an inherited group override via gatherUserExceptions", async () => {
+      const { userId, clientId } = setup();
+      const group = createUserGroup(db, { name: "Kids" });
+      addUserToGroup(db, group.id, userId);
+      createGroupException(db, {
+        userGroupId: group.id,
+        targetKind: "overall",
+        action: "deny",
+        effectiveFrom: new Date("2026-06-17T00:00:00Z"),
+        expiresAt: new Date("2026-06-18T00:00:00Z"),
+      });
+
+      const rec = capturingClient();
+      await overrideExecutor(rec, true)(action(clientId, userId));
+
+      // The group-inherited override reaches the pushed grid, not just the user's own.
+      expect(rec.weekly?.get(3)).toEqual([]);
+    });
   });
 });
