@@ -6,9 +6,10 @@
  * subprocess dispatch is a thin, injected seam:
  *
  * 1. {@link buildE2guardianPlan} resolves a typed, validated **filter plan**
- *    from the policy store — for each supervised user on a client, the set of
- *    domains that are *always-on denied*, assigned a deterministic e2guardian
- *    filter group + listen port.
+ *    from the policy store — for each supervised user on a client, the domains
+ *    denied in each of the three `deny` shapes (always-on, recurring `#time:`
+ *    windows #216, and date-scoped calendar ranges #385), assigned a
+ *    deterministic e2guardian filter group + listen port.
  * 2. {@link pushE2guardianFiltering} hands that plan to the existing
  *    {@link AnsibleRunner} as `--extra-vars` and records the run in the audit
  *    log. The playbook (`client/ansible/playbooks/e2guardian-filtering.yml`)
@@ -27,6 +28,7 @@ import { getActivity, listClientLinks, listGroupActivities } from "../../policy/
 import type { PolicyDb } from "../../policy/db.js";
 import { gatherUserScheduleRules } from "../../policy/group-resolution.js";
 import { MINUTES_PER_DAY } from "../../policy/recurrence.js";
+import { withinEffectiveDateRange } from "../../policy/resolve.js";
 import type { ScheduleRule } from "../../policy/schedule-precedence.js";
 import { redactArgv, type AuditEntry, type AuditSink } from "../audit/index.js";
 
@@ -87,12 +89,18 @@ export const e2guardianUserFilterSchema = z.object({
   filterGroup: z.number().int().min(FIRST_MANAGED_FILTER_GROUP),
   /** TCP port this user's filter group listens on; the iptables redirect target. */
   listenPort: z.number().int().min(1).max(65535),
-  /** Domains denied for this user, deduplicated and sorted (always-on denies only). */
+  /**
+   * Domains statically denied for this user, deduplicated and sorted: always-on
+   * denies plus any date-scoped, non-recurring deny whose calendar range is
+   * active at build time (#385).
+   */
   bannedSites: z.array(z.string().min(1)),
   /**
-   * Recurring time-window denies (#216), each grouped by its `#time:` tag so one
-   * window list serves all its domains. Empty ⇒ the user has only always-on
-   * denies (or, combined with an empty `bannedSites`, would not be in the plan).
+   * Time-window denies, each grouped by its `#time:` tag so one window list
+   * serves all its domains: recurring windows (#216) plus any date-scoped
+   * recurring window active at build time (#385). Empty ⇒ the user has only
+   * static denies (or, combined with an empty `bannedSites`, would not be in
+   * the plan).
    */
   windows: z.array(e2guardianWindowSchema),
 });
@@ -119,6 +127,14 @@ export interface BuildE2guardianPlanOptions {
   proxyPort?: number;
   /** Override the redirected destination ports (default `[80, 443]`). */
   redirectPorts?: readonly number[];
+  /**
+   * The instant to resolve date-scoped denies against (#385) — a date-scoped
+   * `deny` is rendered only while its `effective_from`/`effective_to` range
+   * covers this instant. Defaults to now. Always-on and pure recurring denies
+   * ignore it. Injected so the resolution is deterministic in tests and so the
+   * eventual re-push loop can re-evaluate the active set at the date boundary.
+   */
+  at?: Date;
 }
 
 /**
@@ -138,21 +154,34 @@ function isAlwaysOn(rule: ScheduleRule): boolean {
   );
 }
 
-/**
- * A schedule is a *recurring window* (#216) when it carries at least one
- * recurrence field (weekday mask and/or intra-day window) **and** is not
- * date-scoped (`effective_from`/`effective_to` both null). e2guardian's `#time:`
- * grammar expresses weekday + time-of-day but not calendar date ranges, so
- * date-scoped denies are deliberately excluded and ride with the date-scoped
- * resolver work (#142).
- */
-function isRecurringWindow(rule: ScheduleRule): boolean {
-  if (rule.effectiveFrom !== null || rule.effectiveTo !== null) return false;
+/** Does the rule carry any recurrence field (weekday mask and/or intra-day window)? */
+function hasRecurrence(rule: ScheduleRule): boolean {
   return (
     rule.recurrenceDays !== null ||
     rule.recurrenceStartMinute !== null ||
     rule.recurrenceEndMinute !== null
   );
+}
+
+/** Is the rule date-scoped — does it carry an `effective_from`/`effective_to` bound? */
+function isDateScoped(rule: ScheduleRule): boolean {
+  return rule.effectiveFrom !== null || rule.effectiveTo !== null;
+}
+
+/**
+ * A schedule is a *recurring window* (#216) when it carries at least one
+ * recurrence field (weekday mask and/or intra-day window) **and** is not
+ * date-scoped (`effective_from`/`effective_to` both null). Such a window is
+ * emitted unconditionally — e2guardian evaluates the weekday/time-of-day
+ * constraint itself via a `#time:` tag.
+ *
+ * A rule that is *both* recurring **and** date-scoped is handled separately
+ * (#385): its `#time:` window is emitted only while the calendar range is
+ * active (see {@link resolveWindowedDenies}), because e2guardian's `#time:`
+ * grammar expresses weekday + time-of-day but not a calendar date range.
+ */
+function isRecurringWindow(rule: ScheduleRule): boolean {
+  return !isDateScoped(rule) && hasRecurrence(rule);
 }
 
 /**
@@ -226,32 +255,69 @@ function domainsForRule(db: PolicyDb, rule: ScheduleRule): string[] {
 }
 
 /**
- * Collect the domains a single user *always-on* denies, deduplicated and sorted.
- * Reads the user's effective schedules — own rules plus inherited group denies
- * (#362) — via {@link gatherUserScheduleRules}.
+ * Should this deny contribute to the *static* banned-site list at instant `at`?
+ * Two shapes belong in the always-blocking list:
+ *
+ * - an **always-on** deny (no recurrence, no date scope), and
+ * - a **date-scoped, non-recurring** deny (a plain calendar range) whose range
+ *   covers `at` (#385) — active continuously while in range, so it blocks like
+ *   an always-on deny until the range closes and the next re-push drops it.
+ *
+ * A date-scoped deny that *also* carries a recurrence window is a windowed
+ * deny, not a static one — see {@link resolveWindowedDenies}.
  */
-function resolveBannedSites(db: PolicyDb, userId: number): string[] {
+function isActiveStaticDeny(rule: ScheduleRule, at: Date): boolean {
+  if (isAlwaysOn(rule)) return true;
+  return isDateScoped(rule) && !hasRecurrence(rule) && withinEffectiveDateRange(rule, at);
+}
+
+/**
+ * Collect the domains a single user statically denies at instant `at`,
+ * deduplicated and sorted — always-on denies plus any date-scoped,
+ * non-recurring deny whose calendar range is active (#385). Reads the user's
+ * effective schedules — own rules plus inherited group denies (#362) — via
+ * {@link gatherUserScheduleRules}.
+ */
+function resolveBannedSites(db: PolicyDb, userId: number, at: Date): string[] {
   const sites = new Set<string>();
   for (const rule of gatherUserScheduleRules(db, userId)) {
-    if (rule.action !== "deny" || !isAlwaysOn(rule)) continue;
+    if (rule.action !== "deny" || !isActiveStaticDeny(rule, at)) continue;
     for (const domain of domainsForRule(db, rule)) sites.add(domain);
   }
   return [...sites].sort();
 }
 
 /**
- * Collect a single user's recurring time-window domain denies (#216), grouped by
+ * Should this deny contribute a `#time:` window at instant `at`? Two shapes:
+ *
+ * - a **recurring, non-date-scoped** window (#216) — emitted unconditionally;
+ *   e2guardian evaluates the weekday/time-of-day constraint itself, and
+ * - a **date-scoped recurring** window (#385) — emitted only while the calendar
+ *   range covers `at`, since e2guardian's `#time:` grammar cannot express the
+ *   date range; the dashboard's re-push gates it and the daemon evaluates the
+ *   intra-day/weekday part.
+ */
+function isActiveWindowedDeny(rule: ScheduleRule, at: Date): boolean {
+  if (isRecurringWindow(rule)) return true;
+  return isDateScoped(rule) && hasRecurrence(rule) && withinEffectiveDateRange(rule, at);
+}
+
+/**
+ * Collect a single user's time-window domain denies at instant `at`, grouped by
  * their e2guardian `#time:` tag so denies sharing an identical window collapse to
- * one list. Sites within a window are deduplicated and sorted; windows are sorted
- * by tag — so re-running against unchanged policy yields an identical plan and
- * the playbook stays idempotent. Reads effective schedules via
+ * one list. Includes recurring windows (#216) and any date-scoped recurring
+ * window whose calendar range is active (#385) — a date-scoped-recurring deny
+ * whose window matches an existing tag simply joins that list. Sites within a
+ * window are deduplicated and sorted; windows are sorted by tag — so re-running
+ * against unchanged policy at the same instant yields an identical plan and the
+ * playbook stays idempotent. Reads effective schedules via
  * {@link gatherUserScheduleRules}, so inherited group recurring denies are
  * honoured too (the recurring half of #362's group-deny deferral).
  */
-function resolveWindowedDenies(db: PolicyDb, userId: number): E2guardianWindow[] {
+function resolveWindowedDenies(db: PolicyDb, userId: number, at: Date): E2guardianWindow[] {
   const sitesByTag = new Map<string, Set<string>>();
   for (const rule of gatherUserScheduleRules(db, userId)) {
-    if (rule.action !== "deny" || !isRecurringWindow(rule)) continue;
+    if (rule.action !== "deny" || !isActiveWindowedDeny(rule, at)) continue;
     const domains = domainsForRule(db, rule);
     if (domains.length === 0) continue;
     const tag = e2guardianTimeTag(
@@ -271,13 +337,18 @@ function resolveWindowedDenies(db: PolicyDb, userId: number): E2guardianWindow[]
 /**
  * Build the e2guardian filter plan for a client from the policy store.
  *
- * Every supervised user linked to the client that has at least one always-on
- * domain deny **or** a recurring window deny (#216) gets a managed filter group;
- * users with nothing to block are omitted entirely (their traffic stays on the
- * permissive baseline, so we add neither a group nor an iptables redirect for
- * them). A windowed-only user still gets a group + redirect: outside the window
- * their list is inactive, so nothing is blocked — which is the intended
- * behaviour. Group numbers and listen ports are assigned deterministically in
+ * Every supervised user linked to the client with at least one deny active at
+ * `options.at` (default now) — always-on, a recurring window (#216), or a
+ * date-scoped calendar range (#385) — gets a managed filter group; users with
+ * nothing to block *at that instant* are omitted entirely (their traffic stays
+ * on the permissive baseline, so we add neither a group nor an iptables
+ * redirect for them). A windowed-only user still gets a group + redirect:
+ * outside the window their list is inactive, so nothing is blocked — which is
+ * the intended behaviour. Because a date-scoped deny is resolved against `at`,
+ * the plan is a snapshot for that instant; a periodic re-push re-evaluates the
+ * active set as calendar ranges open and close (config-file + reload — the #216
+ * mechanism decision, `docs/architecture.md` → "Enforcement responsibilities").
+ * Group numbers and listen ports are assigned deterministically in
  * `listClientLinks` order (ascending user id), so re-running against unchanged
  * policy produces an identical plan — the playbook is idempotent.
  *
@@ -294,11 +365,12 @@ export function buildE2guardianPlan(
 ): E2guardianPlan {
   const proxyPort = options.proxyPort ?? DEFAULT_PROXY_PORT;
   const redirectPorts = [...(options.redirectPorts ?? DEFAULT_REDIRECT_PORTS)];
+  const at = options.at ?? new Date();
 
   const users: E2guardianUserFilter[] = [];
   for (const link of listClientLinks(db, clientId)) {
-    const bannedSites = resolveBannedSites(db, link.userId);
-    const windows = resolveWindowedDenies(db, link.userId);
+    const bannedSites = resolveBannedSites(db, link.userId, at);
+    const windows = resolveWindowedDenies(db, link.userId, at);
     if (bannedSites.length === 0 && windows.length === 0) continue;
     const index = users.length;
     users.push({
