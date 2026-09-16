@@ -15,6 +15,11 @@
       - aw-server
       - aw-watcher-afk
       - aw-watcher-window
+    # --- privesc live assertion (#360) — must match prepare.yml -----------
+    poisoned_user: "{{ aw_supervised_users[0] }}"
+    poisoned_home: "/home/{{ aw_supervised_users[0] }}"
+    canary_dir: /opt/pct-privesc-canary
+    fixed_canary_marker: PCT-PRIVESC-FIXED-CANARY-STILL-ROOT-OWNED
   tasks:
     - name: Read the version stamp
       ansible.builtin.slurp:
@@ -65,3 +70,82 @@
       loop: "{{ aw_unit_files.results }}"
       loop_control:
         label: "{{ item.item.0 }}/{{ item.item.1 }}"
+
+    # --- privesc live assertion (#360): the #351 child→root symlink vector ---
+    # is the `ansible.builtin.file` `state: directory` tasks (`file.follow`
+    # defaults to TRUE). We reproduce that exact technique against the isolated
+    # probe symlinks prepare.yml planted — first the VULNERABLE shape as a
+    # positive control (proving the escalation is real in this container), then
+    # the FIXED shape (which must leave the root-owned target untouched). This
+    # stays green because it runs on probes, not the real converge (poisoning a
+    # real directory task would fail-close under `follow: false`, reading as a
+    # failed converge). Asserting on OWNERSHIP — not on task failure — keeps it
+    # robust across the fix's runtime behaviour (fail-closed on some Ansible
+    # versions, harmless no-op on others; either leaves the target root-owned).
+
+    # Positive control: the pre-#351 directory-task shape (root-run, follow
+    # defaults true) follows the child's symlink and chowns the root-owned
+    # target to the child.
+    - name: "Positive control — run the VULNERABLE directory-task shape (root, follow: true)"
+      ansible.builtin.file:
+        path: "{{ poisoned_home }}/privesc-probe/vuln-link"
+        state: directory
+        owner: "{{ poisoned_user }}"
+        group: "{{ poisoned_user }}"
+        mode: "0755"
+        follow: true
+      register: aw_privesc_vuln
+      failed_when: false
+
+    - name: Stat the vuln-target after the vulnerable shape ran
+      ansible.builtin.stat:
+        path: "{{ canary_dir }}/vuln-target"
+      register: aw_vuln_target
+
+    - name: Assert the vulnerable shape DID escalate (control proves the vector is real)
+      ansible.builtin.assert:
+        that:
+          - aw_vuln_target.stat.exists
+          - aw_vuln_target.stat.pw_name == poisoned_user
+        fail_msg: >-
+          positive control did not reproduce the escalation: {{ canary_dir }}/
+          vuln-target is owned by {{ aw_vuln_target.stat.pw_name }}, not
+          {{ poisoned_user }} — the live assertion cannot prove the fix
+
+    # The fix: the same operation the way #351 hardened it — as the child
+    # (`become_user`) and with `follow: false`. The root-owned target must be
+    # left untouched.
+    - name: "Run the FIXED directory-task shape (become_user + follow: false)"
+      ansible.builtin.file:
+        path: "{{ poisoned_home }}/privesc-probe/fixed-link"
+        state: directory
+        owner: "{{ poisoned_user }}"
+        group: "{{ poisoned_user }}"
+        mode: "0755"
+        follow: false
+      become: true
+      become_user: "{{ poisoned_user }}"
+      register: aw_privesc_fixed
+      failed_when: false
+
+    - name: Stat the fixed-target after the fixed shape ran
+      ansible.builtin.stat:
+        path: "{{ canary_dir }}/fixed-target"
+      register: aw_fixed_target
+
+    - name: Read the fixed-target sentinel back
+      ansible.builtin.slurp:
+        src: "{{ canary_dir }}/fixed-target/sentinel"
+      register: aw_fixed_sentinel
+
+    - name: Assert the fix PREVENTED the escalation (target stays root-owned + unchanged)
+      ansible.builtin.assert:
+        that:
+          - aw_fixed_target.stat.exists
+          - aw_fixed_target.stat.uid == 0
+          - aw_fixed_target.stat.gid == 0
+          - (aw_fixed_sentinel.content | b64decode | trim) == fixed_canary_marker
+        fail_msg: >-
+          privesc: {{ canary_dir }}/fixed-target was chowned to uid
+          {{ aw_fixed_target.stat.uid }} — become_user + follow: false did not
+          contain the symlink
