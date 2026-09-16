@@ -193,6 +193,122 @@ EOS
   [ "$(grep -c 'try-restart timekpr.service' "$rec")" -eq 1 ]
 }
 
+@test "a first ActivityWatch install plans no per-user restart (#347)" {
+  # Fresh AW_PREFIX (no version stamp) is a first install: units are enabled
+  # fresh and start clean on next login, so there is nothing to restart.
+  plan --supervised-user alice
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"ActivityWatch upgraded"* ]]
+}
+
+@test "a same-version ActivityWatch re-run plans no restart (#347)" {
+  mkdir -p "$AW_PREFIX"
+  printf '%s\n' "${AW_VERSION:-v0.13.2}" >"${AW_PREFIX}/.pct-aw-version"
+  plan --supervised-user alice
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"already installed"* ]]
+  [[ "$output" != *"ActivityWatch upgraded"* ]]
+}
+
+@test "an ActivityWatch upgrade plans a best-effort per-user restart (#347)" {
+  mkdir -p "$AW_PREFIX"
+  # An older version was previously installed -> upgrade -> the running units
+  # hold the old binary and must be bounced (best-effort, per reachable user).
+  printf 'v0.13.1\n' >"${AW_PREFIX}/.pct-aw-version"
+  plan --supervised-user alice --supervised-user bob
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"upgrade detected (v0.13.1 -> ${AW_VERSION:-v0.13.2})"* ]]
+  echo "$output" | grep -q 'ActivityWatch upgraded: try-restart the aw-server/aw-watcher-\* --user units for alice (only if their session is reachable)'
+  echo "$output" | grep -q 'ActivityWatch upgraded: try-restart the aw-server/aw-watcher-\* --user units for bob (only if their session is reachable)'
+}
+
+@test "aw per-user restart is a clean no-op when the --user bus is unreachable (real)" {
+  local rec="${TMP}/user-systemctl-calls" stub="${TMP}/user-systemctl"
+  cat >"$stub" <<EOS
+#!/usr/bin/env bash
+echo "\$*" >>"${rec}"
+EOS
+  chmod +x "$stub"
+  # No <uid> dir under the runtime base -> the user's bus is not reachable.
+  run env -u PCT_DRY_RUN bash -c '
+    PCT_USER_SYSTEMCTL="'"$stub"'"
+    PCT_USER_RUNTIME_BASE="'"$TMP"'/run"
+    source "'"$SCRIPT"'"
+    pct_aw_restart_user_units alice 4242
+  '
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"runtime dir is absent"* ]]
+  [ ! -f "$rec" ]   # no systemctl --user call was issued
+}
+
+@test "aw per-user restart bounces each --user unit when the session is reachable (real)" {
+  local rec="${TMP}/user-systemctl-calls" stub="${TMP}/user-systemctl"
+  cat >"$stub" <<EOS
+#!/usr/bin/env bash
+echo "\$*" >>"${rec}"
+EOS
+  chmod +x "$stub"
+  # A `sudo` stub that drops `-u <user>` and the inline XDG_RUNTIME_DIR=... and
+  # execs the rest, so the PCT_USER_SYSTEMCTL stub records the real verb/args.
+  local bin="${TMP}/bin"
+  mkdir -p "$bin" "${TMP}/run/4242"
+  cat >"${bin}/sudo" <<'EOS'
+#!/usr/bin/env bash
+shift 2                                   # drop: -u <user>
+while [ "$#" -gt 0 ]; do case "$1" in *=*) shift ;; *) break ;; esac; done
+exec "$@"
+EOS
+  chmod +x "${bin}/sudo"
+  run env -u PCT_DRY_RUN bash -c '
+    export PATH="'"$bin"':$PATH"
+    PCT_USER_SYSTEMCTL="'"$stub"'"
+    PCT_USER_RUNTIME_BASE="'"$TMP"'/run"
+    source "'"$SCRIPT"'"
+    pct_aw_restart_user_units alice 4242
+  '
+  [ "$status" -eq 0 ]
+  [ -f "$rec" ]
+  [ "$(grep -c 'try-restart aw-server.service' "$rec")" -eq 1 ]
+  [ "$(grep -c 'try-restart aw-watcher-afk.service' "$rec")" -eq 1 ]
+  [ "$(grep -c 'try-restart aw-watcher-window.service' "$rec")" -eq 1 ]
+}
+
+@test "aw per-user restart is best-effort: one unit failing does not abort (real)" {
+  local rec="${TMP}/user-systemctl-calls" stub="${TMP}/user-systemctl"
+  cat >"$stub" <<EOS
+#!/usr/bin/env bash
+echo "\$*" >>"${rec}"
+# Fail specifically on aw-server to prove the loop continues and the function
+# still succeeds (best-effort) rather than aborting the reconcile under set -e.
+if [[ "\$*" == *aw-server.service* ]]; then exit 1; fi
+EOS
+  chmod +x "$stub"
+  local bin="${TMP}/bin"
+  mkdir -p "$bin" "${TMP}/run/4242"
+  cat >"${bin}/sudo" <<'EOS'
+#!/usr/bin/env bash
+shift 2
+while [ "$#" -gt 0 ]; do case "$1" in *=*) shift ;; *) break ;; esac; done
+exec "$@"
+EOS
+  chmod +x "${bin}/sudo"
+  run env -u PCT_DRY_RUN bash -c '
+    export PATH="'"$bin"':$PATH"
+    PCT_USER_SYSTEMCTL="'"$stub"'"
+    PCT_USER_RUNTIME_BASE="'"$TMP"'/run"
+    source "'"$SCRIPT"'"                 # sourcing activates set -euo pipefail from the script
+    pct_aw_restart_user_units alice 4242
+    echo "RETURNED $?"
+  '
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"RETURNED 0"* ]]
+  [[ "$output" == *"could not restart"*"aw-server.service; it will pick up the ActivityWatch upgrade"* ]]
+  # All three were still attempted despite aw-server failing.
+  [ "$(grep -c 'try-restart aw-server.service' "$rec")" -eq 1 ]
+  [ "$(grep -c 'try-restart aw-watcher-afk.service' "$rec")" -eq 1 ]
+  [ "$(grep -c 'try-restart aw-watcher-window.service' "$rec")" -eq 1 ]
+}
+
 @test "installs the openssh-server package (the dashboard connects over SSH)" {
   plan --supervised-user alice
   [ "$status" -eq 0 ]
