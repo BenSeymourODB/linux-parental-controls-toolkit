@@ -25,10 +25,12 @@ export {
   clientHealthListSchema,
   clientQueueSchema,
   componentHealthSchema,
+  clientCapabilitySchema,
   queuedActionSummarySchema,
   toQueuedActionSummary,
   type ClientHealthResponse,
   type ClientQueueDto,
   type ComponentHealthDto,
+  type ClientCapabilityDto,
   type QueuedActionSummary,
 } from "./health-dtos.js";

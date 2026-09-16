@@ -18,11 +18,14 @@
   budget. This view edits them as rows (a budget picker + a comma-separated
   minute list), plus a "Clear all" that reverts to the built-in cadence.
 
-  The budget picker (#388) is sourced from the user's own budgets and labelled
-  with the activity/activity-group names (`Activity — firefox`, `Group — Games`)
-  rather than asking the admin to type a numeric target id. Options are keyed by
-  `(scope, target)` — the same key the grammar stores — and de-duplicated across
-  a target's daily / weekly / monthly rollover windows into a single entry. A
+  The budget picker (#388) is sourced from the user's own budgets — plus the
+  group budgets they only **inherit** via a `UserGroup` (#363/#403) — and
+  labelled with the activity/activity-group names (`Activity — firefox`,
+  `Group — Games`) rather than asking the admin to type a numeric target id.
+  Options are keyed by `(scope, target)` — the same key the grammar stores — and
+  de-duplicated across a target's daily / weekly / monthly rollover windows into
+  a single entry. Own budgets win: a target that is both owned and inherited is
+  offered once, unmarked; a purely-inherited target is marked "(inherited)". A
   stored override whose budget no longer exists stays pickable (its key is added
   to the option list) so hydrate→save is a faithful round-trip.
 -->
@@ -34,6 +37,7 @@
     ActivityResponse,
     BudgetResponse,
     NotificationPolicyResponse,
+    ResolvedBudgetResponse,
     SoundProfile,
     UserResponse,
   } from "$lib/api/contract.js";
@@ -43,7 +47,7 @@
     deleteNotificationPolicy,
   } from "$lib/api/notifications.js";
   import { listUsers } from "$lib/api/users.js";
-  import { listBudgets } from "$lib/api/budgets.js";
+  import { listBudgets, listResolvedBudgets } from "$lib/api/budgets.js";
   import { listActivities } from "$lib/api/activities.js";
   import { listActivityGroups } from "$lib/api/activity-groups.js";
 
@@ -85,6 +89,10 @@
   let loadingPolicy = $state(false);
   // The selected user's budgets — the source of the cadence picker options.
   let budgets = $state<BudgetResponse[]>([]);
+  // The selected user's resolved budget baseline (own + inherited group budgets,
+  // #363). Its `source.kind === "group"` slots feed the picker's inherited-only
+  // options (#403); own slots are already covered by `budgets`.
+  let resolvedBudgets = $state<ResolvedBudgetResponse[]>([]);
 
   // Editable form fields, hydrated from the loaded policy.
   let formEnabled = $state(true);
@@ -163,14 +171,22 @@
     }
   }
 
-  // Load the selected user's budgets to source the cadence picker options.
-  // Best-effort: a failure leaves the picker with the always-present "Overall"
-  // entry plus any keys the stored overrides already carry.
+  // Load the selected user's own + resolved budgets to source the cadence picker
+  // options. Best-effort: a failure leaves the picker with the always-present
+  // "Overall" entry plus any keys the stored overrides already carry. Both loads
+  // share one try so a failure of either degrades the picker identically and
+  // never blocks editing (#388, #403).
   async function loadBudgets(userId: number): Promise<void> {
     try {
-      budgets = await listBudgets(userId);
+      const [own, resolved] = await Promise.all([
+        listBudgets(userId),
+        listResolvedBudgets(userId),
+      ]);
+      budgets = own;
+      resolvedBudgets = resolved;
     } catch (err) {
       budgets = [];
+      resolvedBudgets = [];
       error ??= messageOf(err);
     }
   }
@@ -179,6 +195,7 @@
     if (selectedUserId === null) {
       policy = null;
       budgets = [];
+      resolvedBudgets = [];
       return;
     }
     void loadUserData(selectedUserId);
@@ -245,32 +262,67 @@
     return group ? `Group — ${group.name}` : `Group ${id}`;
   }
 
+  // The cadence key for a budget-shaped `(scope, targetId)`, or `null` for
+  // scopes that carry no per-target key (`overall`, which is always offered, and
+  // any non-`activity`/`group` scope defensively). Shared by the own-budget and
+  // inherited-budget passes so both derive the identical key.
+  function budgetKey(scope: string, targetId: number | null): string | null {
+    if (targetId === null) {
+      return null;
+    }
+    if (scope === "activity") {
+      return `activity:${targetId}`;
+    }
+    if (scope === "group") {
+      return `group:${targetId}`;
+    }
+    return null;
+  }
+
   // The picker options: always "Overall", plus one entry per distinct
-  // non-overall `(scope, target)` in the user's budgets — de-duplicated across
-  // the target's daily/weekly/monthly windows (the cadence key is keyed by
-  // target, not window). Keys already used by a row are folded in too, so a
-  // stored override for a since-deleted budget stays pickable (a faithful
-  // hydrate→save round-trip). Ordered overall → activities → groups, then by
-  // label.
+  // non-overall `(scope, target)` in the user's own budgets and the group
+  // budgets they only **inherit** (#403) — de-duplicated across the target's
+  // daily/weekly/monthly windows (the cadence key is keyed by target, not
+  // window). Own budgets win: a key that is both owned and inherited is offered
+  // once, unmarked; a purely-inherited key is marked "(inherited)". Keys already
+  // used by a row are folded in too, so a stored override for a since-deleted
+  // budget stays pickable (a faithful hydrate→save round-trip). Ordered
+  // overall → activities → groups, then by label.
   let budgetOptions = $derived.by<BudgetOption[]>(() => {
-    const keys = new Set<string>(["overall"]);
+    const ownKeys = new Set<string>(["overall"]);
     for (const budget of budgets) {
-      if (budget.targetId === null) {
-        continue;
-      }
-      if (budget.scope === "activity") {
-        keys.add(`activity:${budget.targetId}`);
-      } else if (budget.scope === "group") {
-        keys.add(`group:${budget.targetId}`);
+      const key = budgetKey(budget.scope, budget.targetId);
+      if (key !== null) {
+        ownKeys.add(key);
       }
     }
+    // Keys the user only inherits via a UserGroup (#363's `source.kind`
+    // === "group" slots). Overall-scoped inherited budgets need no entry — the
+    // always-present "Overall" option already covers them.
+    const inheritedKeys = new Set<string>();
+    for (const resolved of resolvedBudgets) {
+      if (resolved.source.kind !== "group") {
+        continue;
+      }
+      const key = budgetKey(resolved.scope, resolved.targetId);
+      if (key !== null) {
+        inheritedKeys.add(key);
+      }
+    }
+    const keys = new Set<string>([...ownKeys, ...inheritedKeys]);
     for (const row of cadenceRows) {
       keys.add(row.key);
     }
+    // Only a purely-inherited key is marked; an own budget for the same key wins.
+    const isInheritedOnly = (key: string): boolean =>
+      inheritedKeys.has(key) && !ownKeys.has(key);
     const rank = (key: string): number =>
       key === "overall" ? 0 : key.startsWith("activity:") ? 1 : 2;
     return [...keys]
-      .map((key) => ({ key, label: labelForKey(key) }))
+      .map((key) => ({
+        key,
+        label: isInheritedOnly(key) ? `${labelForKey(key)} (inherited)` : labelForKey(key),
+      }))
       .sort((a, b) => rank(a.key) - rank(b.key) || a.label.localeCompare(b.label));
   });
 

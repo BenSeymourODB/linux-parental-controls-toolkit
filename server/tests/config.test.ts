@@ -25,7 +25,11 @@ describe("loadSettings", () => {
     expect(settings.timekprMirror).toEqual({ mode: "disabled" });
     expect(settings.telemetry).toEqual({ pullCron: "*/5 * * * *", pullConcurrency: 4 });
     expect(settings.enforcement).toEqual({ cooldownSeconds: 300, initialLookbackSeconds: 900 });
-    expect(settings.retention).toEqual({ defaultDays: 365 });
+    expect(settings.retention).toEqual({
+      defaultDays: 365,
+      purgeCron: "0 3 * * *",
+      purgeBatchSize: 1000,
+    });
     expect(settings.reapply).toEqual({ cron: "0 * * * *", playbooks: [] });
     expect(settings.clientHealth).toEqual({ probeConcurrency: 4, probeDeadlineMs: 15000 });
     expect(settings.preMigrationBackup).toEqual({ enabled: true, retain: 5 });
@@ -103,6 +107,29 @@ describe("loadSettings", () => {
 
     it("rejects an absurdly large window (use keep-forever instead)", () => {
       expect(() => loadSettings({ PCT_RETENTION_DEFAULT_DAYS: "99999999" })).toThrow(SettingsError);
+    });
+  });
+
+  describe("PCT_RETENTION_PURGE_CRON / PCT_RETENTION_PURGE_BATCH_SIZE", () => {
+    it("honours an explicit cron and batch size", () => {
+      const settings = loadSettings({
+        PCT_RETENTION_PURGE_CRON: "30 2 * * 0",
+        PCT_RETENTION_PURGE_BATCH_SIZE: "250",
+      });
+      expect(settings.retention.purgeCron).toBe("30 2 * * 0");
+      expect(settings.retention.purgeBatchSize).toBe(250);
+    });
+
+    it("rejects an invalid cron pattern with a readable error", () => {
+      expect(() => loadSettings({ PCT_RETENTION_PURGE_CRON: "not a cron" })).toThrow(SettingsError);
+      expect(() => loadSettings({ PCT_RETENTION_PURGE_CRON: "not a cron" })).toThrow(
+        /valid cron pattern/,
+      );
+    });
+
+    it("rejects a non-positive batch size", () => {
+      expect(() => loadSettings({ PCT_RETENTION_PURGE_BATCH_SIZE: "0" })).toThrow(SettingsError);
+      expect(() => loadSettings({ PCT_RETENTION_PURGE_BATCH_SIZE: "-10" })).toThrow(SettingsError);
     });
   });
 
@@ -376,6 +403,7 @@ describe("loadSettings", () => {
           mode: "managed",
           dataDir: "/data/apt/timekpr",
           package: "timekpr-next",
+          refreshCron: "0 3 * * *",
         });
       });
 
@@ -392,6 +420,7 @@ describe("loadSettings", () => {
           dataDir: "/srv/apt/timekpr",
           package: "timekpr-next-beta",
           version: "0.5.5",
+          refreshCron: "0 3 * * *",
         });
       });
 
@@ -402,6 +431,27 @@ describe("loadSettings", () => {
             PCT_TIMEKPR_MIRROR_PACKAGE: "timekpr-nope",
           }),
         ).toThrow(SettingsError);
+      });
+
+      it("honours an explicit refresh cron pattern (#392)", () => {
+        const settings = loadSettings({
+          PCT_TIMEKPR_MIRROR: "managed",
+          PCT_TIMEKPR_MIRROR_REFRESH_CRON: "30 4 * * 1",
+        });
+
+        expect(settings.timekprMirror).toMatchObject({
+          mode: "managed",
+          refreshCron: "30 4 * * 1",
+        });
+      });
+
+      it("rejects an invalid refresh cron pattern, naming the field (#392)", () => {
+        expect(() =>
+          loadSettings({
+            PCT_TIMEKPR_MIRROR: "managed",
+            PCT_TIMEKPR_MIRROR_REFRESH_CRON: "not a cron",
+          }),
+        ).toThrow(/valid cron pattern/);
       });
     });
   });

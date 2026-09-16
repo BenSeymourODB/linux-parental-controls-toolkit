@@ -150,6 +150,32 @@ describe("policy repository — clients", () => {
     repo.setClientUpdateRequired(db, 999, true);
     expect(repo.listClients(db)).toHaveLength(1);
   });
+
+  it("records the advertised capability set, de-duplicating (#400)", () => {
+    const id = repo.createClient(db, { hostname: "mint-cap", sshUser: "pct-agent" }).id;
+    // Null until the client completes an event-stream handshake.
+    expect(repo.getClient(db, id)?.capabilities).toBeNull();
+
+    repo.recordClientCapabilities(db, id, ["per_app_close", "session_budget", "per_app_close"]);
+    expect(repo.getClient(db, id)?.capabilities).toEqual(["per_app_close", "session_budget"]);
+
+    // A later handshake overwrites with the freshly advertised set.
+    repo.recordClientCapabilities(db, id, ["session_budget"]);
+    expect(repo.getClient(db, id)?.capabilities).toEqual(["session_budget"]);
+  });
+
+  it("stores an empty advertised set as [] (handshaked, advertises nothing) (#400)", () => {
+    const id = repo.createClient(db, { hostname: "mint-cap-empty", sshUser: "pct-agent" }).id;
+    repo.recordClientCapabilities(db, id, []);
+    // [] is distinct from the null "never handshaked" default.
+    expect(repo.getClient(db, id)?.capabilities).toEqual([]);
+  });
+
+  it("recordClientCapabilities is a no-op for a missing client (#400)", () => {
+    repo.createClient(db, { hostname: "mint-cap-noop", sshUser: "pct-agent" });
+    repo.recordClientCapabilities(db, 999, ["per_app_close"]);
+    expect(repo.listClients(db)).toHaveLength(1);
+  });
 });
 
 describe("policy repository — user/client links", () => {
