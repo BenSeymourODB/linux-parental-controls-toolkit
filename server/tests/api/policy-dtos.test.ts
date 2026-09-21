@@ -50,10 +50,16 @@ describe("policy DTO mappers", () => {
       friendlyName: "kids' living-room PC",
       reportedIps: ["192.168.1.42", "fe80::1"],
       sourceIp: "192.168.1.42",
+      // An SSH-target override is set, so effectiveSshTarget follows it (#406).
+      sshTarget: "192.168.1.42",
       versionsReportedAt: null,
       lastTelemetryPullAt: null,
       platform: "linux",
       updateRequired: false,
+      lastVerifiedAt: null,
+      lastVerifyReachable: null,
+      lastVerifyReason: null,
+      capabilities: null,
     };
     expect(toClientResponse(row)).toEqual({
       id: 2,
@@ -64,9 +70,39 @@ describe("policy DTO mappers", () => {
       lastSeen: "2026-06-17T08:30:00.000Z",
       reportedIps: ["192.168.1.42", "fe80::1"],
       sourceIp: "192.168.1.42",
+      sshTarget: "192.168.1.42",
+      effectiveSshTarget: "192.168.1.42",
       enrolled: true,
       platform: "linux",
     });
+  });
+
+  it("falls the effective SSH target back to the hostname when no override is set (#406)", () => {
+    const row: ClientRow = {
+      id: 6,
+      hostname: "mint-03",
+      sshUser: "pct-agent",
+      bearerTokenHash: "cafef00d",
+      enrolledAt: new Date("2026-06-17T00:00:00.000Z"),
+      lastSeen: null,
+      agentVersion: null,
+      componentVersions: null,
+      friendlyName: null,
+      reportedIps: null,
+      sourceIp: null,
+      sshTarget: null,
+      versionsReportedAt: null,
+      lastTelemetryPullAt: null,
+      platform: "linux",
+      updateRequired: false,
+      lastVerifiedAt: null,
+      lastVerifyReachable: null,
+      lastVerifyReason: null,
+      capabilities: null,
+    };
+    const dto = toClientResponse(row);
+    expect(dto.sshTarget).toBeNull();
+    expect(dto.effectiveSshTarget).toBe("mint-03");
   });
 
   it("flags a manual-CRUD client (no bearer token) as not enrolled", () => {
@@ -82,10 +118,15 @@ describe("policy DTO mappers", () => {
       friendlyName: null,
       reportedIps: null,
       sourceIp: null,
+      sshTarget: null,
       versionsReportedAt: null,
       lastTelemetryPullAt: null,
       platform: "linux",
       updateRequired: false,
+      lastVerifiedAt: null,
+      lastVerifyReachable: null,
+      lastVerifyReason: null,
+      capabilities: null,
     };
     expect(toClientResponse(row).enrolled).toBe(false);
   });
@@ -103,10 +144,15 @@ describe("policy DTO mappers", () => {
       friendlyName: null,
       reportedIps: null,
       sourceIp: null,
+      sshTarget: null,
       versionsReportedAt: null,
       lastTelemetryPullAt: null,
       platform: "linux",
       updateRequired: false,
+      lastVerifiedAt: null,
+      lastVerifyReachable: null,
+      lastVerifyReason: null,
+      capabilities: null,
     };
     expect(toClientResponse(row).lastSeen).toBeNull();
   });
@@ -124,10 +170,15 @@ describe("policy DTO mappers", () => {
       friendlyName: null,
       reportedIps: null,
       sourceIp: null,
+      sshTarget: null,
       versionsReportedAt: null,
       lastTelemetryPullAt: null,
       platform: "windows",
       updateRequired: false,
+      lastVerifiedAt: null,
+      lastVerifyReachable: null,
+      lastVerifyReason: null,
+      capabilities: null,
     };
     expect(toClientResponse(row).platform).toBe("windows");
   });

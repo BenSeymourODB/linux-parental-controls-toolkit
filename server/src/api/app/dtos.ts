@@ -72,3 +72,75 @@ export const appMeResponseSchema = z.object({
   tz: z.string().nullable(),
 });
 export type AppMeResponse = z.infer<typeof appMeResponseSchema>;
+
+/**
+ * The overall daily screen-time picture for the status screen (#110).
+ *
+ * `allowedSeconds` / `remainingSeconds` are `null` when the user has **no**
+ * overall daily budget (no limit — the ring renders as unlimited rather than
+ * empty). Otherwise `remainingSeconds` is `max(0, allowed − consumed)`, so a
+ * rounding artefact or an over-run never prints a negative time.
+ */
+export const appOverallStatusSchema = z.object({
+  allowedSeconds: z.number().int().nullable(),
+  consumedSeconds: z.number().int(),
+  remainingSeconds: z.number().int().nullable(),
+});
+export type AppOverallStatus = z.infer<typeof appOverallStatusSchema>;
+
+/**
+ * One row of the "My limits today" list — an effective per-activity or
+ * per-group daily quota with today's consumption against it. `label` is the
+ * user-facing name (a group's `name`, or an activity's `matcher`); the client
+ * renders it, never re-deriving the vocabulary. `activityKind` carries the
+ * activity's kind (`app` / `domain` / …) for icon selection, and is `null` for
+ * a group row. Only *budgeted* targets appear — the enforceable set.
+ */
+export const appActivityStatusSchema = z.object({
+  scope: z.enum(["activity", "group"]),
+  targetId: z.number().int(),
+  label: z.string(),
+  activityKind: z.string().nullable(),
+  allowedSeconds: z.number().int(),
+  consumedSeconds: z.number().int(),
+  remainingSeconds: z.number().int(),
+});
+export type AppActivityStatus = z.infer<typeof appActivityStatusSchema>;
+
+/**
+ * The next overall-access transition, as a local wall-clock time (a schedule
+ * boundary is a wall-clock concept — see `policy/next-transition.ts`).
+ * `access_ends` = access pauses (a lock begins); `access_resumes` = it returns.
+ * `null` when access does not change between now and the end of tomorrow.
+ */
+export const appNextTransitionSchema = z.object({
+  kind: z.enum(["access_ends", "access_resumes"]),
+  localDate: z.string(),
+  atMinuteOfDay: z.number().int(),
+});
+export type AppNextTransition = z.infer<typeof appNextTransitionSchema>;
+
+/**
+ * Response of `GET /api/app/status` — the PIN-scoped per-child status screen
+ * (#110). Composed from the effective-policy resolver (grant-adjusted,
+ * weekday-varying quotas + allowed windows) and today's usage rollup, all in
+ * the user's effective timezone (ADR 0001); the client renders. Deny-by-
+ * default: served only for the PIN session's own user.
+ *
+ * A `rewards` field (recent grants) will be added additively once the Phase-10
+ * grant ledger (#113/#116/#117) lands; the shape here is forward-compatible
+ * with that addition.
+ */
+export const appStatusResponseSchema = z.object({
+  user: pinSessionUserSchema,
+  tz: z.string(),
+  now: z.string(),
+  date: z.string(),
+  overall: appOverallStatusSchema,
+  activities: z.array(appActivityStatusSchema),
+  access: z.object({
+    allowedNow: z.boolean(),
+    nextTransition: appNextTransitionSchema.nullable(),
+  }),
+});
+export type AppStatusResponse = z.infer<typeof appStatusResponseSchema>;

@@ -11,12 +11,16 @@ import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import { registerAuth } from "../auth/index.js";
 import type { Settings } from "../config.js";
 import { registerEventStream, type EventHub, type EventStreamOptions } from "../events/index.js";
-import type { ClientProber } from "../transport/health/index.js";
+import type { ClientConnectionVerifier, ClientProber } from "../transport/health/index.js";
 import type { PolicyPushNow, TimeTodayAdjuster } from "../transport/policy-push/index.js";
 import type { PolicyPushStub } from "../transport/stub.js";
-import { registerAppAuthRoutes } from "./app/index.js";
+import { registerAppAuthRoutes, registerAppStatusRoutes } from "./app/index.js";
 import { registerAuditRoutes } from "./audit/index.js";
-import { registerClientEnrolmentRoutes, registerClientHealthRoutes } from "./clients/index.js";
+import {
+  registerClientEnrolmentRoutes,
+  registerClientHealthRoutes,
+  registerClientVerifyRoutes,
+} from "./clients/index.js";
 import { registerDnsRoutes } from "./dns/index.js";
 import { registerIntegrationGrantRoutes, registerIntegrationRoutes } from "./integrations/index.js";
 import { registerMetaRoute } from "./meta.js";
@@ -71,6 +75,13 @@ export interface ApiPluginOptions {
    */
   prober?: ClientProber;
   /**
+   * The live post-enrol connectivity verifier (#354), present only when the
+   * live transport is wired (SSH key exists). Injected into the
+   * `POST /api/clients/:id/verify-connection` route; absent, that route reports
+   * the transport as unavailable (`503`).
+   */
+  verifier?: ClientConnectionVerifier;
+  /**
    * Tuning/test seam for the event-stream handshake (heartbeat interval, hello
    * timeout, negotiated server protocol). Omitted in production, where the
    * route uses its defaults.
@@ -92,6 +103,11 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (scope, opt
   // (`GET /api/app/me`). Registered after auth so `scope.requireAdmin` /
   // `scope.requirePinSession` exist and the cookie plugin is installed.
   registerAppAuthRoutes(scope, opts.settings);
+  // Per-child status screen (#110): GET /api/app/status — the PIN-scoped
+  // "My time" read (overall + per-activity time left, next transition).
+  // Registered after auth so `scope.requirePinSession` exists; needs
+  // `settings` for the server-default timezone of users with no `tz`.
+  registerAppStatusRoutes(scope, opts.settings);
   registerMetaRoute(scope);
   // Policy CRUD (#51) — registered after auth so `scope.requireAdmin` exists.
   // The live SSH dispatcher (#201) is injected from buildApp; absent it, the
@@ -124,6 +140,13 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (scope, opt
   // Client enrolment (#77): admin-minted token + the install script's enrol
   // exchange. `settings` carries the SSH-public-key path the enrol response returns.
   registerClientEnrolmentRoutes(scope, opts.settings);
+  // Post-enrol connectivity verification (#354): POST /api/clients/:id/verify-
+  // connection, authenticated by the client's own bearer token. The live SSH
+  // verifier is injected from buildApp when the transport is live (#39); absent
+  // it, the route reports the transport as unavailable (503).
+  registerClientVerifyRoutes(scope, {
+    ...(opts.verifier !== undefined ? { verifier: opts.verifier } : {}),
+  });
   // Event stream (#100): GET /api/events/stream WebSocket, per-client bearer
   // auth. Registered against the shared event hub so producers publish onto
   // the same registry. Async because it registers @fastify/websocket.
@@ -176,6 +199,7 @@ export function registerApi(
   timeToday?: TimeTodayAdjuster,
   pushPolicyNow?: PolicyPushNow,
   prober?: ClientProber,
+  verifier?: ClientConnectionVerifier,
   eventStream?: EventStreamOptions,
 ): void {
   app.register(apiPlugin, {
@@ -188,6 +212,7 @@ export function registerApi(
     ...(timeToday !== undefined ? { timeToday } : {}),
     ...(pushPolicyNow !== undefined ? { pushPolicyNow } : {}),
     ...(prober !== undefined ? { prober } : {}),
+    ...(verifier !== undefined ? { verifier } : {}),
     ...(eventStream !== undefined ? { eventStream } : {}),
   });
 }

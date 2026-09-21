@@ -129,7 +129,14 @@ export interface CreateEnforcementPipelineOptions {
 /** Production client loader: every enrolled client, as telemetry targets. */
 export function loadTelemetryClients(db: PolicyDb): TelemetryClient[] {
   return db
-    .select({ id: clients.id, hostname: clients.hostname, sshUser: clients.sshUser })
+    .select({
+      id: clients.id,
+      hostname: clients.hostname,
+      sshUser: clients.sshUser,
+      // Carry the SSH-target override (#406) so the telemetry pull dials the
+      // same host as the rest of the transport, not the bare hostname.
+      sshTarget: clients.sshTarget,
+    })
     .from(clients)
     .all();
 }

@@ -17,11 +17,16 @@
   import type {
     RetentionCategory,
     RetentionEntryResponse,
+    RetentionPurgePreviewResponse,
+    RetentionPurgeRunResponse,
     SetRetentionOverrideRequest,
   } from "$lib/api/contract.js";
   import {
     clearRetentionOverride,
     fetchRetention,
+    fetchRetentionPurgeRuns,
+    previewRetentionPurge,
+    runRetentionPurge,
     setRetentionOverride,
   } from "$lib/api/retention.js";
 
@@ -79,7 +84,18 @@
   let savingCategory = $state<string | null>(null);
   let clearingCategory = $state<string | null>(null);
 
-  onMount(load);
+  // Data-purge panel (#137): the last recorded run, a pending dry-run preview,
+  // and the in-flight flags for the manual controls.
+  let lastRun = $state<RetentionPurgeRunResponse | null>(null);
+  let preview = $state<RetentionPurgePreviewResponse | null>(null);
+  let purgeError = $state<string | null>(null);
+  let running = $state(false);
+  let previewing = $state(false);
+
+  onMount(() => {
+    void load();
+    void loadLastRun();
+  });
 
   async function load(): Promise<void> {
     loading = true;
@@ -177,12 +193,62 @@
   function applyEntry(updated: RetentionEntryResponse): void {
     entries = entries.map((row) => (row.category === updated.category ? updated : row));
     drafts = { ...drafts, [updated.category]: draftFor(updated, defaultDays ?? 0) };
+    // A window just changed, so any pending preview was computed against the old
+    // cutoffs — drop it rather than show stale counts.
+    preview = null;
   }
 
   /** The current effective window, human-readable. */
   function windowLabel(entry: RetentionEntryResponse): string {
     if (entry.keepForever) return "Kept forever";
     return `${entry.days} day${entry.days === 1 ? "" : "s"}`;
+  }
+
+  /** Load the most recent purge run for the last-run summary. */
+  async function loadLastRun(): Promise<void> {
+    try {
+      const res = await fetchRetentionPurgeRuns(1);
+      lastRun = res.runs[0] ?? null;
+    } catch (err) {
+      purgeError = messageOf(err);
+    }
+  }
+
+  /** Dry-run: show what a purge would remove now, deleting/recording nothing. */
+  async function handlePreview(): Promise<void> {
+    previewing = true;
+    purgeError = null;
+    try {
+      preview = await previewRetentionPurge();
+    } catch (err) {
+      purgeError = messageOf(err);
+    } finally {
+      previewing = false;
+    }
+  }
+
+  /** Run the purge now; refresh the last-run summary and clear the stale preview. */
+  async function handleRunNow(): Promise<void> {
+    running = true;
+    purgeError = null;
+    try {
+      lastRun = await runRetentionPurge();
+      preview = null;
+    } catch (err) {
+      purgeError = messageOf(err);
+    } finally {
+      running = false;
+    }
+  }
+
+  /** An ISO instant rendered in the viewer's locale. */
+  function formatInstant(iso: string): string {
+    return new Date(iso).toLocaleString();
+  }
+
+  /** A per-category cutoff for a breakdown row: the date, or "kept forever". */
+  function cutoffLabel(cutoff: string | null): string {
+    return cutoff === null ? "kept forever" : `older than ${formatInstant(cutoff)}`;
   }
 
   /** Render any thrown value as a UI-safe message. */
@@ -299,12 +365,125 @@
       </tbody>
     </table>
   {/if}
+
+  <div class="purge-panel">
+    <h2>Data purge</h2>
+    <p class="hint">
+      The purge runs automatically on a schedule and deletes records past their window. You can
+      preview what it would remove, or run it now.
+    </p>
+
+    {#if purgeError}
+      <p class="error" role="alert">{purgeError}</p>
+    {/if}
+
+    <div class="purge-actions">
+      <button class="ghost" onclick={handlePreview} disabled={previewing || running}>
+        {previewing ? "Previewing…" : "Preview"}
+      </button>
+      <button onclick={handleRunNow} disabled={running || previewing}>
+        {running ? "Purging…" : "Run purge now"}
+      </button>
+    </div>
+
+    {#if lastRun}
+      <div class="purge-card" data-testid="last-run">
+        <div class="purge-card-head">
+          <span class="muted">Last purge</span>
+          <strong>{formatInstant(lastRun.at)}</strong>
+          <span class="badge {lastRun.trigger === 'manual' ? 'override' : 'inherited'}">
+            {lastRun.trigger}
+          </span>
+          <span>{lastRun.totalDeleted} row{lastRun.totalDeleted === 1 ? "" : "s"} removed</span>
+        </div>
+        <ul class="purge-breakdown">
+          {#each lastRun.items as item (item.category)}
+            <li>
+              <span>{metaFor(item.category).label}</span>
+              <span class="muted cutoff">{cutoffLabel(item.cutoff)}</span>
+              <span>{item.deleted}</span>
+            </li>
+          {/each}
+        </ul>
+      </div>
+    {:else}
+      <p class="muted">No purge has run yet.</p>
+    {/if}
+
+    {#if preview}
+      <div class="purge-card" data-testid="preview">
+        <div class="purge-card-head">
+          <span class="muted">Preview</span>
+          <strong>
+            {preview.totalWouldDelete} row{preview.totalWouldDelete === 1 ? "" : "s"} would be removed
+          </strong>
+        </div>
+        <ul class="purge-breakdown">
+          {#each preview.items as item (item.category)}
+            <li>
+              <span>{metaFor(item.category).label}</span>
+              <span class="muted cutoff">{cutoffLabel(item.cutoff)}</span>
+              <span>{item.wouldDelete}</span>
+            </li>
+          {/each}
+        </ul>
+      </div>
+    {/if}
+  </div>
 </section>
 
 <style>
   h1 {
     margin: 0;
     font-size: 1.3rem;
+  }
+  h2 {
+    margin: 0 0 0.15rem;
+    font-size: 1.05rem;
+  }
+  .purge-panel {
+    margin-top: 1.75rem;
+    padding-top: 1.25rem;
+    border-top: 1px solid #e5e7eb;
+  }
+  .purge-actions {
+    display: flex;
+    gap: 0.5rem;
+    margin: 0.5rem 0 1rem;
+  }
+  .purge-card {
+    margin-top: 0.75rem;
+    padding: 0.6rem 0.8rem;
+    border: 1px solid #e5e7eb;
+    background: #f9fafb;
+    border-radius: 0.5rem;
+    font-size: 0.9rem;
+  }
+  .purge-card-head {
+    display: flex;
+    gap: 0.5rem;
+    align-items: baseline;
+    flex-wrap: wrap;
+  }
+  .purge-breakdown {
+    list-style: none;
+    margin: 0.5rem 0 0;
+    padding: 0;
+    display: grid;
+    gap: 0.15rem;
+    max-width: 28rem;
+  }
+  .purge-breakdown li {
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    gap: 0.75rem;
+    align-items: baseline;
+    font-size: 0.85rem;
+    color: #4b5563;
+  }
+  .purge-breakdown .cutoff {
+    font-size: 0.78rem;
+    text-align: right;
   }
   .hint {
     margin: 0.25rem 0 1rem;

@@ -168,6 +168,8 @@ describe("GET /api/events/stream — version handshake (#165)", () => {
     expect(row?.lastSeen).toBeInstanceOf(Date);
     expect(row?.agentVersion).toBe("1.4.2");
     expect(row?.versionsReportedAt).toBeInstanceOf(Date);
+    // The advertised capability set is persisted for the admin surface (#400).
+    expect(row?.capabilities).toEqual(["session_budget"]);
 
     // A producer publishing to this client reaches the open socket (2nd frame).
     const delivered = app.eventHub.publishToClient(clientId, {
@@ -188,6 +190,26 @@ describe("GET /api/events/stream — version handshake (#165)", () => {
     ws.close();
     await vi.waitFor(() => expect(app.eventHub.isClientLive(clientId)).toBe(false));
     expect(app.eventHub.connectionCount).toBe(0);
+  });
+
+  it("persists an empty advertised capability set (handshaked, advertises nothing) (#400)", async () => {
+    harness = buildTestApp();
+    const { app, db } = harness;
+    const token = generateToken();
+    const clientId = enrolClientWithToken(harness, token);
+    await app.listen({ port: 0, host: "127.0.0.1" });
+
+    const ws = connect(app, { authorization: `Bearer ${token}` });
+    const nextMessage = messageReader(ws);
+    await awaitOpen(ws);
+    ws.send(helloFrame(EVENT_PROTOCOL, []));
+
+    const accept = JSON.parse(await nextMessage()) as { type: string };
+    expect(accept.type).toBe("accept");
+
+    // [] (advertises nothing) is persisted, distinct from the null "never
+    // handshaked" default — so the admin view greys out every control.
+    await vi.waitFor(() => expect(repo.getClient(db, clientId)?.capabilities).toEqual([]));
   });
 
   it("refuses an incompatible (too-new) hello and never registers", async () => {

@@ -50,6 +50,16 @@ describe("web app routes", () => {
 
     expect(res.statusCode).toBe(404);
   });
+
+  it("defaults the timekpr mirror refresh handle to null and stops it on close (#392)", async () => {
+    const local = buildTestApp();
+    // Null until main.ts wires it in managed mode — building the app starts no timer.
+    expect(local.app.timekprMirrorRefresh).toBeNull();
+    const stop = vi.fn();
+    local.app.timekprMirrorRefresh = { tick: async () => undefined, stop };
+    await local.close();
+    expect(stop).toHaveBeenCalledOnce();
+  });
 });
 
 // trustProxy redefines `request.ip`, which is the key the per-IP

@@ -150,10 +150,12 @@ export {
   clientHealthListSchema,
   clientQueueSchema,
   componentHealthSchema,
+  clientCapabilitySchema,
   queuedActionSummarySchema,
   type ClientHealthResponse,
   type ClientQueueDto,
   type ComponentHealthDto,
+  type ClientCapabilityDto,
   type QueuedActionSummary,
 } from "./clients/index.js";
 
@@ -201,13 +203,19 @@ export {
   type TimelineSample,
 } from "./usage/index.js";
 
-// DNS-status DTO (#95): the read-only contract surfacing the active AdGuard mode
-// and its health. Schema lives in `./dns/dtos.ts` next to the route.
+// DNS DTOs: the read-only mode/health contract (#95) plus the per-client
+// blocklist preview/apply contract (#97). Schemas live in `./dns/dtos.ts`.
 export {
   dnsModeSchema,
   dnsHealthSchema,
   dnsStatusResponseSchema,
+  dnsBlocklistClientSchema,
+  dnsBlocklistSkippedSchema,
+  dnsBlocklistPreviewResponseSchema,
+  dnsBlocklistApplyResponseSchema,
   type DnsStatusResponse,
+  type DnsBlocklistPreviewResponse,
+  type DnsBlocklistApplyResponse,
 } from "./dns/index.js";
 
 // System-status DTO (#39): the read-only contract surfacing first-run subsystem
@@ -241,11 +249,19 @@ export {
   pinSessionUserSchema,
   pinSessionResponseSchema,
   appMeResponseSchema,
+  appOverallStatusSchema,
+  appActivityStatusSchema,
+  appNextTransitionSchema,
+  appStatusResponseSchema,
   type SetUserPinRequest,
   type UserPinStatusResponse,
   type PinLoginRequest,
   type PinSessionResponse,
   type AppMeResponse,
+  type AppOverallStatus,
+  type AppActivityStatus,
+  type AppNextTransition,
+  type AppStatusResponse,
 } from "./app/index.js";
 
 // Event-stream taxonomy (#100): the `/api/events/stream` wire contract — the
@@ -264,5 +280,7 @@ export {
   type ServerEventType,
   type EventFrame,
   CLIENT_CAPABILITIES,
+  CLIENT_CAPABILITY_CATALOG,
   type ClientCapability,
+  type ClientCapabilityDescriptor,
 } from "../events/index.js";

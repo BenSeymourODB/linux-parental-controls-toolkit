@@ -19,6 +19,7 @@
   import { ApiError } from "$lib/api/client.js";
   import { fetchAppSession, pinLogin, pinLogout } from "$lib/api/app-session.js";
   import type { PinSessionResponse } from "$lib/api/contract.js";
+  import AppStatusView from "$lib/views/AppStatusView.svelte";
 
   // `null` while the initial session probe is in flight.
   let session = $state<PinSessionResponse | null>(null);
@@ -89,15 +90,10 @@
 {#if session === null}
   <p class="loading" role="status">Loading…</p>
 {:else if authenticated}
-  <section class="signed-in" aria-labelledby="signed-in-title">
-    <div class="ring" aria-hidden="true"></div>
-    <h1 id="signed-in-title">Hi, {session.user?.displayName}</h1>
-    <p>
-      You're signed in. Your time left, today's limits and the rewards you've
-      earned will show up here soon.
-    </p>
+  <AppStatusView />
+  <div class="signout-row">
     <button type="button" class="link" onclick={handleLogout}>Sign out</button>
-  </section>
+  </div>
 {:else}
   <section class="login" aria-labelledby="login-title">
     <h1 id="login-title">Sign in</h1>
@@ -142,7 +138,6 @@
     padding: 32px 8px;
   }
 
-  .signed-in,
   .login {
     display: flex;
     flex-direction: column;
@@ -154,17 +149,10 @@
     box-shadow: var(--shadow);
   }
 
-  .signed-in {
-    align-items: center;
-    text-align: center;
-  }
-
-  .ring {
-    width: 84px;
-    height: 84px;
-    border-radius: 50%;
-    border: 11px solid var(--surface-3);
-    border-top-color: var(--primary);
+  .signout-row {
+    display: flex;
+    justify-content: center;
+    margin-top: 16px;
   }
 
   h1 {
@@ -172,13 +160,6 @@
     font-size: 22px;
     font-weight: 700;
     letter-spacing: -0.01em;
-  }
-
-  .signed-in p {
-    margin: 0;
-    max-width: 30ch;
-    font-size: 14px;
-    color: var(--muted);
   }
 
   .sub {

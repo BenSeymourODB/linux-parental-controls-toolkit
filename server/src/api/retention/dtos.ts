@@ -10,9 +10,10 @@
  */
 import { z } from "zod";
 
-import { retentionCategorySchema } from "../../policy/enums.js";
-import type { RetentionOverrideRow } from "../../policy/repository.js";
+import { retentionCategorySchema, retentionPurgeTriggerSchema } from "../../policy/enums.js";
+import type { RetentionOverrideRow, RetentionPurgeRunRow } from "../../policy/repository.js";
 import { MAX_RETENTION_DAYS } from "../../policy/retention.js";
+import type { RetentionPurgePreview } from "../../retention/index.js";
 
 /** Path params for the per-category routes: `/api/retention/:category`. */
 export const retentionCategoryParamsSchema = z.object({
@@ -102,5 +103,100 @@ export function toRetentionConfigResponse(
     categories: categories.map(
       (category) => byCategory.get(category) ?? defaultEntry(category, defaultDays),
     ),
+  };
+}
+
+// --- Purge runs & preview (#137) -------------------------------------------
+
+/**
+ * One category's outcome in a recorded purge run on the wire. `cutoff` is an
+ * ISO-8601 string (storage keeps epoch seconds) or `null` when the category is
+ * kept forever; `deleted` is the rows removed.
+ */
+export const retentionPurgeRunItemSchema = z.object({
+  category: retentionCategorySchema,
+  cutoff: z.string().nullable(),
+  deleted: z.number().int().nonnegative(),
+});
+
+/** A recorded purge run on the wire (the "last run" the admin page shows). */
+export const retentionPurgeRunResponseSchema = z.object({
+  id: z.number().int().positive(),
+  at: z.string(),
+  trigger: retentionPurgeTriggerSchema,
+  totalDeleted: z.number().int().nonnegative(),
+  durationMs: z.number().int().nonnegative(),
+  items: z.array(retentionPurgeRunItemSchema),
+});
+
+/** The inferred shape of one recorded purge run. */
+export type RetentionPurgeRunResponse = z.infer<typeof retentionPurgeRunResponseSchema>;
+
+/** A page of recent purge runs, newest first (`runs[0]` is the last run). */
+export const retentionPurgeRunsResponseSchema = z.object({
+  runs: z.array(retentionPurgeRunResponseSchema),
+});
+
+/** The inferred shape of the purge-runs listing. */
+export type RetentionPurgeRunsResponse = z.infer<typeof retentionPurgeRunsResponseSchema>;
+
+/** Query for `GET /api/retention/purge/runs`: how many recent runs to return. */
+export const retentionPurgeRunsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+});
+
+/** The inferred, validated runs-listing query. */
+export type RetentionPurgeRunsQuery = z.infer<typeof retentionPurgeRunsQuerySchema>;
+
+/** One category's dry-run projection on the wire. */
+export const retentionPurgePreviewItemSchema = z.object({
+  category: retentionCategorySchema,
+  cutoff: z.string().nullable(),
+  wouldDelete: z.number().int().nonnegative(),
+});
+
+/** A side-effect-free dry-run result on the wire. */
+export const retentionPurgePreviewResponseSchema = z.object({
+  at: z.string(),
+  totalWouldDelete: z.number().int().nonnegative(),
+  items: z.array(retentionPurgePreviewItemSchema),
+});
+
+/** The inferred shape of a purge preview. */
+export type RetentionPurgePreviewResponse = z.infer<typeof retentionPurgePreviewResponseSchema>;
+
+/** An epoch-seconds cutoff (as stored) → ISO-8601 string, or `null` passthrough. */
+function epochSecondsToIso(cutoff: number | null): string | null {
+  return cutoff === null ? null : new Date(cutoff * 1000).toISOString();
+}
+
+/** Serialise a stored purge-run row to its wire shape (cutoffs → ISO strings). */
+export function toPurgeRunResponse(row: RetentionPurgeRunRow): RetentionPurgeRunResponse {
+  return {
+    id: row.id,
+    at: row.at.toISOString(),
+    trigger: row.trigger,
+    totalDeleted: row.totalDeleted,
+    durationMs: row.durationMs,
+    items: row.items.map((item) => ({
+      category: item.category,
+      cutoff: epochSecondsToIso(item.cutoff),
+      deleted: item.deleted,
+    })),
+  };
+}
+
+/** Serialise a service-layer preview to its wire shape (cutoff Dates → ISO). */
+export function toPurgePreviewResponse(
+  preview: RetentionPurgePreview,
+): RetentionPurgePreviewResponse {
+  return {
+    at: preview.at.toISOString(),
+    totalWouldDelete: preview.totalWouldDelete,
+    items: preview.items.map((item) => ({
+      category: item.category,
+      cutoff: item.cutoff === null ? null : item.cutoff.toISOString(),
+      wouldDelete: item.wouldDelete,
+    })),
   };
 }

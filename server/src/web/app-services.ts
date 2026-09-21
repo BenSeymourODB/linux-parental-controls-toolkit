@@ -20,6 +20,10 @@ import type { FastifyBaseLogger } from "fastify";
 import type { Settings } from "../config.js";
 import { createEnforcementPipeline, type EnforcementPipelineHandle } from "../enforcement/index.js";
 import { EventHub } from "../events/index.js";
+import {
+  createRetentionPurgeScheduler,
+  type RetentionPurgeSchedulerHandle,
+} from "../retention/index.js";
 import { createDb, type PolicyDb } from "../policy/db.js";
 import { DrizzleAuditSink } from "../transport/audit/index.js";
 import { loadSshCredentials } from "../transport/ssh/index.js";
@@ -63,6 +67,13 @@ export interface AppServices {
    * by {@link AppServices.teardown}.
    */
   enforcementPipeline: EnforcementPipelineHandle | null;
+  /**
+   * The Phase-11 scheduled retention purge (#137): the croner job that enforces
+   * the configured retention windows and records each run. Always present (a
+   * purge needs no SSH). Constructed here but started by `main.ts` after
+   * `listen`; stopped by {@link AppServices.teardown}.
+   */
+  retentionPurge: RetentionPurgeSchedulerHandle;
   /**
    * Dispose the resources this composition root owns, on `app.close()`, in the
    * pre-refactor order:
@@ -180,8 +191,25 @@ export function buildAppServices(
           initialLookbackSeconds: settings.enforcement.initialLookbackSeconds,
         });
 
+  // The Phase-11 scheduled retention purge (#137): the croner job that enforces
+  // the configured retention windows (env default + persisted overrides) and
+  // records each run. Built (or injected) here but NOT started — main.ts calls
+  // start() after listen, and teardown stops it. Always constructed: a purge is
+  // pure DB maintenance with no SSH/keyless case. Constructing it starts no
+  // timer (the Cron is created lazily in start()).
+  const retentionPurge =
+    options.retentionPurge ??
+    createRetentionPurgeScheduler({
+      db,
+      defaultDays: settings.retention.defaultDays,
+      pattern: settings.retention.purgeCron,
+      batchSize: settings.retention.purgeBatchSize,
+      log,
+    });
+
   const teardown = async (): Promise<void> => {
-    // Stop the enforcement loop's timers before tearing down the deps it reads.
+    // Stop the scheduled timers before tearing down the deps they read.
+    retentionPurge.stop();
     if (enforcementPipeline !== null) enforcementPipeline.stop();
     // Order mirrors the pre-refactor buildApp onClose hooks (Fastify runs them
     // LIFO): stop the managed supervisor first, then dispose the policy-push
@@ -202,6 +230,7 @@ export function buildAppServices(
     adguardManaged,
     ansibleVenv,
     enforcementPipeline,
+    retentionPurge,
     teardown,
   };
 }

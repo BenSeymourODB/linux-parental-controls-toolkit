@@ -62,6 +62,9 @@
   let editHostname = $state("");
   let editFriendlyName = $state("");
   let editSshUser = $state("");
+  // The SSH-target override (#406): empty string means "no override" (dial the
+  // hostname); a non-empty value pins the transport to that host/IP.
+  let editSshTarget = $state("");
   let saving = $state(false);
 
   // Enrol flow.
@@ -148,6 +151,7 @@
     editHostname = client.hostname;
     editFriendlyName = client.friendlyName ?? "";
     editSshUser = client.sshUser;
+    editSshTarget = client.sshTarget ?? "";
     error = null;
   }
 
@@ -163,10 +167,14 @@
       // for the field, so an empty box means "leave the existing name" rather
       // than an unsupported clear-to-null.
       const friendlyName = editFriendlyName.trim();
+      // The SSH-target override is nullable: an empty box sends `null` to clear
+      // it (back to the hostname), a non-empty value pins the transport to it.
+      const sshTarget = editSshTarget.trim();
       const updated = await updateClient(id, {
         hostname: editHostname.trim(),
         sshUser: editSshUser.trim(),
         ...(friendlyName === "" ? {} : { friendlyName }),
+        sshTarget: sshTarget === "" ? null : sshTarget,
       });
       clients = clients.map((c) => (c.id === id ? updated : c));
       editingId = null;
@@ -469,7 +477,76 @@
                 {/if}
               </dd>
             </div>
+            <div>
+              <dt title="The host the dashboard's SSH transport dials for this client — a per-client override, or the hostname when unset (#406).">
+                SSH target
+              </dt>
+              <dd>
+                {#if editingId === client.id}
+                  {@const candidates = [
+                    ...(client.reportedIps ?? []),
+                    ...(client.sourceIp === null ? [] : [client.sourceIp]),
+                  ]}
+                  <input
+                    class="ssh-target-input"
+                    bind:value={editSshTarget}
+                    aria-label="Edit SSH target override"
+                    placeholder="{client.hostname} (hostname — leave blank)"
+                  />
+                  <div class="ssh-target-hints">
+                    {#if candidates.length > 0}
+                      {#each candidates as candidate (candidate)}
+                        <button
+                          type="button"
+                          class="chip"
+                          onclick={() => (editSshTarget = candidate)}
+                        >
+                          {candidate}
+                        </button>
+                      {/each}
+                    {/if}
+                    {#if editSshTarget.trim() !== ""}
+                      <button type="button" class="chip clear" onclick={() => (editSshTarget = "")}>
+                        Use hostname
+                      </button>
+                    {/if}
+                  </div>
+                {:else if client.sshTarget === null}
+                  <span class="muted" title="No override — the transport dials the hostname.">
+                    hostname
+                  </span>
+                {:else}
+                  {client.effectiveSshTarget}
+                  <span class="badge override" title="Pinned to an admin-set address instead of the hostname.">
+                    override
+                  </span>
+                {/if}
+              </dd>
+            </div>
             <div><dt>Last seen</dt><dd>{formatDateTime(client.lastSeen)}</dd></div>
+            <div>
+              <dt title="Whether the dashboard could reach this client over SSH — the post-enrol self-test the installer runs (#354).">
+                Verified
+              </dt>
+              <dd>
+                {#if h === null || h.lastVerifiedAt === null}
+                  <span class="muted">never verified</span>
+                {:else if h.lastVerifyReachable}
+                  <span class="pill ok">reachable</span>
+                  <span class="muted small">· {formatDateTime(h.lastVerifiedAt)}</span>
+                {:else}
+                  <span
+                    class="pill warn"
+                    title={h.lastVerifyReason
+                      ? (REACHABILITY_HINTS[h.lastVerifyReason] ?? undefined)
+                      : undefined}
+                  >
+                    failed{h.lastVerifyReason ? ` (${h.lastVerifyReason})` : ""}
+                  </span>
+                  <span class="muted small">· {formatDateTime(h.lastVerifiedAt)}</span>
+                {/if}
+              </dd>
+            </div>
             {#if client.reportedIps && client.reportedIps.length > 0}
               <div>
                 <dt title="The client's own reported address(es). Advisory — may be stale under DHCP.">
@@ -533,6 +610,33 @@
                   <span class="muted small">{comp.detail}</span>
                 </div>
               {/each}
+            {/if}
+          </div>
+
+          <div class="capabilities">
+            <div class="section-title">Capabilities</div>
+            {#if h === null || !h.capabilitiesReported}
+              <p class="muted small">
+                Not reported yet — a client advertises its capabilities on its first event-stream
+                handshake.
+              </p>
+            {:else}
+              <ul class="cap-list">
+                {#each h.capabilities as cap (cap.capability)}
+                  <li
+                    class="cap"
+                    class:unsupported={!cap.supported}
+                    data-supported={cap.supported ? "true" : "false"}
+                    title={cap.supported
+                      ? cap.description
+                      : `${cap.description} (not supported by this client)`}
+                  >
+                    <span class="cap-mark" aria-hidden="true">{cap.supported ? "✓" : "—"}</span>
+                    <span class="cap-name">{cap.label}</span>
+                    <span class="cap-state">{cap.supported ? "supported" : "unsupported"}</span>
+                  </li>
+                {/each}
+              </ul>
             {/if}
           </div>
 
@@ -724,6 +828,33 @@
     background: #fef3c7;
     color: #92400e;
   }
+  .badge.override {
+    background: #e0e7ff;
+    color: #3730a3;
+  }
+  .ssh-target-hints {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0.25rem;
+    margin-top: 0.25rem;
+  }
+  .chip {
+    border: 1px solid #d1d5db;
+    background: #f9fafb;
+    color: #374151;
+    border-radius: 999px;
+    padding: 0.05rem 0.5rem;
+    font-size: 0.72rem;
+    cursor: pointer;
+  }
+  .chip:hover {
+    background: #eef2ff;
+    border-color: #a5b4fc;
+  }
+  .chip.clear {
+    color: #6b7280;
+  }
   .kv {
     margin: 0;
     display: grid;
@@ -784,6 +915,47 @@
   }
   .dot.unknown {
     background: #9ca3af;
+  }
+  .capabilities {
+    border-top: 1px solid #f3f4f6;
+    padding-top: 0.5rem;
+  }
+  .cap-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .cap {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.25rem 0;
+    font-size: 0.85rem;
+  }
+  .cap-mark {
+    width: 1rem;
+    flex: none;
+    text-align: center;
+    font-weight: 700;
+    color: #16a34a;
+  }
+  .cap-name {
+    font-weight: 500;
+  }
+  .cap-state {
+    margin-left: auto;
+    font-size: 0.75rem;
+    color: #6b7280;
+  }
+  /* An unsupported capability is greyed out — the control this client can't honour. */
+  .cap.unsupported {
+    color: #9ca3af;
+  }
+  .cap.unsupported .cap-mark {
+    color: #9ca3af;
+  }
+  .cap.unsupported .cap-name {
+    font-weight: 400;
   }
   .queue {
     border-top: 1px solid #f3f4f6;

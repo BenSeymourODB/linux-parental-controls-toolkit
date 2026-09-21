@@ -22,13 +22,17 @@ import * as repo from "../../policy/repository.js";
 import type { ClientRow } from "../../policy/repository.js";
 import {
   CLIENT_COMPONENTS,
+  sshUnreachableReasonValues,
   type ClientProber,
   type ClientProbeResult,
+  type SshUnreachableReason,
 } from "../../transport/health/index.js";
+import { CLIENT_CAPABILITY_CATALOG } from "../../events/capabilities.js";
 import { listForClient } from "../../transport/queue/index.js";
 import { mapWithConcurrency, timerDeadline, type DeadlineFactory } from "../../util/concurrency.js";
 import {
   toQueuedActionSummary,
+  type ClientCapabilityDto,
   type ClientHealthResponse,
   type ComponentHealthDto,
 } from "./health-dtos.js";
@@ -46,12 +50,46 @@ const DEFAULT_PROBE_CONCURRENCY = 4;
 /** Default per-list probe deadline in ms (≈1.5× the SSH readyTimeout). */
 const DEFAULT_PROBE_DEADLINE_MS = 15_000;
 
+/** Type-guard: is `value` one of the classified {@link SshUnreachableReason}s? */
+function isSshUnreachableReason(value: string): value is SshUnreachableReason {
+  return (sshUnreachableReasonValues as readonly string[]).includes(value);
+}
+
+/**
+ * Narrow the persisted `last_verify_reason` (stored as plain text so `policy/`
+ * keeps no `transport/` dependency, #354) back to the typed
+ * {@link SshUnreachableReason} for the wire DTO. Only the verify path writes it,
+ * always a valid reason, so an unrecognised value can only be pre-#354 data or
+ * corruption — reported as `null` rather than trusted onto the enum.
+ */
+function toVerifyReason(value: string | null): SshUnreachableReason | null {
+  return value !== null && isSshUnreachableReason(value) ? value : null;
+}
+
 /** Every catalogue component reported `unknown` with one shared detail. */
 function unknownComponents(detail: string): ComponentHealthDto[] {
   return CLIENT_COMPONENTS.map((descriptor) => ({
     component: descriptor.component,
     status: "unknown",
     detail,
+  }));
+}
+
+/**
+ * The full capability catalogue flagged against a client's advertised set
+ * (#400). `advertised === null` (never handshaked) yields every entry
+ * `supported: false`; the caller reports {@link ClientHealthResponse.capabilitiesReported}
+ * separately so the view can tell "not reported yet" from "handshaked, supports
+ * nothing". A capability the client advertised but the catalogue doesn't know
+ * is ignored — the matrix renders only controls the dashboard understands.
+ */
+function capabilityMatrix(advertised: readonly string[] | null): ClientCapabilityDto[] {
+  const supported = new Set(advertised ?? []);
+  return CLIENT_CAPABILITY_CATALOG.map((descriptor) => ({
+    capability: descriptor.capability,
+    label: descriptor.label,
+    description: descriptor.description,
+    supported: supported.has(descriptor.capability),
   }));
 }
 
@@ -100,6 +138,9 @@ function assemble(
     reachability: probe?.reachability ?? "unknown",
     reachabilityReason: probe?.reachabilityReason ?? null,
     lastSeen: client.lastSeen === null ? null : client.lastSeen.toISOString(),
+    lastVerifiedAt: client.lastVerifiedAt === null ? null : client.lastVerifiedAt.toISOString(),
+    lastVerifyReachable: client.lastVerifyReachable,
+    lastVerifyReason: toVerifyReason(client.lastVerifyReason),
     enrolledAt: client.enrolledAt.toISOString(),
     probedAt: probe === undefined ? null : probe.at.toISOString(),
     updateRequired: client.updateRequired,
@@ -113,6 +154,8 @@ function assemble(
       updateRequired: client.updateRequired,
     }),
     components,
+    capabilitiesReported: client.capabilities !== null,
+    capabilities: capabilityMatrix(client.capabilities),
     queue: {
       pending: queueRows.filter((row) => row.status === "pending").length,
       failed: queueRows.filter((row) => row.status === "failed").length,

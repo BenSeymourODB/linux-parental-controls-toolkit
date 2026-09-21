@@ -6,7 +6,11 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { CLIENT_CAPABILITIES, capabilityForEvent } from "../../src/events/capabilities.js";
+import {
+  CLIENT_CAPABILITIES,
+  CLIENT_CAPABILITY_CATALOG,
+  capabilityForEvent,
+} from "../../src/events/capabilities.js";
 import type { ServerEvent } from "../../src/events/taxonomy.js";
 
 describe("CLIENT_CAPABILITIES", () => {
@@ -14,6 +18,31 @@ describe("CLIENT_CAPABILITIES", () => {
     // These strings cross the wire in the client `hello`; they must not drift.
     expect(CLIENT_CAPABILITIES.perAppClose).toBe("per_app_close");
     expect(CLIENT_CAPABILITIES.sessionBudget).toBe("session_budget");
+  });
+});
+
+describe("CLIENT_CAPABILITY_CATALOG", () => {
+  it("covers every capability in the vocabulary exactly once", () => {
+    const catalogued = CLIENT_CAPABILITY_CATALOG.map((entry) => entry.capability);
+    const vocabulary = Object.values(CLIENT_CAPABILITIES);
+    // Every vocabulary value has a catalogue entry, and nothing is catalogued
+    // twice — so a new capability can't be added without a label (#400).
+    expect([...catalogued].sort()).toStrictEqual([...vocabulary].sort());
+    expect(new Set(catalogued).size).toBe(catalogued.length);
+  });
+
+  it("gives every entry a non-empty label and description", () => {
+    for (const entry of CLIENT_CAPABILITY_CATALOG) {
+      expect(entry.label.length).toBeGreaterThan(0);
+      expect(entry.description.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("only catalogues known capability ids", () => {
+    const vocabulary = new Set<string>(Object.values(CLIENT_CAPABILITIES));
+    for (const entry of CLIENT_CAPABILITY_CATALOG) {
+      expect(vocabulary.has(entry.capability)).toBe(true);
+    }
   });
 });
 
