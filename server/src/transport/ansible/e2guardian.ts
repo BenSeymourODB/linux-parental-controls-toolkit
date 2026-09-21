@@ -23,8 +23,9 @@
  */
 import { z } from "zod";
 
-import { getActivity, listClientLinks, listGroupActivities } from "../../policy/repository.js";
+import { listClientLinks } from "../../policy/repository.js";
 import type { PolicyDb } from "../../policy/db.js";
+import { domainsForDenyRule, resolveAlwaysOnDomainDenies } from "../../policy/domain-denies.js";
 import { gatherUserScheduleRules } from "../../policy/group-resolution.js";
 import { MINUTES_PER_DAY } from "../../policy/recurrence.js";
 import type { ScheduleRule } from "../../policy/schedule-precedence.js";
@@ -122,23 +123,6 @@ export interface BuildE2guardianPlanOptions {
 }
 
 /**
- * A schedule is *always-on* — i.e. it filters at all times, not on a recurring
- * window or a date range — when every reserved recurrence/date-scoping field is
- * null (the degenerate row, ADR 0005). Only always-on denies belong in the
- * static filter group; recurring "no YouTube during homework" windows are
- * handled separately via {@link resolveWindowedDenies} (#216).
- */
-function isAlwaysOn(rule: ScheduleRule): boolean {
-  return (
-    rule.recurrenceDays === null &&
-    rule.recurrenceStartMinute === null &&
-    rule.recurrenceEndMinute === null &&
-    rule.effectiveFrom === null &&
-    rule.effectiveTo === null
-  );
-}
-
-/**
  * A schedule is a *recurring window* (#216) when it carries at least one
  * recurrence field (weekday mask and/or intra-day window) **and** is not
  * date-scoped (`effective_from`/`effective_to` both null). e2guardian's `#time:`
@@ -199,47 +183,6 @@ export function e2guardianTimeTag(
 }
 
 /**
- * Expand one `deny` schedule to the concrete domains it bans. A rule targeting a
- * `domain` Activity contributes that activity's matcher; one targeting a `group`
- * contributes every `domain`-kind member's matcher.
- *
- * `domain_group` activities (named bundles the client expands) are intentionally
- * skipped — resolving a named bundle to concrete domains is owned by the
- * richer-matcher work (#178/#195); this handles concrete `domain` matchers only.
- *
- * The rule comes from {@link gatherUserScheduleRules}, so both the user's own and
- * inherited group denies flow through here (#362) — a group-targeted domain block
- * reaches e2guardian, and a group *recurring* deny reaches the windowed lists.
- */
-function domainsForRule(db: PolicyDb, rule: ScheduleRule): string[] {
-  if (rule.targetId === null) return [];
-  const domains: string[] = [];
-  if (rule.targetKind === "activity") {
-    const activity = getActivity(db, rule.targetId);
-    if (activity?.kind === "domain") domains.push(activity.matcher);
-  } else if (rule.targetKind === "group") {
-    for (const activity of listGroupActivities(db, rule.targetId)) {
-      if (activity.kind === "domain") domains.push(activity.matcher);
-    }
-  }
-  return domains;
-}
-
-/**
- * Collect the domains a single user *always-on* denies, deduplicated and sorted.
- * Reads the user's effective schedules — own rules plus inherited group denies
- * (#362) — via {@link gatherUserScheduleRules}.
- */
-function resolveBannedSites(db: PolicyDb, userId: number): string[] {
-  const sites = new Set<string>();
-  for (const rule of gatherUserScheduleRules(db, userId)) {
-    if (rule.action !== "deny" || !isAlwaysOn(rule)) continue;
-    for (const domain of domainsForRule(db, rule)) sites.add(domain);
-  }
-  return [...sites].sort();
-}
-
-/**
  * Collect a single user's recurring time-window domain denies (#216), grouped by
  * their e2guardian `#time:` tag so denies sharing an identical window collapse to
  * one list. Sites within a window are deduplicated and sorted; windows are sorted
@@ -252,7 +195,7 @@ function resolveWindowedDenies(db: PolicyDb, userId: number): E2guardianWindow[]
   const sitesByTag = new Map<string, Set<string>>();
   for (const rule of gatherUserScheduleRules(db, userId)) {
     if (rule.action !== "deny" || !isRecurringWindow(rule)) continue;
-    const domains = domainsForRule(db, rule);
+    const domains = domainsForDenyRule(db, rule);
     if (domains.length === 0) continue;
     const tag = e2guardianTimeTag(
       rule.recurrenceDays,
@@ -297,7 +240,7 @@ export function buildE2guardianPlan(
 
   const users: E2guardianUserFilter[] = [];
   for (const link of listClientLinks(db, clientId)) {
-    const bannedSites = resolveBannedSites(db, link.userId);
+    const bannedSites = resolveAlwaysOnDomainDenies(db, link.userId);
     const windows = resolveWindowedDenies(db, link.userId);
     if (bannedSites.length === 0 && windows.length === 0) continue;
     const index = users.length;
